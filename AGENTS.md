@@ -53,4 +53,5 @@ Keep PR scope narrow; split refactors and features into separate PRs.
 ## Reference Material Workflow
 - Store reusable project references in `information/`
 - Start with `information/README.md` for curated external links
+- Keep `information/raschka-reference-notes.md` updated when Raschka source material informs implementation
 - When adding a new source, include a short note on why it matters to this codebase

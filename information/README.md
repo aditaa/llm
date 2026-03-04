@@ -13,6 +13,12 @@ Use this directory to store project reference material that should guide impleme
 - LLMs-from-scratch repository:
   https://github.com/rasbt/LLMs-from-scratch
 
+## Local Reference Files
+- Book PDF:
+  `Build a Large Language Model (From Scratch) - Sebastian Raschka.pdf`
+- Working notes derived from PDF + external sources:
+  `raschka-reference-notes.md`
+
 ## Suggested Subfolders (Optional)
 - `information/papers/` for papers and summaries
 - `information/datasets/` for dataset notes and schema docs

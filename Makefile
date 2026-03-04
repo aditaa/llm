@@ -1,5 +1,8 @@
 PYTHONPATH=src
 PYTHON=python3
+ifneq ("$(wildcard .venv/bin/python)","")
+PYTHON=.venv/bin/python
+endif
 
 .PHONY: setup-dev setup-train doctor install-server-system test lint format typecheck smoke
 

@@ -46,3 +46,11 @@ make smoke       # tiny CLI smoke check
 - Working notes from loaded PDF + external references: `information/raschka-reference-notes.md`
 - Sebastian Raschka article: https://magazine.sebastianraschka.com/p/coding-llms-from-the-ground-up
 - Raschka repository: https://github.com/rasbt/LLMs-from-scratch
+- Local checkout (submodule): `information/external/LLMs-from-scratch`
+
+## Reference Repo Sync
+```bash
+git submodule update --init --recursive
+git submodule update --remote information/external/LLMs-from-scratch
+```
+Use the first command after clone; use the second to pull newer upstream reference commits.

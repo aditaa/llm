@@ -16,6 +16,21 @@ dev = [
   "mypy>=1.8.0",
   "ruff>=0.3.0",
 ]
+train = [
+  "torch>=2.2.2",
+  "tiktoken>=0.5.1",
+  "matplotlib>=3.7.1",
+  "numpy>=1.26",
+  "pandas>=2.2.1",
+  "tqdm>=4.66.1",
+]
+notebook = [
+  "jupyterlab>=4.0",
+]
+compat = [
+  "tensorflow>=2.16.2; sys_platform == 'darwin' and platform_machine == 'x86_64'",
+  "tensorflow>=2.18.0; sys_platform != 'darwin' or platform_machine != 'x86_64'",
+]
 
 [tool.setuptools]
 package-dir = {"" = "src"}

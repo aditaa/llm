@@ -1,0 +1,17 @@
+# Ubuntu/Debian packages for this repository
+build-essential
+ca-certificates
+curl
+git
+htop
+jq
+pkg-config
+poppler-utils
+python3
+python3-pip
+python3-venv
+ripgrep
+tmux
+tree
+unzip
+wget

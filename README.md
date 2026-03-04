@@ -12,14 +12,14 @@ This repository is the base for building a decoder-only language model from firs
 - `tests/`: unit tests
 - `docs/`: architecture and roadmap notes
 - `information/`: reference material and external links for project guidance
+- `requirements/`: system and Python dependency lists for server setup
+- `scripts/`: bootstrap/install/doctor scripts
 - `artifacts/`: local outputs (vocab, checkpoints, logs; gitignored)
 - `Makefile`: common developer commands
 
 ## Quick Start
 ```bash
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -e ".[dev]"
+bash scripts/bootstrap_dev.sh
 ```
 
 ## Common Commands
@@ -27,8 +27,22 @@ pip install -e ".[dev]"
 make test        # run unit tests
 make lint        # run Ruff checks
 make format      # run Black formatter
+make typecheck   # run MyPy
 make smoke       # tiny CLI smoke check
+make doctor      # verify binaries and Python deps
 ```
+
+## Server Setup (Ubuntu/Debian)
+1. Install system packages:
+   `bash scripts/install_server_system.sh`
+2. Bootstrap dev environment:
+   `bash scripts/bootstrap_dev.sh`
+3. Install training extras:
+   `bash scripts/bootstrap_train.sh`
+4. Run health check:
+   `bash scripts/doctor.sh`
+
+Detailed guide: `docs/SERVER_SETUP.md`
 
 ## Current Capabilities
 - Text stats CLI for quick corpus sanity checks.

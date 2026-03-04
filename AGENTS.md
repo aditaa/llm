@@ -12,14 +12,18 @@ Keep modules single-purpose and expand by domain (for example: `src/llm/training
 
 ## Build, Test, and Development Commands
 Use the `Makefile` as the source of truth:
+- `make setup-dev`: create `.venv`, install dev deps, init submodules
+- `make setup-train`: install training/notebook extras
+- `make install-server-system`: install Ubuntu/Debian system packages
+- `make doctor`: environment/tooling diagnostics
 - `make test`: run `unittest` test suite
 - `make lint`: run Ruff lint checks
 - `make format`: run Black formatter
 - `make typecheck`: run MyPy on `src/`
 - `make smoke`: run a minimal CLI smoke test
 
-Initial setup:
-`python3 -m venv .venv && source .venv/bin/activate && pip install -e ".[dev]"`
+Server setup reference:
+`docs/SERVER_SETUP.md`
 
 ## Coding Style & Naming Conventions
 - Python 3.10+, 4-space indentation, UTF-8 files

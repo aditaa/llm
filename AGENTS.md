@@ -54,6 +54,7 @@ Keep PR scope narrow; split refactors and features into separate PRs.
 - Store reusable project references in `information/`
 - Start with `information/README.md` for curated external links
 - Keep `information/raschka-reference-notes.md` updated when Raschka source material informs implementation
+- Track execution progress in `information/raschka-implementation-checklist.md`
 - Use `information/external/LLMs-from-scratch` (git submodule) for direct code reference
 - Refresh submodule when needed with: `git submodule update --remote information/external/LLMs-from-scratch`
 - When adding a new source, include a short note on why it matters to this codebase

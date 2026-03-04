@@ -20,6 +20,8 @@ Use this directory to store project reference material that should guide impleme
   `Build a Large Language Model (From Scratch) - Sebastian Raschka.pdf`
 - Working notes derived from PDF + external sources:
   `raschka-reference-notes.md`
+- Implementation tracker derived from those notes:
+  `raschka-implementation-checklist.md`
 
 ## Suggested Subfolders (Optional)
 - `information/papers/` for papers and summaries

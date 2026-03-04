@@ -44,6 +44,7 @@ make smoke       # tiny CLI smoke check
 ## References
 - Internal reference index: `information/README.md`
 - Working notes from loaded PDF + external references: `information/raschka-reference-notes.md`
+- Implementation checklist from those references: `information/raschka-implementation-checklist.md`
 - Sebastian Raschka article: https://magazine.sebastianraschka.com/p/coding-llms-from-the-ground-up
 - Raschka repository: https://github.com/rasbt/LLMs-from-scratch
 - Local checkout (submodule): `information/external/LLMs-from-scratch`

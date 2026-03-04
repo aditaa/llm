@@ -5,6 +5,7 @@ The codebase is a Python LLM-from-scratch scaffold.
 - `src/llm/`: core package (`tokenizer.py`, `cli.py`, `model.py`)
 - `tests/`: unit tests (currently tokenizer coverage)
 - `docs/`: architecture and roadmap docs
+- `information/`: references, imported notes, and source material
 - `artifacts/`: generated outputs such as vocab/checkpoints (gitignored)
 
 Keep modules single-purpose and expand by domain (for example: `src/llm/training.py`, `src/llm/data.py`).
@@ -48,3 +49,8 @@ Keep PR scope narrow; split refactors and features into separate PRs.
 - Never commit secrets or credentials
 - Keep generated files in `artifacts/` and out of git history
 - Prefer environment variables for machine-specific settings
+
+## Reference Material Workflow
+- Store reusable project references in `information/`
+- Start with `information/README.md` for curated external links
+- When adding a new source, include a short note on why it matters to this codebase

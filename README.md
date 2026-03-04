@@ -11,6 +11,7 @@ This repository is the base for building a decoder-only language model from firs
 - `src/llm/`: core Python package
 - `tests/`: unit tests
 - `docs/`: architecture and roadmap notes
+- `information/`: reference material and external links for project guidance
 - `artifacts/`: local outputs (vocab, checkpoints, logs; gitignored)
 - `Makefile`: common developer commands
 
@@ -39,3 +40,8 @@ make smoke       # tiny CLI smoke check
 2. Implement GPT-style transformer blocks in `src/llm/model.py`.
 3. Add a first training loop and checkpointing.
 4. Add validation metrics (loss, perplexity) and text generation.
+
+## References
+- Internal reference index: `information/README.md`
+- Sebastian Raschka article: https://magazine.sebastianraschka.com/p/coding-llms-from-the-ground-up
+- Raschka repository: https://github.com/rasbt/LLMs-from-scratch

@@ -34,8 +34,13 @@ sync_dir() {
   fi
 }
 
-if find data -maxdepth 2 -type f -name "*.zim" | grep -q .; then
-  echo "sync raw .zim files -> ${DEST_ROOT}/raw_zim"
+if [[ -d "data/raw_zim" ]] && find data/raw_zim -maxdepth 1 -type f -name "*.zim" | grep -q .; then
+  echo "sync raw .zim files from data/raw_zim -> ${DEST_ROOT}/raw_zim"
+  while IFS= read -r zim_path; do
+    rsync -ah --info=stats2,progress2 "${zim_path}" "${DEST_ROOT}/raw_zim/"
+  done < <(find data/raw_zim -maxdepth 1 -type f -name "*.zim" | sort)
+elif find data -maxdepth 2 -type f -name "*.zim" | grep -q .; then
+  echo "sync raw .zim files from legacy paths -> ${DEST_ROOT}/raw_zim"
   while IFS= read -r zim_path; do
     rsync -ah --info=stats2,progress2 "${zim_path}" "${DEST_ROOT}/raw_zim/"
   done < <(find data -maxdepth 2 -type f -name "*.zim" | sort)

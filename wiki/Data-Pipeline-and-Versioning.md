@@ -26,15 +26,26 @@ Example:
 This creates a 1:1 mapping between source snapshot and derived artifacts.
 
 ## Storage Layout
-Use warm storage mount:
+Use hot + warm storage:
+- Hot working set (default processing location):
+  - `data/raw_zim/`
+  - `data/extracted/`
+  - `data/shards/`
+  - `artifacts/tokenizer/`
+- Warm cache/backup mount:
 - `/mnt/ceph/llm/data/raw_zim/`
 - `/mnt/ceph/llm/data/extracted/`
 - `/mnt/ceph/llm/data/shards/`
 - `/mnt/ceph/llm/data/tokenizer/`
 
-Sync local artifacts to warm storage:
+Push local artifacts to warm storage:
 ```bash
 bash scripts/sync_warm_storage.sh /mnt/ceph/llm/data
+```
+
+Rehydrate local hot workspace from warm storage:
+```bash
+bash scripts/hydrate_from_warm_storage.sh /mnt/ceph/llm/data
 ```
 
 ## Update Strategy

@@ -56,8 +56,10 @@ Keep PR scope narrow; split refactors and features into separate PRs.
 - Never commit copyrighted book/PDF source files
 - Keep generated files in `artifacts/` and out of git history
 - Prefer environment variables for machine-specific settings
-- Use warm storage at `/mnt/ceph/llm/data` for large extracted corpora and shard files
+- Run all processing in local hot workspace (`./data`, `./artifacts`)
+- Use warm storage at `/mnt/ceph/llm/data` as cache/backup
 - Use `bash scripts/sync_warm_storage.sh /mnt/ceph/llm/data` to copy local artifacts to warm storage
+- Use `bash scripts/hydrate_from_warm_storage.sh /mnt/ceph/llm/data` to restore local artifacts from warm storage
 - Version extracted/tokenized/sharded outputs with the ZIM date stamp (for example `serverfault_2025-08`)
 - Keep raw ZIM archives in `/mnt/ceph/llm/data/raw_zim/`
 

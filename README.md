@@ -80,7 +80,8 @@ PYTHONPATH=src .venv/bin/python -m llm.cli stats --input data/extracted/wiki_cor
 ```
 
 ## Warm Storage (Ceph Mount)
-Use `/mnt/ceph/llm/data` for large and durable dataset artifacts.
+Use `./data` and `./artifacts` as the hot working set.
+Use `/mnt/ceph/llm/data` as warm cache/backup for durability and overflow.
 
 - Recommended mount layout:
   - `/mnt/ceph/llm/data/raw_zim/`
@@ -94,10 +95,16 @@ Use `/mnt/ceph/llm/data` for large and durable dataset artifacts.
   - Extracted text: `/mnt/ceph/llm/data/extracted/serverfault_2025-08.txt`
   - Tokenizer: `/mnt/ceph/llm/data/tokenizer/serverfault_2025-08-vocab.json`
   - Shards: `/mnt/ceph/llm/data/shards/serverfault_2025-08/`
-- For large runs, write outputs directly to the mount (instead of repo-local `data/`).
-- To sync current local artifacts to warm storage:
+- Default run model:
+  - Process locally in `data/extracted`, `data/shards`, and `artifacts/tokenizer`.
+  - Periodically sync to Ceph for backup/caching.
+- Push local artifacts to warm storage:
 ```bash
 bash scripts/sync_warm_storage.sh /mnt/ceph/llm/data
+```
+- Pull artifacts back from warm storage to local hot workspace:
+```bash
+bash scripts/hydrate_from_warm_storage.sh /mnt/ceph/llm/data
 ```
 
 ## Current Capabilities

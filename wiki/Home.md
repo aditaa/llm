@@ -18,7 +18,7 @@ This wiki is the operational documentation for the `llm` repository.
 - ZIM extraction pipeline implemented.
 - Tokenizer training pipeline implemented.
 - Corpus sharding pipeline implemented.
-- Warm storage (Ceph) workflow implemented.
+- Hot-local processing + warm-storage cache workflow implemented.
 
 ## Core Commands
 ```bash

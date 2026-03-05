@@ -74,8 +74,19 @@ Suggested directories:
 Use a date-based version tag from the ZIM filename for all derived artifacts.
 Example: `serverfault.com_en_all_2025-08.zim` -> `serverfault_2025-08`.
 
-Sync local artifacts when needed:
+Hot/warm workflow:
+- Process in local hot workspace: `./data` and `./artifacts`.
+- Push local outputs to warm storage regularly.
+- Pull from warm storage only when rehydrating local workspace or reclaiming space.
+
+Push to warm storage:
 
 ```bash
 bash scripts/sync_warm_storage.sh /mnt/ceph/llm/data
+```
+
+Rehydrate from warm storage:
+
+```bash
+bash scripts/hydrate_from_warm_storage.sh /mnt/ceph/llm/data
 ```

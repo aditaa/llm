@@ -21,6 +21,8 @@ make lint
 make format
 make typecheck
 make smoke
+make sync-warm
+make hydrate-warm
 ```
 
 ## Repository Structure

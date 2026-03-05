@@ -45,5 +45,21 @@ fi
 
 git add .
 git commit -m "Update wiki from repo docs ($(date -u +%Y-%m-%dT%H:%M:%SZ))"
-git push
+
+# Handle concurrent wiki updates (for example manual publish + workflow publish).
+max_attempts=3
+attempt=1
+while true; do
+  if git push; then
+    break
+  fi
+  if [[ "${attempt}" -ge "${max_attempts}" ]]; then
+    echo "error: wiki push failed after ${max_attempts} attempts" >&2
+    exit 1
+  fi
+  echo "push conflict detected; rebasing and retrying (attempt ${attempt}/${max_attempts})"
+  git pull --rebase origin master
+  attempt=$((attempt + 1))
+done
+
 echo "wiki publish complete"

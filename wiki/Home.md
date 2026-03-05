@@ -19,6 +19,7 @@ This wiki is the operational documentation for the `llm` repository.
 - Tokenizer training pipeline implemented.
 - Corpus sharding pipeline implemented.
 - Hot-local processing + warm-storage cache workflow implemented.
+- CI/CD workflows implemented for checks and wiki publishing.
 
 ## Core Commands
 ```bash

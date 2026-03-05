@@ -1,0 +1,36 @@
+name: Wiki Sync
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "wiki/**"
+      - "README.md"
+      - "AGENTS.md"
+      - "docs/**"
+      - "scripts/publish_wiki.sh"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: wiki-sync-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  publish:
+    name: Publish Wiki
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Publish wiki pages
+        env:
+          WIKI_GIT_NAME: github-actions[bot]
+          WIKI_GIT_EMAIL: 41898282+github-actions[bot]@users.noreply.github.com
+          WIKI_URL: https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.wiki.git
+        run: |
+          bash scripts/publish_wiki.sh "${WIKI_URL}"

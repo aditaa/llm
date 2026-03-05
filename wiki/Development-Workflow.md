@@ -9,6 +9,8 @@ make typecheck
 make test
 ```
 
+CI enforces these checks in GitHub Actions, with `CI Gate` as the merge gate for `main`.
+
 ## Commit Conventions
 - Use concise imperative messages, <=72 chars.
 - Keep commits scoped (one feature/fix per commit).

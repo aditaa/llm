@@ -26,6 +26,10 @@ Use the `Makefile` as the source of truth:
 Server setup reference:
 `docs/SERVER_SETUP.md`
 
+CI/CD workflows:
+- `.github/workflows/ci.yml`: lint, typecheck, tests, smoke, and gate job
+- `.github/workflows/wiki-sync.yml`: publishes wiki pages on `main` doc changes
+
 ## Coding Style & Naming Conventions
 - Python 3.10+, 4-space indentation, UTF-8 files
 - Max line length: 100 (Black/Ruff configured in `pyproject.toml`)
@@ -49,6 +53,7 @@ PRs should include:
 - Linked issue/ticket when applicable
 
 Keep PR scope narrow; split refactors and features into separate PRs.
+`main` should be protected with required status check `CI Gate`.
 
 ## Security & Configuration Tips
 - Never commit secrets or credentials

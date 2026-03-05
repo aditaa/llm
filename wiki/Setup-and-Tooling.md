@@ -25,6 +25,11 @@ make sync-warm
 make hydrate-warm
 ```
 
+## CI/CD
+- `CI` workflow runs lint, typecheck, tests, and smoke checks.
+- `Wiki Sync` workflow publishes docs in `wiki/` to the GitHub Wiki.
+- Recommended branch protection: require `CI Gate` before merge to `main`.
+
 ## Repository Structure
 - `src/llm/`: tokenizer, data, sharding, CLI, model modules
 - `tests/`: unit test coverage for core data/tokenizer/sharding paths

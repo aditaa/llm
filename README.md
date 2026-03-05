@@ -33,6 +33,16 @@ make smoke       # tiny CLI smoke check
 make doctor      # verify binaries and Python deps
 ```
 
+## CI/CD
+GitHub Actions workflows are defined in `.github/workflows/`:
+- `ci.yml`: lint, typecheck, unit tests, smoke checks on pull requests and pushes to `main`
+- `wiki-sync.yml`: publish `wiki/*.md` changes to the GitHub Wiki
+
+Recommended branch protection for `main`:
+- Require pull request before merging
+- Require status checks: `CI Gate`
+- Require branches to be up to date before merge
+
 ## Server Setup (Ubuntu/Debian)
 1. Install system packages:
    `bash scripts/install_server_system.sh`

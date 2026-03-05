@@ -7,7 +7,7 @@ import random
 from array import array
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable
 
 from llm.tokenizer import BasicCharTokenizer
 
@@ -139,3 +139,81 @@ def shard_corpus(config: ShardConfig) -> dict[str, Any]:
     manifest_path = config.output_dir / "manifest.json"
     manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
     return manifest
+
+
+def iter_corpus_files(
+    *,
+    input_dir: Path,
+    pattern: str = "*.txt",
+    exclude_patterns: Iterable[str] | None = None,
+    include_stems: set[str] | None = None,
+    limit_files: int = 0,
+) -> list[Path]:
+    if not input_dir.exists() or not input_dir.is_dir():
+        raise ValueError(f"input_dir must exist and be a directory: {input_dir}")
+
+    exclude_patterns = tuple(exclude_patterns or ())
+    files: list[Path] = []
+    for path in sorted(input_dir.glob(pattern)):
+        if not path.is_file():
+            continue
+        if any(path.match(ex_pat) for ex_pat in exclude_patterns):
+            continue
+        if include_stems is not None and path.stem not in include_stems:
+            continue
+        files.append(path)
+        if limit_files and len(files) >= limit_files:
+            break
+    return files
+
+
+def shard_corpora_batch(
+    *,
+    input_files: list[Path],
+    tokenizer_path: Path,
+    output_root: Path,
+    shard_size_tokens: int,
+    val_ratio: float,
+    seed: int,
+    max_lines: int,
+    skip_existing: bool = True,
+) -> list[dict[str, Any]]:
+    results: list[dict[str, Any]] = []
+    output_root.mkdir(parents=True, exist_ok=True)
+
+    for file_path in input_files:
+        output_dir = output_root / file_path.stem
+        manifest_path = output_dir / "manifest.json"
+        if skip_existing and manifest_path.exists():
+            results.append(
+                {
+                    "input_path": str(file_path),
+                    "output_dir": str(output_dir),
+                    "status": "skipped_existing",
+                }
+            )
+            continue
+
+        config = ShardConfig(
+            input_path=file_path,
+            tokenizer_path=tokenizer_path,
+            output_dir=output_dir,
+            shard_size_tokens=shard_size_tokens,
+            val_ratio=val_ratio,
+            seed=seed,
+            max_lines=max_lines,
+        )
+        manifest = shard_corpus(config)
+        results.append(
+            {
+                "input_path": str(file_path),
+                "output_dir": str(output_dir),
+                "status": "ok",
+                "line_count": int(manifest["line_count"]),
+                "train_tokens": int(manifest["train"]["total_tokens"]),
+                "val_tokens": int(manifest["val"]["total_tokens"]),
+                "train_shards": len(manifest["train"]["shards"]),
+                "val_shards": len(manifest["val"]["shards"]),
+            }
+        )
+    return results

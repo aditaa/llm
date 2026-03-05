@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Iterable
 
 
 @dataclass(frozen=True)
@@ -30,6 +31,52 @@ class BasicCharTokenizer:
         stoi = {token: idx for idx, token in enumerate(vocab)}
         itos = {idx: token for token, idx in stoi.items()}
         return cls(stoi=stoi, itos=itos)
+
+    @classmethod
+    def train_from_files(
+        cls,
+        input_paths: Iterable[str | Path],
+        *,
+        max_chars_per_file: int = 0,
+        chunk_size: int = 1_048_576,
+    ) -> tuple["BasicCharTokenizer", dict[str, int]]:
+        if chunk_size <= 0:
+            raise ValueError("chunk_size must be > 0")
+        if max_chars_per_file < 0:
+            raise ValueError("max_chars_per_file must be >= 0")
+
+        chars: set[str] = set()
+        files_seen = 0
+        chars_read = 0
+
+        for raw_path in input_paths:
+            path = Path(raw_path)
+            if not path.exists():
+                raise FileNotFoundError(path)
+            files_seen += 1
+            remaining = max_chars_per_file if max_chars_per_file > 0 else None
+            with path.open("r", encoding="utf-8") as handle:
+                while True:
+                    if remaining is not None and remaining <= 0:
+                        break
+                    read_size = chunk_size if remaining is None else min(chunk_size, remaining)
+                    chunk = handle.read(read_size)
+                    if not chunk:
+                        break
+                    chars.update(chunk)
+                    chars_read += len(chunk)
+                    if remaining is not None:
+                        remaining -= len(chunk)
+
+        specials = [SpecialTokens.unk, SpecialTokens.bos, SpecialTokens.eos]
+        vocab = specials + [c for c in sorted(chars) if c not in specials]
+        stoi = {token: idx for idx, token in enumerate(vocab)}
+        itos = {idx: token for token, idx in stoi.items()}
+        return cls(stoi=stoi, itos=itos), {
+            "files_seen": files_seen,
+            "chars_read": chars_read,
+            "unique_chars": len(chars),
+        }
 
     @property
     def vocab_size(self) -> int:

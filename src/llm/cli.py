@@ -3,16 +3,26 @@
 from __future__ import annotations
 
 import argparse
+import json
 from pathlib import Path
 
 from llm.integrity import verify_shards
-from llm.sharding import ShardConfig, shard_corpus
+from llm.sharding import ShardConfig, iter_corpus_files, shard_corpora_batch, shard_corpus
 from llm.tokenizer import BasicCharTokenizer
 from llm.zim import ZimExtractConfig, extract_text_from_zim
 
 
 def _read_text(path: str) -> str:
     return Path(path).read_text(encoding="utf-8")
+
+
+def _collect_dataset_stems_from_manifests(path: Path) -> set[str]:
+    manifests: list[Path]
+    if path.is_file():
+        manifests = [path]
+    else:
+        manifests = sorted(path.rglob("manifest.json"))
+    return {manifest.parent.name for manifest in manifests}
 
 
 def cmd_stats(input_path: str) -> int:
@@ -32,6 +42,56 @@ def cmd_build_vocab(input_path: str, output_path: str) -> int:
     tokenizer = BasicCharTokenizer.train(text)
     tokenizer.save(output_path)
     print(f"saved vocab to {output_path} (vocab_size={tokenizer.vocab_size})")
+    return 0
+
+
+def cmd_train_tokenizer_global(
+    input_dir: str,
+    output_path: str,
+    pattern: str,
+    exclude_pattern: list[str],
+    from_shards_path: str | None,
+    max_files: int,
+    max_chars_per_file: int,
+) -> int:
+    include_stems: set[str] | None = None
+    if from_shards_path is not None:
+        include_stems = _collect_dataset_stems_from_manifests(Path(from_shards_path))
+
+    files = iter_corpus_files(
+        input_dir=Path(input_dir),
+        pattern=pattern,
+        exclude_patterns=exclude_pattern,
+        include_stems=include_stems,
+        limit_files=max_files,
+    )
+    if not files:
+        raise ValueError("no input files matched for global tokenizer training")
+
+    tokenizer, stats = BasicCharTokenizer.train_from_files(
+        files,
+        max_chars_per_file=max_chars_per_file,
+    )
+    tokenizer.save(output_path)
+
+    metadata_path = Path(output_path).with_suffix(Path(output_path).suffix + ".meta.json")
+    metadata = {
+        "output_path": output_path,
+        "pattern": pattern,
+        "exclude_patterns": exclude_pattern,
+        "from_shards_path": from_shards_path,
+        "files": [str(p) for p in files],
+        "stats": stats,
+        "vocab_size": tokenizer.vocab_size,
+    }
+    metadata_path.write_text(json.dumps(metadata, indent=2), encoding="utf-8")
+
+    print(f"output={output_path}")
+    print(f"metadata={metadata_path}")
+    print(f"files_used={len(files)}")
+    print(f"chars_read={stats['chars_read']}")
+    print(f"unique_chars={stats['unique_chars']}")
+    print(f"vocab_size={tokenizer.vocab_size}")
     return 0
 
 
@@ -94,6 +154,67 @@ def cmd_shard_corpus(
     print(f"train_shards={len(manifest['train']['shards'])}")
     print(f"val_tokens={manifest['val']['total_tokens']}")
     print(f"val_shards={len(manifest['val']['shards'])}")
+    return 0
+
+
+def cmd_shard_corpus_batch(
+    input_dir: str,
+    tokenizer_path: str,
+    output_root: str,
+    pattern: str,
+    exclude_pattern: list[str],
+    from_shards_path: str | None,
+    max_files: int,
+    shard_size_tokens: int,
+    val_ratio: float,
+    seed: int,
+    max_lines: int,
+    skip_existing: bool,
+) -> int:
+    include_stems: set[str] | None = None
+    if from_shards_path is not None:
+        include_stems = _collect_dataset_stems_from_manifests(Path(from_shards_path))
+
+    files = iter_corpus_files(
+        input_dir=Path(input_dir),
+        pattern=pattern,
+        exclude_patterns=exclude_pattern,
+        include_stems=include_stems,
+        limit_files=max_files,
+    )
+    if not files:
+        raise ValueError("no input files matched for batch sharding")
+
+    results = shard_corpora_batch(
+        input_files=files,
+        tokenizer_path=Path(tokenizer_path),
+        output_root=Path(output_root),
+        shard_size_tokens=shard_size_tokens,
+        val_ratio=val_ratio,
+        seed=seed,
+        max_lines=max_lines,
+        skip_existing=skip_existing,
+    )
+
+    ok = 0
+    skipped = 0
+    for row in results:
+        print(f"input={row['input_path']}")
+        print(f"output_dir={row['output_dir']}")
+        print(f"status={row['status']}")
+        if row["status"] == "ok":
+            ok += 1
+            print(f"line_count={row['line_count']}")
+            print(f"train_tokens={row['train_tokens']}")
+            print(f"val_tokens={row['val_tokens']}")
+            print(f"train_shards={row['train_shards']}")
+            print(f"val_shards={row['val_shards']}")
+        elif row["status"] == "skipped_existing":
+            skipped += 1
+
+    print(f"files_total={len(results)}")
+    print(f"files_ok={ok}")
+    print(f"files_skipped_existing={skipped}")
     return 0
 
 
@@ -200,6 +321,37 @@ def parse_args() -> argparse.Namespace:
     train_tok_parser.add_argument("--input", required=True, help="Input text file")
     train_tok_parser.add_argument("--output", required=True, help="Output vocab JSON path")
 
+    global_tok_parser = subparsers.add_parser(
+        "train-tokenizer-global",
+        help="Train one shared char tokenizer from many corpus files",
+    )
+    global_tok_parser.add_argument("--input-dir", required=True, help="Directory of corpus files")
+    global_tok_parser.add_argument("--output", required=True, help="Output global vocab JSON path")
+    global_tok_parser.add_argument("--pattern", default="*.txt", help="Glob pattern")
+    global_tok_parser.add_argument(
+        "--exclude-pattern",
+        action="append",
+        default=["*.paths.txt"],
+        help="Glob pattern to exclude (repeatable)",
+    )
+    global_tok_parser.add_argument(
+        "--from-shards-path",
+        default=None,
+        help="Optional path to existing shard manifests; include only matching dataset stems",
+    )
+    global_tok_parser.add_argument(
+        "--max-files",
+        type=int,
+        default=0,
+        help="Optional cap on file count (0 = all matches)",
+    )
+    global_tok_parser.add_argument(
+        "--max-chars-per-file",
+        type=int,
+        default=0,
+        help="Optional cap on chars read per file (0 = entire file)",
+    )
+
     zim_parser = subparsers.add_parser("extract-zim-text", help="Extract text corpus from ZIM")
     zim_parser.add_argument("--input-zim", required=True, help="Path to .zim file on server")
     zim_parser.add_argument("--output", required=True, help="Output corpus text path")
@@ -239,6 +391,51 @@ def parse_args() -> argparse.Namespace:
     )
     shard_parser.add_argument(
         "--max-lines", type=int, default=0, help="Optional line cap for test runs (0 = all lines)"
+    )
+
+    shard_batch_parser = subparsers.add_parser(
+        "shard-corpus-batch",
+        help="Shard many corpus files with one shared tokenizer",
+    )
+    shard_batch_parser.add_argument("--input-dir", required=True, help="Directory of corpus files")
+    shard_batch_parser.add_argument("--tokenizer", required=True, help="Tokenizer vocab JSON path")
+    shard_batch_parser.add_argument(
+        "--output-root",
+        required=True,
+        help="Output root; each corpus gets output-root/<stem>/manifest.json",
+    )
+    shard_batch_parser.add_argument("--pattern", default="*.txt", help="Glob pattern")
+    shard_batch_parser.add_argument(
+        "--exclude-pattern",
+        action="append",
+        default=["*.paths.txt"],
+        help="Glob pattern to exclude (repeatable)",
+    )
+    shard_batch_parser.add_argument(
+        "--from-shards-path",
+        default=None,
+        help="Optional path to existing shard manifests; include only matching dataset stems",
+    )
+    shard_batch_parser.add_argument(
+        "--max-files",
+        type=int,
+        default=0,
+        help="Optional cap on file count (0 = all matches)",
+    )
+    shard_batch_parser.add_argument(
+        "--shard-size-tokens", type=int, default=5_000_000, help="Tokens per shard file"
+    )
+    shard_batch_parser.add_argument(
+        "--val-ratio", type=float, default=0.01, help="Validation split ratio"
+    )
+    shard_batch_parser.add_argument("--seed", type=int, default=42, help="Split RNG seed")
+    shard_batch_parser.add_argument(
+        "--max-lines", type=int, default=0, help="Optional line cap per corpus (0 = all lines)"
+    )
+    shard_batch_parser.add_argument(
+        "--no-skip-existing",
+        action="store_true",
+        help="Rebuild corpus shards even if manifest already exists in output root",
     )
 
     verify_parser = subparsers.add_parser(
@@ -334,6 +531,16 @@ def main() -> int:
         return cmd_build_vocab(args.input, args.output)
     if args.command == "train-tokenizer":
         return cmd_build_vocab(args.input, args.output)
+    if args.command == "train-tokenizer-global":
+        return cmd_train_tokenizer_global(
+            input_dir=args.input_dir,
+            output_path=args.output,
+            pattern=args.pattern,
+            exclude_pattern=args.exclude_pattern,
+            from_shards_path=args.from_shards_path,
+            max_files=args.max_files,
+            max_chars_per_file=args.max_chars_per_file,
+        )
     if args.command == "extract-zim-text":
         return cmd_extract_zim_text(
             input_zim=args.input_zim,
@@ -354,6 +561,21 @@ def main() -> int:
             val_ratio=args.val_ratio,
             seed=args.seed,
             max_lines=args.max_lines,
+        )
+    if args.command == "shard-corpus-batch":
+        return cmd_shard_corpus_batch(
+            input_dir=args.input_dir,
+            tokenizer_path=args.tokenizer,
+            output_root=args.output_root,
+            pattern=args.pattern,
+            exclude_pattern=args.exclude_pattern,
+            from_shards_path=args.from_shards_path,
+            max_files=args.max_files,
+            shard_size_tokens=args.shard_size_tokens,
+            val_ratio=args.val_ratio,
+            seed=args.seed,
+            max_lines=args.max_lines,
+            skip_existing=not args.no_skip_existing,
         )
     if args.command == "verify-shards":
         return cmd_verify_shards(

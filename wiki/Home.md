@@ -18,6 +18,7 @@ This wiki is the operational documentation for the `llm` repository.
 - ZIM extraction pipeline implemented.
 - Tokenizer training pipeline implemented.
 - Corpus sharding pipeline implemented.
+- Shared tokenizer + batch sharding workflow implemented.
 - Baseline GPT training + checkpoint/resume implemented.
 - Hot-local processing + warm-storage cache workflow implemented.
 - CI/CD workflows implemented for checks and wiki publishing.

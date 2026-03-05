@@ -14,6 +14,13 @@ PYTHONPATH=src .venv/bin/python -m llm.cli shard-corpus --input /path/corpus.txt
 PYTHONPATH=src .venv/bin/python -m llm.cli train --shards-path /path/shards --output-dir /path/checkpoints
 ```
 
+Shared tokenizer workflow for multi-dataset training:
+```bash
+PYTHONPATH=src .venv/bin/python -m llm.cli train-tokenizer-global --input-dir data/extracted --from-shards-path data/shards --output artifacts/tokenizer/global-char-v1.json
+PYTHONPATH=src .venv/bin/python -m llm.cli shard-corpus-batch --input-dir data/extracted --from-shards-path data/shards --tokenizer artifacts/tokenizer/global-char-v1.json --output-root data/shards_global/global-char-v1
+PYTHONPATH=src .venv/bin/python -m llm.cli train --shards-path data/shards_global/global-char-v1 --output-dir artifacts/checkpoints/global-char-v1
+```
+
 ## Versioning Rule
 Use ZIM date stamps as the canonical dataset version.
 

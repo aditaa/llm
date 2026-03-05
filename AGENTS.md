@@ -24,6 +24,8 @@ Use the `Makefile` as the source of truth:
 - `make smoke`: run a minimal CLI smoke test
 - `make verify-shards`: usage helper for shard integrity verification
 - `make train`: usage helper for baseline GPT training
+- `make train-tokenizer-global`: usage helper for shared tokenizer training
+- `make shard-corpus-batch`: usage helper for batch sharding with a shared tokenizer
 
 Server setup reference:
 `docs/SERVER_SETUP.md`
@@ -70,6 +72,7 @@ Keep PR scope narrow; split refactors and features into separate PRs.
 - If extraction still returns `written_articles=0`, retry with a lower `--min-chars` (for example `20`)
 - For ZIMs without fulltext index, generate a paths list from suggestion/title index and run `extract-zim-text --paths-file ...`
 - `llm.cli train` requires a tokenizer-compatible shard set (same tokenizer mapping across all selected manifests)
+- Preferred multi-dataset flow: `train-tokenizer-global` -> `shard-corpus-batch` -> `train`
 - Use `bash scripts/sync_warm_storage.sh /mnt/ceph/llm/data` to copy local artifacts to warm storage
 - Use `bash scripts/hydrate_from_warm_storage.sh /mnt/ceph/llm/data` to restore local artifacts from warm storage
 - Version extracted/tokenized/sharded outputs with the ZIM date stamp (for example `serverfault_2025-08`)

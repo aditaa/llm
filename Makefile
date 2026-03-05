@@ -4,7 +4,7 @@ ifneq ("$(wildcard .venv/bin/python)","")
 PYTHON=.venv/bin/python
 endif
 
-.PHONY: setup-dev setup-train doctor install-server-system test lint format typecheck smoke extract-zim train-tokenizer verify-shards train sync-warm hydrate-warm publish-wiki
+.PHONY: setup-dev setup-train doctor install-server-system test lint format typecheck smoke extract-zim train-tokenizer train-tokenizer-global shard-corpus-batch verify-shards train sync-warm hydrate-warm publish-wiki
 
 setup-dev:
 	bash scripts/bootstrap_dev.sh
@@ -40,6 +40,14 @@ extract-zim:
 train-tokenizer:
 	@echo "Usage:"
 	@echo "  PYTHONPATH=src $(PYTHON) -m llm.cli train-tokenizer --input data/extracted/corpus.txt --output artifacts/tokenizer/vocab.json"
+
+train-tokenizer-global:
+	@echo "Usage:"
+	@echo "  PYTHONPATH=src $(PYTHON) -m llm.cli train-tokenizer-global --input-dir data/extracted --from-shards-path data/shards --output artifacts/tokenizer/global-char-v1.json"
+
+shard-corpus-batch:
+	@echo "Usage:"
+	@echo "  PYTHONPATH=src $(PYTHON) -m llm.cli shard-corpus-batch --input-dir data/extracted --from-shards-path data/shards --tokenizer artifacts/tokenizer/global-char-v1.json --output-root data/shards_global/global-char-v1"
 
 verify-shards:
 	@echo "Usage:"

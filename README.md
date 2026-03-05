@@ -32,6 +32,8 @@ make typecheck   # run MyPy
 make smoke       # tiny CLI smoke check
 make verify-shards # print shard integrity check usage
 make train       # print baseline training command usage
+make train-tokenizer-global # print shared-tokenizer command usage
+make shard-corpus-batch # print shared-tokenizer batch sharding usage
 make doctor      # verify binaries and Python deps
 ```
 
@@ -89,6 +91,23 @@ PYTHONPATH=src .venv/bin/python -m llm.cli shard-corpus \
   --val-ratio 0.01
 ```
 
+3b. Build one global tokenizer for multi-dataset training:
+```bash
+PYTHONPATH=src .venv/bin/python -m llm.cli train-tokenizer-global \
+  --input-dir data/extracted \
+  --from-shards-path data/shards \
+  --output artifacts/tokenizer/global-char-v1.json
+```
+
+3c. Re-shard many corpora with that global tokenizer:
+```bash
+PYTHONPATH=src .venv/bin/python -m llm.cli shard-corpus-batch \
+  --input-dir data/extracted \
+  --from-shards-path data/shards \
+  --tokenizer artifacts/tokenizer/global-char-v1.json \
+  --output-root data/shards_global/global-char-v1
+```
+
 4. Inspect corpus quickly:
 ```bash
 PYTHONPATH=src .venv/bin/python -m llm.cli stats --input data/extracted/wiki_corpus.txt
@@ -112,6 +131,7 @@ PYTHONPATH=src .venv/bin/python -m llm.cli train \
   --context-length 256
 ```
 Note: `train` requires all selected manifests to share the exact same tokenizer mapping.
+Use a global tokenizer + `shard-corpus-batch` output root for multi-dataset runs.
 
 ## Warm Storage (Ceph Mount)
 Use `./data` and `./artifacts` as the hot working set.
@@ -148,6 +168,7 @@ bash scripts/hydrate_from_warm_storage.sh /mnt/ceph/llm/data
 - ZIM archive text extraction (`extract-zim-text`) for server-hosted `.zim` files.
   - Automatically falls back to suggestion-index paths if fulltext search returns no matches.
 - Corpus sharding (`shard-corpus`) into train/val token shard binaries + manifest.
+- Batch corpus sharding (`shard-corpus-batch`) with one shared tokenizer.
 - Baseline GPT training (`train`) with checkpoint save/resume.
 - Unit tests for tokenizer round-trips and unknown token behavior.
 

@@ -1,0 +1,43 @@
+# Data Pipeline and Versioning
+
+## Pipeline Stages
+1. Extract text from `.zim` archives.
+2. Train tokenizer vocabulary.
+3. Shard tokenized corpus to train/val binary files.
+4. Train model from shard manifests.
+
+## Commands
+```bash
+PYTHONPATH=src .venv/bin/python -m llm.cli extract-zim-text --input-zim /path/file.zim --output /path/corpus.txt
+PYTHONPATH=src .venv/bin/python -m llm.cli train-tokenizer --input /path/corpus.txt --output /path/vocab.json
+PYTHONPATH=src .venv/bin/python -m llm.cli shard-corpus --input /path/corpus.txt --tokenizer /path/vocab.json --output-dir /path/shards
+```
+
+## Versioning Rule
+Use ZIM date stamps as the canonical dataset version.
+
+Example:
+- ZIM: `serverfault.com_en_all_2025-08.zim`
+- Version tag: `serverfault_2025-08`
+- Extracted text: `serverfault_2025-08.txt`
+- Tokenizer: `serverfault_2025-08-vocab.json`
+- Shard folder: `serverfault_2025-08/`
+
+This creates a 1:1 mapping between source snapshot and derived artifacts.
+
+## Storage Layout
+Use warm storage mount:
+- `/mnt/ceph/llm/data/raw_zim/`
+- `/mnt/ceph/llm/data/extracted/`
+- `/mnt/ceph/llm/data/shards/`
+- `/mnt/ceph/llm/data/tokenizer/`
+
+Sync local artifacts to warm storage:
+```bash
+bash scripts/sync_warm_storage.sh /mnt/ceph/llm/data
+```
+
+## Update Strategy
+- Keep old shard versions immutable until new version is validated.
+- Switch training to new manifest only after smoke validation.
+- Delete stale extracted/shards only when space is needed.

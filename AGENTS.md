@@ -68,3 +68,8 @@ Keep PR scope narrow; split refactors and features into separate PRs.
 - Use `information/external/LLMs-from-scratch` (git submodule) for direct code reference
 - Refresh submodule when needed with: `git submodule update --remote information/external/LLMs-from-scratch`
 - When adding a new source, include a short note on why it matters to this codebase
+
+## Wiki Maintenance
+- Keep repository wiki pages source-controlled in `wiki/`
+- Publish wiki updates with: `bash scripts/publish_wiki.sh git@github.com:aditaa/llm.wiki.git`
+- When docs change, update `README.md`, `AGENTS.md`, and relevant `wiki/*.md` pages in the same PR

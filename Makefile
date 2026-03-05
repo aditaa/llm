@@ -4,7 +4,7 @@ ifneq ("$(wildcard .venv/bin/python)","")
 PYTHON=.venv/bin/python
 endif
 
-.PHONY: setup-dev setup-train doctor install-server-system test lint format typecheck smoke extract-zim train-tokenizer sync-warm
+.PHONY: setup-dev setup-train doctor install-server-system test lint format typecheck smoke extract-zim train-tokenizer sync-warm publish-wiki
 
 setup-dev:
 	bash scripts/bootstrap_dev.sh
@@ -44,3 +44,7 @@ train-tokenizer:
 sync-warm:
 	@echo "Sync local extracted/shard/tokenizer artifacts to warm storage."
 	@echo "Usage: bash scripts/sync_warm_storage.sh /mnt/ceph/llm/data"
+
+publish-wiki:
+	@echo "Publish wiki pages from ./wiki to GitHub wiki repo."
+	@echo "Usage: bash scripts/publish_wiki.sh git@github.com:aditaa/llm.wiki.git"

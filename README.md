@@ -128,3 +128,16 @@ git submodule update --init --recursive
 git submodule update --remote information/external/LLMs-from-scratch
 ```
 Use the first command after clone; use the second to pull newer upstream reference commits.
+
+## Wiki Documentation
+Repository wiki pages are maintained from `wiki/*.md`.
+
+Publish updates to GitHub wiki:
+```bash
+bash scripts/publish_wiki.sh git@github.com:aditaa/llm.wiki.git
+```
+
+Preferred workflow:
+1. Update `README.md` and `AGENTS.md` as needed.
+2. Update matching pages in `wiki/`.
+3. Publish wiki with `scripts/publish_wiki.sh`.

@@ -53,6 +53,7 @@ Keep PR scope narrow; split refactors and features into separate PRs.
 ## Security & Configuration Tips
 - Never commit secrets or credentials
 - Never commit raw dataset dumps or `.zim` archives
+- Never commit copyrighted book/PDF source files
 - Keep generated files in `artifacts/` and out of git history
 - Prefer environment variables for machine-specific settings
 - Use warm storage at `/mnt/ceph/llm/data` for large extracted corpora and shard files

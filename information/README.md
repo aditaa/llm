@@ -3,9 +3,10 @@
 Use this directory to store project reference material that should guide implementation decisions.
 
 ## How to Use This Folder
-- Put downloaded notes, PDFs, snippets, or design docs directly in `information/`.
+- Put notes, snippets, or design docs directly in `information/`.
 - Prefer descriptive file names such as `attention-notes.md` or `optimizer-paper-summary.md`.
 - Keep each file focused on one topic so it is easy to reference later.
+- Keep copyrighted books/PDFs local-only (not committed to this repository).
 
 ## External References
 - Sebastian Raschka article:
@@ -16,9 +17,7 @@ Use this directory to store project reference material that should guide impleme
   `external/LLMs-from-scratch`
 
 ## Local Reference Files
-- Book PDF:
-  `Build a Large Language Model (From Scratch) - Sebastian Raschka.pdf`
-- Working notes derived from PDF + external sources:
+- Working notes derived from local PDF + external sources:
   `raschka-reference-notes.md`
 - Implementation tracker derived from those notes:
   `raschka-implementation-checklist.md`

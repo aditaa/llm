@@ -18,3 +18,4 @@ coverage.xml
 data/*
 !data/README.md
 zimply.log
+information/Build a Large Language Model (From Scratch) - Sebastian Raschka.pdf

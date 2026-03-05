@@ -4,7 +4,7 @@ ifneq ("$(wildcard .venv/bin/python)","")
 PYTHON=.venv/bin/python
 endif
 
-.PHONY: setup-dev setup-train doctor install-server-system test lint format typecheck smoke
+.PHONY: setup-dev setup-train doctor install-server-system test lint format typecheck smoke extract-zim train-tokenizer
 
 setup-dev:
 	bash scripts/bootstrap_dev.sh
@@ -32,3 +32,11 @@ typecheck:
 
 smoke:
 	PYTHONPATH=$(PYTHONPATH) $(PYTHON) -m llm.cli stats --input README.md
+
+extract-zim:
+	@echo "Usage:"
+	@echo "  PYTHONPATH=src $(PYTHON) -m llm.cli extract-zim-text --input-zim /path/to/file.zim --output data/extracted/corpus.txt"
+
+train-tokenizer:
+	@echo "Usage:"
+	@echo "  PYTHONPATH=src $(PYTHON) -m llm.cli train-tokenizer --input data/extracted/corpus.txt --output artifacts/tokenizer/vocab.json"

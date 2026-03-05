@@ -6,6 +6,7 @@ The codebase is a Python LLM-from-scratch scaffold.
 - `tests/`: unit tests (tokenizer + data pipeline coverage)
 - `docs/`: architecture and roadmap docs
 - `information/`: references, imported notes, and source material
+- `data/`: local/intermediate corpora (gitignored except `data/README.md`)
 - `artifacts/`: generated outputs such as vocab/checkpoints (gitignored)
 
 Keep modules single-purpose and expand by domain (for example: `src/llm/training.py`, `src/llm/data.py`).
@@ -51,6 +52,7 @@ Keep PR scope narrow; split refactors and features into separate PRs.
 
 ## Security & Configuration Tips
 - Never commit secrets or credentials
+- Never commit raw dataset dumps or `.zim` archives
 - Keep generated files in `artifacts/` and out of git history
 - Prefer environment variables for machine-specific settings
 

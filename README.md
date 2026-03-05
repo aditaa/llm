@@ -14,6 +14,7 @@ This repository is the base for building a decoder-only language model from firs
 - `information/`: reference material and external links for project guidance
 - `requirements/`: system and Python dependency lists for server setup
 - `scripts/`: bootstrap/install/doctor scripts
+- `data/`: local/intermediate corpora (gitignored except `data/README.md`)
 - `artifacts/`: local outputs (vocab, checkpoints, logs; gitignored)
 - `Makefile`: common developer commands
 
@@ -44,10 +45,35 @@ make doctor      # verify binaries and Python deps
 
 Detailed guide: `docs/SERVER_SETUP.md`
 
+## ZIM Data Workflow (IIAB)
+Keep raw `.zim` files on server storage (for example `/data/iiab/zim/`), not in Git.
+
+1. Extract text corpus from ZIM:
+```bash
+PYTHONPATH=src .venv/bin/python -m llm.cli extract-zim-text \
+  --input-zim /data/iiab/zim/wikipedia_en_all_maxi.zim \
+  --output data/extracted/wiki_corpus.txt \
+  --max-articles 50000 \
+  --min-chars 200
+```
+
+2. Train tokenizer on extracted corpus:
+```bash
+PYTHONPATH=src .venv/bin/python -m llm.cli train-tokenizer \
+  --input data/extracted/wiki_corpus.txt \
+  --output artifacts/tokenizer/vocab.json
+```
+
+3. Inspect corpus quickly:
+```bash
+PYTHONPATH=src .venv/bin/python -m llm.cli stats --input data/extracted/wiki_corpus.txt
+```
+
 ## Current Capabilities
 - Text stats CLI for quick corpus sanity checks.
 - Basic character-level tokenizer with train/save/load.
 - Token-window data pipeline (`TokenWindowDataset`) for next-token training pairs.
+- ZIM archive text extraction (`extract-zim-text`) for server-hosted `.zim` files.
 - Unit tests for tokenizer round-trips and unknown token behavior.
 
 ## Next Milestones

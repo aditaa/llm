@@ -1,1 +1,1 @@
--e ".[train,notebook]"
+-e ".[train,notebook,data]"

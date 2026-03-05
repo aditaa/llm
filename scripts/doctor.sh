@@ -24,7 +24,18 @@ fi
 echo "== Python package checks =="
 "${PYTHON_BIN}" - <<'PY'
 import importlib
-mods = ["black", "mypy", "ruff", "numpy", "torch", "tiktoken", "matplotlib", "pandas", "tqdm"]
+mods = [
+    "black",
+    "mypy",
+    "ruff",
+    "numpy",
+    "torch",
+    "tiktoken",
+    "matplotlib",
+    "pandas",
+    "tqdm",
+    "libzim",
+]
 for mod in mods:
     try:
         importlib.import_module(mod)

@@ -32,7 +32,8 @@ Install training/notebook dependencies when needed:
 bash scripts/bootstrap_train.sh
 ```
 
-This installs extras from `.[train,notebook]` (for example `torch`, `tiktoken`, `matplotlib`, `pandas`, `jupyterlab`).
+This installs extras from `.[train,notebook,data]` (for example `torch`, `tiktoken`, `matplotlib`, `pandas`, `jupyterlab`).
+This also installs `libzim` for ZIM corpus extraction.
 
 ## 4) Environment Verification
 Run diagnostics:
@@ -55,3 +56,8 @@ make smoke
 make lint
 make typecheck
 ```
+
+## 6) ZIM Data Location
+- Keep raw IIAB `.zim` files outside Git, on server storage (for example `/data/iiab/zim/`).
+- Extract corpus text into `data/extracted/` in this repo.
+- `data/` is gitignored except `data/README.md`.

@@ -12,3 +12,8 @@ build/
 artifacts/
 coverage.xml
 .coverage
+*.zim
+*.zimaa
+*.zimab
+data/*
+!data/README.md

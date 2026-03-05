@@ -27,6 +27,9 @@ train = [
 notebook = [
   "jupyterlab>=4.0",
 ]
+data = [
+  "libzim>=3.8.0",
+]
 compat = [
   "tensorflow>=2.16.2; sys_platform == 'darwin' and platform_machine == 'x86_64'",
   "tensorflow>=2.18.0; sys_platform != 'darwin' or platform_machine != 'x86_64'",

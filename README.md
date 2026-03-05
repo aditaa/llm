@@ -67,6 +67,7 @@ PYTHONPATH=src .venv/bin/python -m llm.cli extract-zim-text \
   --max-articles 50000 \
   --min-chars 200
 ```
+If extraction returns `written_articles=0`, retry with a lower `--min-chars` (for example `20`).
 
 2. Train tokenizer on extracted corpus:
 ```bash
@@ -131,6 +132,7 @@ bash scripts/hydrate_from_warm_storage.sh /mnt/ceph/llm/data
 - Basic character-level tokenizer with train/save/load.
 - Token-window data pipeline (`TokenWindowDataset`) for next-token training pairs.
 - ZIM archive text extraction (`extract-zim-text`) for server-hosted `.zim` files.
+  - Automatically falls back to suggestion-index paths if fulltext search returns no matches.
 - Corpus sharding (`shard-corpus`) into train/val token shard binaries + manifest.
 - Unit tests for tokenizer round-trips and unknown token behavior.
 

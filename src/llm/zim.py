@@ -83,8 +83,30 @@ def _iter_paths_from_search(archive: Any, query: str, batch_size: int) -> Iterab
 
     offset = 0
     seen: set[str] = set()
+    yielded = 0
     while True:
         results = search.getResults(offset, batch_size)
+        paths = list(results)
+        if not paths:
+            break
+        for path in paths:
+            if path in seen:
+                continue
+            seen.add(path)
+            yielded += 1
+            yield path
+        offset += len(paths)
+
+    # Some ZIM files report a fulltext index but return no matches for all
+    # normal queries. Fall back to suggestion index paths in that case.
+    if yielded > 0:
+        return
+
+    suggester = libzim.SuggestionSearcher(archive)
+    suggestions = suggester.suggest(query)
+    offset = 0
+    while True:
+        results = suggestions.getResults(offset, batch_size)
         paths = list(results)
         if not paths:
             break

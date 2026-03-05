@@ -4,7 +4,7 @@ ifneq ("$(wildcard .venv/bin/python)","")
 PYTHON=.venv/bin/python
 endif
 
-.PHONY: setup-dev setup-train doctor install-server-system test lint format typecheck smoke extract-zim train-tokenizer train-tokenizer-global shard-corpus-batch verify-shards train sync-warm hydrate-warm publish-wiki
+.PHONY: setup-dev setup-train doctor install-server-system test lint format typecheck smoke extract-zim train-tokenizer train-tokenizer-global shard-corpus-batch verify-shards train generate sync-warm hydrate-warm publish-wiki
 
 setup-dev:
 	bash scripts/bootstrap_dev.sh
@@ -56,6 +56,10 @@ verify-shards:
 train:
 	@echo "Usage:"
 	@echo "  PYTHONPATH=src $(PYTHON) -m llm.cli train --shards-path data/shards/<dataset> --output-dir artifacts/checkpoints/<run_name>"
+
+generate:
+	@echo "Usage:"
+	@echo "  PYTHONPATH=src $(PYTHON) -m llm.cli generate --checkpoint artifacts/checkpoints/<run_name>/last.pt --prompt 'Hello'"
 
 sync-warm:
 	@echo "Sync local extracted/shard/tokenizer artifacts to warm storage."

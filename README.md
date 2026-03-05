@@ -32,6 +32,7 @@ make typecheck   # run MyPy
 make smoke       # tiny CLI smoke check
 make verify-shards # print shard integrity check usage
 make train       # print baseline training command usage
+make generate    # print checkpoint text-generation command usage
 make train-tokenizer-global # print shared-tokenizer command usage
 make shard-corpus-batch # print shared-tokenizer batch sharding usage
 make doctor      # verify binaries and Python deps
@@ -133,6 +134,16 @@ PYTHONPATH=src .venv/bin/python -m llm.cli train \
 Note: `train` requires all selected manifests to share the exact same tokenizer mapping.
 Use a global tokenizer + `shard-corpus-batch` output root for multi-dataset runs.
 
+7. Generate text from a checkpoint:
+```bash
+PYTHONPATH=src .venv/bin/python -m llm.cli generate \
+  --checkpoint artifacts/checkpoints/medlineplus_baseline/last.pt \
+  --prompt "The future of medicine is" \
+  --max-new-tokens 200 \
+  --temperature 0.9 \
+  --top-k 50
+```
+
 ## Warm Storage (Ceph Mount)
 Use `./data` and `./artifacts` as the hot working set.
 Use `/mnt/ceph/llm/data` as warm cache/backup for durability and overflow.
@@ -170,6 +181,7 @@ bash scripts/hydrate_from_warm_storage.sh /mnt/ceph/llm/data
 - Corpus sharding (`shard-corpus`) into train/val token shard binaries + manifest.
 - Batch corpus sharding (`shard-corpus-batch`) with one shared tokenizer.
 - Baseline GPT training (`train`) with checkpoint save/resume.
+- Checkpoint-based text generation (`generate`) with temperature/top-k sampling.
 - Unit tests for tokenizer round-trips and unknown token behavior.
 
 ## Next Milestones

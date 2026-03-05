@@ -306,6 +306,40 @@ def cmd_train(
     return 0
 
 
+def cmd_generate(
+    checkpoint_path: str,
+    prompt: str,
+    max_new_tokens: int,
+    temperature: float,
+    top_k: int,
+    device: str,
+    seed: int,
+    no_stop_on_eos: bool,
+) -> int:
+    from llm.generate import GenerateConfig, run_generation
+
+    config = GenerateConfig(
+        checkpoint_path=Path(checkpoint_path),
+        prompt=prompt,
+        max_new_tokens=max_new_tokens,
+        temperature=temperature,
+        top_k=top_k,
+        device=device,
+        seed=seed,
+        stop_on_eos=not no_stop_on_eos,
+    )
+    result = run_generation(config)
+    print(f"checkpoint_path={result['checkpoint_path']}")
+    print(f"tokenizer_path={result['tokenizer_path']}")
+    print(f"device={result['device']}")
+    print(f"seed={result['seed']}")
+    print(f"token_count={result['token_count']}")
+    print("output_text_start")
+    print(result["output_text"])
+    print("output_text_end")
+    return 0
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="LLM project helper CLI")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -520,6 +554,33 @@ def parse_args() -> argparse.Namespace:
         help="Optional checkpoint path to resume training from",
     )
 
+    gen_parser = subparsers.add_parser("generate", help="Generate text from a model checkpoint")
+    gen_parser.add_argument("--checkpoint", required=True, help="Checkpoint path (*.pt)")
+    gen_parser.add_argument("--prompt", required=True, help="Prompt text")
+    gen_parser.add_argument(
+        "--max-new-tokens", type=int, default=200, help="Maximum new tokens to sample"
+    )
+    gen_parser.add_argument(
+        "--temperature", type=float, default=1.0, help="Sampling temperature (> 0)"
+    )
+    gen_parser.add_argument(
+        "--top-k",
+        type=int,
+        default=0,
+        help="Top-k sampling cutoff (0 = disabled)",
+    )
+    gen_parser.add_argument(
+        "--device",
+        default="auto",
+        help="Torch device (auto, cpu, cuda, cuda:0, ...)",
+    )
+    gen_parser.add_argument("--seed", type=int, default=42, help="Random seed")
+    gen_parser.add_argument(
+        "--no-stop-on-eos",
+        action="store_true",
+        help="Disable early stop when EOS token is sampled",
+    )
+
     return parser.parse_args()
 
 
@@ -605,6 +666,17 @@ def main() -> int:
             d_model=args.d_model,
             dropout=args.dropout,
             resume_from=args.resume_from,
+        )
+    if args.command == "generate":
+        return cmd_generate(
+            checkpoint_path=args.checkpoint,
+            prompt=args.prompt,
+            max_new_tokens=args.max_new_tokens,
+            temperature=args.temperature,
+            top_k=args.top_k,
+            device=args.device,
+            seed=args.seed,
+            no_stop_on_eos=args.no_stop_on_eos,
         )
     raise ValueError(f"Unsupported command: {args.command}")
 

@@ -24,6 +24,7 @@ Use the `Makefile` as the source of truth:
 - `make smoke`: run a minimal CLI smoke test
 - `make verify-shards`: usage helper for shard integrity verification
 - `make train`: usage helper for baseline GPT training
+- `make generate`: usage helper for checkpoint text generation
 - `make train-tokenizer-global`: usage helper for shared tokenizer training
 - `make shard-corpus-batch`: usage helper for batch sharding with a shared tokenizer
 

@@ -23,6 +23,7 @@ make typecheck
 make smoke
 make verify-shards
 make train
+make generate
 make train-tokenizer-global
 make shard-corpus-batch
 make sync-warm

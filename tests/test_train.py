@@ -4,9 +4,14 @@ import unittest
 from array import array
 from pathlib import Path
 
-import torch
+try:
+    import torch
 
-from llm.train import ShardBatchSampler, collect_shard_training_info
+    from llm.train import ShardBatchSampler, collect_shard_training_info
+except ModuleNotFoundError:
+    torch = None
+    ShardBatchSampler = None
+    collect_shard_training_info = None
 
 
 def _write_tokenizer(path: Path, stoi: dict[str, int]) -> None:
@@ -44,6 +49,7 @@ def _write_manifest(
     path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
 
 
+@unittest.skipIf(torch is None, "torch is not installed")
 class TrainDataTests(unittest.TestCase):
     def test_collect_shard_training_info_rejects_mismatched_tokenizers(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

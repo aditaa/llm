@@ -34,6 +34,7 @@ Server setup reference:
 CI/CD workflows:
 - `.github/workflows/ci.yml`: lint, typecheck, tests, smoke, and gate job
 - `.github/workflows/wiki-sync.yml`: publishes wiki pages on `main` doc changes
+- `.github/dependabot.yml`: weekly dependency update PRs for `pip`, `requirements/`, and GitHub Actions
 
 ## Coding Style & Naming Conventions
 - Python 3.10+, 4-space indentation, UTF-8 files

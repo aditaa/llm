@@ -33,6 +33,7 @@ make hydrate-warm
 ## CI/CD
 - `CI` workflow runs lint, typecheck, tests, and smoke checks.
 - `Wiki Sync` workflow publishes docs in `wiki/` to the GitHub Wiki.
+- `Dependabot` (`.github/dependabot.yml`) opens weekly dependency update PRs.
 - Recommended branch protection: require `CI Gate` before merge to `main`.
 
 ## Repository Structure

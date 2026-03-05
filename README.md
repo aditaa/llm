@@ -42,6 +42,7 @@ make doctor      # verify binaries and Python deps
 GitHub Actions workflows are defined in `.github/workflows/`:
 - `ci.yml`: lint, typecheck, unit tests, smoke checks on pull requests and pushes to `main`
 - `wiki-sync.yml`: publish `wiki/*.md` changes to the GitHub Wiki
+- Dependabot config: `.github/dependabot.yml` (weekly updates for `pip`, `requirements/`, and GitHub Actions)
 
 Recommended branch protection for `main`:
 - Require pull request before merging

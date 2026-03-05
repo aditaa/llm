@@ -2,13 +2,22 @@ import tempfile
 import unittest
 from pathlib import Path
 
-import torch
+try:
+    import torch
 
-from llm.generate import GenerateConfig, run_generation
-from llm.model import GPTModel, ModelConfig
-from llm.tokenizer import BasicCharTokenizer
+    from llm.generate import GenerateConfig, run_generation
+    from llm.model import GPTModel, ModelConfig
+    from llm.tokenizer import BasicCharTokenizer
+except ModuleNotFoundError:
+    torch = None
+    GenerateConfig = None
+    run_generation = None
+    GPTModel = None
+    ModelConfig = None
+    BasicCharTokenizer = None
 
 
+@unittest.skipIf(torch is None, "torch is not installed")
 class GenerateTests(unittest.TestCase):
     def test_run_generation_from_checkpoint(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -68,6 +68,8 @@ PYTHONPATH=src .venv/bin/python -m llm.cli extract-zim-text \
   --min-chars 200
 ```
 If extraction returns `written_articles=0`, retry with a lower `--min-chars` (for example `20`).
+If `extract-zim-text` reports no fulltext index, generate a `--paths-file` from
+ZIM suggestions/title index and rerun extraction with that file.
 
 2. Train tokenizer on extracted corpus:
 ```bash

@@ -67,6 +67,7 @@ Keep PR scope narrow; split refactors and features into separate PRs.
 - Run shard integrity verification before training (`llm.cli verify-shards`)
 - `extract-zim-text` now falls back to suggestion-index paths when fulltext search has zero matches
 - If extraction still returns `written_articles=0`, retry with a lower `--min-chars` (for example `20`)
+- For ZIMs without fulltext index, generate a paths list from suggestion/title index and run `extract-zim-text --paths-file ...`
 - Use `bash scripts/sync_warm_storage.sh /mnt/ceph/llm/data` to copy local artifacts to warm storage
 - Use `bash scripts/hydrate_from_warm_storage.sh /mnt/ceph/llm/data` to restore local artifacts from warm storage
 - Version extracted/tokenized/sharded outputs with the ZIM date stamp (for example `serverfault_2025-08`)

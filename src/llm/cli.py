@@ -134,6 +134,57 @@ def cmd_verify_shards(
     return 0 if fail_count == 0 else 1
 
 
+def cmd_train(
+    shards_path: str,
+    output_dir: str,
+    max_steps: int,
+    batch_size: int,
+    context_length: int,
+    learning_rate: float,
+    weight_decay: float,
+    grad_clip: float,
+    eval_interval: int,
+    eval_steps: int,
+    log_interval: int,
+    seed: int,
+    device: str,
+    n_layers: int,
+    n_heads: int,
+    d_model: int,
+    dropout: float,
+    resume_from: str | None,
+) -> int:
+    from llm.train import TrainConfig, run_training
+
+    config = TrainConfig(
+        shards_path=Path(shards_path),
+        output_dir=Path(output_dir),
+        max_steps=max_steps,
+        batch_size=batch_size,
+        context_length=context_length,
+        learning_rate=learning_rate,
+        weight_decay=weight_decay,
+        grad_clip=grad_clip,
+        eval_interval=eval_interval,
+        eval_steps=eval_steps,
+        log_interval=log_interval,
+        seed=seed,
+        device=device,
+        n_layers=n_layers,
+        n_heads=n_heads,
+        d_model=d_model,
+        dropout=dropout,
+        resume_from=Path(resume_from) if resume_from else None,
+    )
+    result = run_training(config)
+    print(f"output_dir={result['output_dir']}")
+    print(f"max_steps={result['max_steps']}")
+    print(f"start_step={result['start_step']}")
+    print(f"tokenizer_path={result['tokenizer_path']}")
+    print(f"tokenizer_hash={result['tokenizer_hash']}")
+    return 0
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="LLM project helper CLI")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -220,6 +271,58 @@ def parse_args() -> argparse.Namespace:
         help="Fail if matching source ZIM is missing when --raw-zim-dir is set",
     )
 
+    train_parser = subparsers.add_parser(
+        "train", help="Run baseline GPT training on shard manifests"
+    )
+    train_parser.add_argument(
+        "--shards-path",
+        required=True,
+        help="Path to manifest.json or directory containing manifest.json files",
+    )
+    train_parser.add_argument(
+        "--output-dir",
+        required=True,
+        help="Directory for checkpoints and training logs",
+    )
+    train_parser.add_argument("--max-steps", type=int, default=1000, help="Number of train steps")
+    train_parser.add_argument("--batch-size", type=int, default=8, help="Batch size")
+    train_parser.add_argument(
+        "--context-length", type=int, default=256, help="Sequence length for training windows"
+    )
+    train_parser.add_argument(
+        "--learning-rate", type=float, default=3e-4, help="Optimizer learning rate"
+    )
+    train_parser.add_argument(
+        "--weight-decay", type=float, default=0.1, help="AdamW weight decay"
+    )
+    train_parser.add_argument(
+        "--grad-clip", type=float, default=1.0, help="Gradient clipping max norm"
+    )
+    train_parser.add_argument(
+        "--eval-interval", type=int, default=100, help="Run validation every N steps"
+    )
+    train_parser.add_argument(
+        "--eval-steps", type=int, default=20, help="Validation batches per eval cycle"
+    )
+    train_parser.add_argument(
+        "--log-interval", type=int, default=10, help="Log train loss every N steps"
+    )
+    train_parser.add_argument("--seed", type=int, default=42, help="Random seed")
+    train_parser.add_argument(
+        "--device",
+        default="auto",
+        help="Torch device (auto, cpu, cuda, cuda:0, ...)",
+    )
+    train_parser.add_argument("--n-layers", type=int, default=4, help="Transformer block count")
+    train_parser.add_argument("--n-heads", type=int, default=4, help="Attention head count")
+    train_parser.add_argument("--d-model", type=int, default=256, help="Model hidden size")
+    train_parser.add_argument("--dropout", type=float, default=0.1, help="Dropout")
+    train_parser.add_argument(
+        "--resume-from",
+        default=None,
+        help="Optional checkpoint path to resume training from",
+    )
+
     return parser.parse_args()
 
 
@@ -259,6 +362,27 @@ def main() -> int:
             chunk_tokens=args.chunk_tokens,
             raw_zim_dir=args.raw_zim_dir,
             strict_source=args.strict_source,
+        )
+    if args.command == "train":
+        return cmd_train(
+            shards_path=args.shards_path,
+            output_dir=args.output_dir,
+            max_steps=args.max_steps,
+            batch_size=args.batch_size,
+            context_length=args.context_length,
+            learning_rate=args.learning_rate,
+            weight_decay=args.weight_decay,
+            grad_clip=args.grad_clip,
+            eval_interval=args.eval_interval,
+            eval_steps=args.eval_steps,
+            log_interval=args.log_interval,
+            seed=args.seed,
+            device=args.device,
+            n_layers=args.n_layers,
+            n_heads=args.n_heads,
+            d_model=args.d_model,
+            dropout=args.dropout,
+            resume_from=args.resume_from,
         )
     raise ValueError(f"Unsupported command: {args.command}")
 

@@ -22,6 +22,7 @@ make format
 make typecheck
 make smoke
 make verify-shards
+make train
 make sync-warm
 make hydrate-warm
 ```
@@ -32,7 +33,7 @@ make hydrate-warm
 - Recommended branch protection: require `CI Gate` before merge to `main`.
 
 ## Repository Structure
-- `src/llm/`: tokenizer, data, sharding, CLI, model modules
+- `src/llm/`: tokenizer, data, sharding, training, CLI, model modules
 - `tests/`: unit test coverage for core data/tokenizer/sharding paths
 - `docs/`: architecture and server notes
 - `information/`: reference notes and external source material

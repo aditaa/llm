@@ -23,6 +23,7 @@ Use the `Makefile` as the source of truth:
 - `make typecheck`: run MyPy on `src/`
 - `make smoke`: run a minimal CLI smoke test
 - `make verify-shards`: usage helper for shard integrity verification
+- `make train`: usage helper for baseline GPT training
 
 Server setup reference:
 `docs/SERVER_SETUP.md`
@@ -68,6 +69,7 @@ Keep PR scope narrow; split refactors and features into separate PRs.
 - `extract-zim-text` now falls back to suggestion-index paths when fulltext search has zero matches
 - If extraction still returns `written_articles=0`, retry with a lower `--min-chars` (for example `20`)
 - For ZIMs without fulltext index, generate a paths list from suggestion/title index and run `extract-zim-text --paths-file ...`
+- `llm.cli train` requires a tokenizer-compatible shard set (same tokenizer mapping across all selected manifests)
 - Use `bash scripts/sync_warm_storage.sh /mnt/ceph/llm/data` to copy local artifacts to warm storage
 - Use `bash scripts/hydrate_from_warm_storage.sh /mnt/ceph/llm/data` to restore local artifacts from warm storage
 - Version extracted/tokenized/sharded outputs with the ZIM date stamp (for example `serverfault_2025-08`)

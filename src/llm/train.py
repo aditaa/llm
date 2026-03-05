@@ -1,0 +1,381 @@
+"""Baseline training loop over token shard manifests."""
+
+from __future__ import annotations
+
+import json
+import random
+from dataclasses import asdict, dataclass
+from hashlib import sha256
+from pathlib import Path
+from typing import Any
+
+import numpy as np
+import torch
+from torch import Tensor
+
+from llm.model import GPTModel, ModelConfig
+from llm.tokenizer import BasicCharTokenizer
+
+
+@dataclass
+class TrainConfig:
+    shards_path: Path
+    output_dir: Path
+    max_steps: int = 1000
+    batch_size: int = 8
+    context_length: int = 256
+    learning_rate: float = 3e-4
+    weight_decay: float = 0.1
+    grad_clip: float = 1.0
+    eval_interval: int = 100
+    eval_steps: int = 20
+    log_interval: int = 10
+    seed: int = 42
+    device: str = "auto"
+    n_layers: int = 4
+    n_heads: int = 4
+    d_model: int = 256
+    dropout: float = 0.1
+    resume_from: Path | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        payload = asdict(self)
+        payload["shards_path"] = str(self.shards_path)
+        payload["output_dir"] = str(self.output_dir)
+        payload["resume_from"] = str(self.resume_from) if self.resume_from else None
+        return payload
+
+
+@dataclass
+class ShardTrainingInfo:
+    manifest_paths: list[Path]
+    tokenizer_path: Path
+    tokenizer_hash: str
+    token_dtype: str
+    vocab_size: int
+    train_shards: list[Path]
+    val_shards: list[Path]
+    train_tokens: int
+    val_tokens: int
+
+
+def _iter_manifest_paths(path: Path) -> list[Path]:
+    if path.is_file():
+        if path.name != "manifest.json":
+            raise ValueError(f"expected manifest.json file, got: {path}")
+        return [path]
+
+    if not path.exists():
+        raise ValueError(f"path does not exist: {path}")
+    if not path.is_dir():
+        raise ValueError(f"path must be a file or directory: {path}")
+
+    manifests = sorted(p for p in path.rglob("manifest.json") if p.is_file())
+    if not manifests:
+        raise ValueError(f"no manifest.json files found under: {path}")
+    return manifests
+
+
+def _tokenizer_hash(path: Path) -> str:
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    stoi = payload.get("stoi", {})
+    canonical = json.dumps(stoi, sort_keys=True, separators=(",", ":"))
+    return sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def collect_shard_training_info(path: Path) -> ShardTrainingInfo:
+    manifest_paths = _iter_manifest_paths(path)
+
+    train_shards: list[Path] = []
+    val_shards: list[Path] = []
+    train_tokens = 0
+    val_tokens = 0
+
+    tokenizer_path: Path | None = None
+    tokenizer_hash: str | None = None
+    token_dtype: str | None = None
+    vocab_size: int | None = None
+
+    for manifest_path in manifest_paths:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        dataset_dir = manifest_path.parent
+
+        this_tok_path = Path(str(manifest["tokenizer_path"]))
+        this_tok_hash = _tokenizer_hash(this_tok_path)
+        this_token_dtype = str(manifest["token_dtype"])
+        this_vocab_size = int(manifest["tokenizer_vocab_size"])
+
+        if tokenizer_path is None:
+            tokenizer_path = this_tok_path
+            tokenizer_hash = this_tok_hash
+            token_dtype = this_token_dtype
+            vocab_size = this_vocab_size
+        else:
+            if tokenizer_hash != this_tok_hash:
+                raise ValueError(
+                    "mismatched tokenizers detected across manifests. "
+                    "Train on one tokenizer family at a time."
+                )
+            if token_dtype != this_token_dtype:
+                raise ValueError("mismatched token_dtype across manifests")
+            if vocab_size != this_vocab_size:
+                raise ValueError("mismatched vocab_size across manifests")
+
+        for shard in manifest["train"]["shards"]:
+            shard_path = dataset_dir / str(shard["path"])
+            train_shards.append(shard_path)
+            train_tokens += int(shard["tokens"])
+        for shard in manifest["val"]["shards"]:
+            shard_path = dataset_dir / str(shard["path"])
+            val_shards.append(shard_path)
+            val_tokens += int(shard["tokens"])
+
+    if (
+        tokenizer_path is None
+        or tokenizer_hash is None
+        or token_dtype is None
+        or vocab_size is None
+    ):
+        raise ValueError("no valid manifests found")
+    if not train_shards:
+        raise ValueError("no train shards found")
+    if not val_shards:
+        raise ValueError("no val shards found")
+
+    return ShardTrainingInfo(
+        manifest_paths=manifest_paths,
+        tokenizer_path=tokenizer_path,
+        tokenizer_hash=tokenizer_hash,
+        token_dtype=token_dtype,
+        vocab_size=vocab_size,
+        train_shards=train_shards,
+        val_shards=val_shards,
+        train_tokens=train_tokens,
+        val_tokens=val_tokens,
+    )
+
+
+def _np_dtype(token_dtype: str) -> np.dtype[np.generic]:
+    if token_dtype == "uint16":
+        return np.dtype(np.uint16)
+    if token_dtype == "uint32":
+        return np.dtype(np.uint32)
+    raise ValueError(f"unsupported token dtype: {token_dtype}")
+
+
+class ShardBatchSampler:
+    def __init__(
+        self,
+        shard_paths: list[Path],
+        token_dtype: str,
+        context_length: int,
+        seed: int,
+        device: torch.device,
+    ) -> None:
+        if context_length <= 0:
+            raise ValueError("context_length must be > 0")
+        self.context_length = context_length
+        self.rng = random.Random(seed)
+        self.device = device
+        dtype = _np_dtype(token_dtype)
+        self.arrays = [np.memmap(path, mode="r", dtype=dtype) for path in shard_paths]
+        self.eligible: list[int] = []
+        self.weights: list[int] = []
+        for idx, arr in enumerate(self.arrays):
+            if int(arr.size) > context_length:
+                self.eligible.append(idx)
+                self.weights.append(int(arr.size) - context_length)
+        if not self.eligible:
+            raise ValueError("no shards have enough tokens for context_length")
+
+    def sample_batch(self, batch_size: int) -> tuple[Tensor, Tensor]:
+        if batch_size <= 0:
+            raise ValueError("batch_size must be > 0")
+        x = np.zeros((batch_size, self.context_length), dtype=np.int64)
+        y = np.zeros((batch_size, self.context_length), dtype=np.int64)
+        for row in range(batch_size):
+            arr_idx = self.rng.choices(self.eligible, weights=self.weights, k=1)[0]
+            arr = self.arrays[arr_idx]
+            max_start = int(arr.size) - self.context_length - 1
+            if max_start <= 0:
+                raise ValueError("encountered shard smaller than context window")
+            start = self.rng.randint(0, max_start)
+            x[row, :] = arr[start : start + self.context_length]
+            y[row, :] = arr[start + 1 : start + 1 + self.context_length]
+        return (
+            torch.from_numpy(x).to(device=self.device, dtype=torch.long),
+            torch.from_numpy(y).to(device=self.device, dtype=torch.long),
+        )
+
+
+def _resolve_device(device_arg: str) -> torch.device:
+    if device_arg == "auto":
+        if torch.cuda.is_available():
+            return torch.device("cuda")
+        return torch.device("cpu")
+    return torch.device(device_arg)
+
+
+def _estimate_loss(
+    model: GPTModel,
+    sampler: ShardBatchSampler,
+    *,
+    batch_size: int,
+    eval_steps: int,
+) -> float:
+    model.eval()
+    losses: list[float] = []
+    with torch.no_grad():
+        for _ in range(eval_steps):
+            xb, yb = sampler.sample_batch(batch_size)
+            _, loss = model(xb, yb)
+            if loss is None:
+                raise RuntimeError("loss should not be None when targets are provided")
+            losses.append(float(loss.item()))
+    model.train()
+    return sum(losses) / len(losses)
+
+
+def _save_checkpoint(
+    *,
+    output_dir: Path,
+    step: int,
+    model: GPTModel,
+    optimizer: torch.optim.Optimizer,
+    config: TrainConfig,
+    model_config: ModelConfig,
+    info: ShardTrainingInfo,
+) -> Path:
+    output_dir.mkdir(parents=True, exist_ok=True)
+    ckpt_path = output_dir / f"ckpt_step_{step:07d}.pt"
+    payload = {
+        "step": step,
+        "model_state": model.state_dict(),
+        "optimizer_state": optimizer.state_dict(),
+        "train_config": config.to_dict(),
+        "model_config": model_config.to_dict(),
+        "tokenizer_path": str(info.tokenizer_path),
+        "tokenizer_hash": info.tokenizer_hash,
+    }
+    torch.save(payload, ckpt_path)
+    torch.save(payload, output_dir / "last.pt")
+    return ckpt_path
+
+
+def run_training(config: TrainConfig) -> dict[str, Any]:
+    if config.max_steps <= 0:
+        raise ValueError("max_steps must be > 0")
+    if config.batch_size <= 0:
+        raise ValueError("batch_size must be > 0")
+    if config.eval_steps <= 0:
+        raise ValueError("eval_steps must be > 0")
+    if config.eval_interval <= 0:
+        raise ValueError("eval_interval must be > 0")
+    if config.context_length <= 0:
+        raise ValueError("context_length must be > 0")
+
+    random.seed(config.seed)
+    np.random.seed(config.seed)
+    torch.manual_seed(config.seed)
+
+    device = _resolve_device(config.device)
+    info = collect_shard_training_info(config.shards_path)
+
+    model_config = ModelConfig(
+        vocab_size=info.vocab_size,
+        max_seq_len=config.context_length,
+        n_layers=config.n_layers,
+        n_heads=config.n_heads,
+        d_model=config.d_model,
+        dropout=config.dropout,
+    )
+    model = GPTModel(model_config).to(device)
+    optimizer = torch.optim.AdamW(
+        model.parameters(),
+        lr=config.learning_rate,
+        weight_decay=config.weight_decay,
+    )
+
+    start_step = 0
+    if config.resume_from is not None:
+        checkpoint = torch.load(config.resume_from, map_location=device)
+        model.load_state_dict(checkpoint["model_state"])
+        optimizer.load_state_dict(checkpoint["optimizer_state"])
+        start_step = int(checkpoint["step"])
+
+    train_sampler = ShardBatchSampler(
+        shard_paths=info.train_shards,
+        token_dtype=info.token_dtype,
+        context_length=config.context_length,
+        seed=config.seed,
+        device=device,
+    )
+    val_sampler = ShardBatchSampler(
+        shard_paths=info.val_shards,
+        token_dtype=info.token_dtype,
+        context_length=config.context_length,
+        seed=config.seed + 1,
+        device=device,
+    )
+
+    config.output_dir.mkdir(parents=True, exist_ok=True)
+    (config.output_dir / "run_config.json").write_text(
+        json.dumps(
+            {
+                "train_config": config.to_dict(),
+                "model_config": model_config.to_dict(),
+                "tokenizer_path": str(info.tokenizer_path),
+                "tokenizer_hash": info.tokenizer_hash,
+                "manifests": [str(p) for p in info.manifest_paths],
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+    tokenizer = BasicCharTokenizer.load(info.tokenizer_path)
+    print(f"device={device}")
+    print(f"vocab_size={tokenizer.vocab_size}")
+    print(f"train_tokens={info.train_tokens}")
+    print(f"val_tokens={info.val_tokens}")
+    print(f"start_step={start_step}")
+
+    for step in range(start_step + 1, config.max_steps + 1):
+        xb, yb = train_sampler.sample_batch(config.batch_size)
+        optimizer.zero_grad(set_to_none=True)
+        _, loss = model(xb, yb)
+        if loss is None:
+            raise RuntimeError("loss should not be None when targets are provided")
+        loss.backward()
+        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=config.grad_clip)
+        optimizer.step()
+
+        if step == 1 or step % config.log_interval == 0:
+            print(f"step={step} train_loss={loss.item():.6f}")
+
+        should_eval = step == 1 or step % config.eval_interval == 0 or step == config.max_steps
+        if should_eval:
+            val_loss = _estimate_loss(
+                model,
+                val_sampler,
+                batch_size=config.batch_size,
+                eval_steps=config.eval_steps,
+            )
+            ckpt = _save_checkpoint(
+                output_dir=config.output_dir,
+                step=step,
+                model=model,
+                optimizer=optimizer,
+                config=config,
+                model_config=model_config,
+                info=info,
+            )
+            print(f"step={step} val_loss={val_loss:.6f} checkpoint={ckpt}")
+
+    return {
+        "output_dir": str(config.output_dir),
+        "max_steps": config.max_steps,
+        "start_step": start_step,
+        "tokenizer_path": str(info.tokenizer_path),
+        "tokenizer_hash": info.tokenizer_hash,
+    }

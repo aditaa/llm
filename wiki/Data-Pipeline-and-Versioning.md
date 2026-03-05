@@ -11,6 +11,7 @@
 PYTHONPATH=src .venv/bin/python -m llm.cli extract-zim-text --input-zim /path/file.zim --output /path/corpus.txt
 PYTHONPATH=src .venv/bin/python -m llm.cli train-tokenizer --input /path/corpus.txt --output /path/vocab.json
 PYTHONPATH=src .venv/bin/python -m llm.cli shard-corpus --input /path/corpus.txt --tokenizer /path/vocab.json --output-dir /path/shards
+PYTHONPATH=src .venv/bin/python -m llm.cli train --shards-path /path/shards --output-dir /path/checkpoints
 ```
 
 ## Versioning Rule
@@ -68,3 +69,5 @@ This validates:
 - Keep old shard versions immutable until new version is validated.
 - Switch training to new manifest only after smoke validation.
 - Delete stale extracted/shards only when space is needed.
+- Train on tokenizer-compatible shard sets only (same tokenizer mapping across selected manifests).
+- For no-fulltext ZIM files, generate `--paths-file` from suggestion/title index and use it for extraction.

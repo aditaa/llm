@@ -31,6 +31,7 @@ make format      # run Black formatter
 make typecheck   # run MyPy
 make smoke       # tiny CLI smoke check
 make verify-shards # print shard integrity check usage
+make train       # print baseline training command usage
 make doctor      # verify binaries and Python deps
 ```
 
@@ -101,6 +102,17 @@ PYTHONPATH=src .venv/bin/python -m llm.cli verify-shards \
   --strict-source
 ```
 
+6. Run a baseline training test:
+```bash
+PYTHONPATH=src .venv/bin/python -m llm.cli train \
+  --shards-path data/shards/medlineplus.gov_en_all_2025-01 \
+  --output-dir artifacts/checkpoints/medlineplus_baseline \
+  --max-steps 200 \
+  --batch-size 8 \
+  --context-length 256
+```
+Note: `train` requires all selected manifests to share the exact same tokenizer mapping.
+
 ## Warm Storage (Ceph Mount)
 Use `./data` and `./artifacts` as the hot working set.
 Use `/mnt/ceph/llm/data` as warm cache/backup for durability and overflow.
@@ -136,6 +148,7 @@ bash scripts/hydrate_from_warm_storage.sh /mnt/ceph/llm/data
 - ZIM archive text extraction (`extract-zim-text`) for server-hosted `.zim` files.
   - Automatically falls back to suggestion-index paths if fulltext search returns no matches.
 - Corpus sharding (`shard-corpus`) into train/val token shard binaries + manifest.
+- Baseline GPT training (`train`) with checkpoint save/resume.
 - Unit tests for tokenizer round-trips and unknown token behavior.
 
 ## Next Milestones

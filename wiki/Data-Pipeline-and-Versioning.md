@@ -48,6 +48,22 @@ Rehydrate local hot workspace from warm storage:
 bash scripts/hydrate_from_warm_storage.sh /mnt/ceph/llm/data
 ```
 
+## Pre-Training Integrity Gate
+Before training, verify shard datasets:
+
+```bash
+PYTHONPATH=src .venv/bin/python -m llm.cli verify-shards \
+  --path data/shards \
+  --raw-zim-dir data/raw_zim \
+  --strict-source
+```
+
+This validates:
+- Manifest consistency and token totals
+- Shard file sizes and token counts
+- Token ID range against tokenizer vocab
+- Optional source ZIM health linkage
+
 ## Update Strategy
 - Keep old shard versions immutable until new version is validated.
 - Switch training to new manifest only after smoke validation.

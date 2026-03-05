@@ -90,3 +90,13 @@ Rehydrate from warm storage:
 ```bash
 bash scripts/hydrate_from_warm_storage.sh /mnt/ceph/llm/data
 ```
+
+## 8) Pre-Training Shard Integrity Check
+Run integrity checks before training starts:
+
+```bash
+PYTHONPATH=src .venv/bin/python -m llm.cli verify-shards \
+  --path data/shards \
+  --raw-zim-dir data/raw_zim \
+  --strict-source
+```

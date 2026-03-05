@@ -30,6 +30,7 @@ make lint        # run Ruff checks
 make format      # run Black formatter
 make typecheck   # run MyPy
 make smoke       # tiny CLI smoke check
+make verify-shards # print shard integrity check usage
 make doctor      # verify binaries and Python deps
 ```
 
@@ -87,6 +88,14 @@ PYTHONPATH=src .venv/bin/python -m llm.cli shard-corpus \
 4. Inspect corpus quickly:
 ```bash
 PYTHONPATH=src .venv/bin/python -m llm.cli stats --input data/extracted/wiki_corpus.txt
+```
+
+5. Verify shard integrity before training:
+```bash
+PYTHONPATH=src .venv/bin/python -m llm.cli verify-shards \
+  --path data/shards \
+  --raw-zim-dir data/raw_zim \
+  --strict-source
 ```
 
 ## Warm Storage (Ceph Mount)

@@ -22,6 +22,7 @@ Use the `Makefile` as the source of truth:
 - `make format`: run Black formatter
 - `make typecheck`: run MyPy on `src/`
 - `make smoke`: run a minimal CLI smoke test
+- `make verify-shards`: usage helper for shard integrity verification
 
 Server setup reference:
 `docs/SERVER_SETUP.md`
@@ -63,6 +64,7 @@ Keep PR scope narrow; split refactors and features into separate PRs.
 - Prefer environment variables for machine-specific settings
 - Run all processing in local hot workspace (`./data`, `./artifacts`)
 - Use warm storage at `/mnt/ceph/llm/data` as cache/backup
+- Run shard integrity verification before training (`llm.cli verify-shards`)
 - Use `bash scripts/sync_warm_storage.sh /mnt/ceph/llm/data` to copy local artifacts to warm storage
 - Use `bash scripts/hydrate_from_warm_storage.sh /mnt/ceph/llm/data` to restore local artifacts from warm storage
 - Version extracted/tokenized/sharded outputs with the ZIM date stamp (for example `serverfault_2025-08`)

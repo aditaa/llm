@@ -21,6 +21,7 @@ make lint
 make format
 make typecheck
 make smoke
+make verify-shards
 make sync-warm
 make hydrate-warm
 ```

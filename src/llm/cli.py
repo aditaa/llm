@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
+from llm.integrity import verify_shards
 from llm.sharding import ShardConfig, shard_corpus
 from llm.tokenizer import BasicCharTokenizer
 from llm.zim import ZimExtractConfig, extract_text_from_zim
@@ -96,6 +97,43 @@ def cmd_shard_corpus(
     return 0
 
 
+def cmd_verify_shards(
+    path: str,
+    check_token_ranges: bool,
+    chunk_tokens: int,
+    raw_zim_dir: str | None,
+    strict_source: bool,
+) -> int:
+    results = verify_shards(
+        path=Path(path),
+        check_token_ranges=check_token_ranges,
+        chunk_tokens=chunk_tokens,
+        raw_zim_dir=Path(raw_zim_dir) if raw_zim_dir else None,
+        strict_source=strict_source,
+    )
+
+    ok_count = 0
+    fail_count = 0
+    for result in results:
+        print(f"manifest={result['manifest_path']}")
+        print(f"ok={int(result['ok'])}")
+        print(f"files_checked={result['files_checked']}")
+        print(f"tokens_checked={result['tokens_checked']}")
+        for warning in result["warnings"]:
+            print(f"warning={warning}")
+        for error in result["errors"]:
+            print(f"error={error}")
+
+        if result["ok"]:
+            ok_count += 1
+        else:
+            fail_count += 1
+
+    print(f"manifests_ok={ok_count}")
+    print(f"manifests_failed={fail_count}")
+    return 0 if fail_count == 0 else 1
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="LLM project helper CLI")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -152,6 +190,36 @@ def parse_args() -> argparse.Namespace:
         "--max-lines", type=int, default=0, help="Optional line cap for test runs (0 = all lines)"
     )
 
+    verify_parser = subparsers.add_parser(
+        "verify-shards", help="Validate shard manifests and shard binary integrity"
+    )
+    verify_parser.add_argument(
+        "--path",
+        required=True,
+        help="Path to manifest.json or directory containing manifest.json files",
+    )
+    verify_parser.add_argument(
+        "--no-token-range-check",
+        action="store_true",
+        help="Skip deep token-id range scans for faster checks",
+    )
+    verify_parser.add_argument(
+        "--chunk-tokens",
+        type=int,
+        default=1_000_000,
+        help="Token chunk size for range checks",
+    )
+    verify_parser.add_argument(
+        "--raw-zim-dir",
+        default=None,
+        help="Optional raw ZIM directory to validate matching source archives",
+    )
+    verify_parser.add_argument(
+        "--strict-source",
+        action="store_true",
+        help="Fail if matching source ZIM is missing when --raw-zim-dir is set",
+    )
+
     return parser.parse_args()
 
 
@@ -183,6 +251,14 @@ def main() -> int:
             val_ratio=args.val_ratio,
             seed=args.seed,
             max_lines=args.max_lines,
+        )
+    if args.command == "verify-shards":
+        return cmd_verify_shards(
+            path=args.path,
+            check_token_ranges=not args.no_token_range_check,
+            chunk_tokens=args.chunk_tokens,
+            raw_zim_dir=args.raw_zim_dir,
+            strict_source=args.strict_source,
         )
     raise ValueError(f"Unsupported command: {args.command}")
 

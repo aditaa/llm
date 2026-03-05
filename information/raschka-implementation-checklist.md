@@ -1,6 +1,6 @@
 # Raschka-Informed Implementation Checklist
 
-Last updated: 2026-03-04
+Last updated: 2026-03-05
 
 Use this as the execution tracker for turning the Raschka references into code in this repository.
 
@@ -12,23 +12,23 @@ Use this as the execution tracker for turning the Raschka references into code i
   - [x] `src/llm/`
   - [x] `tests/`
   - [x] `Makefile`, `pyproject.toml`
-- [ ] Install local dev dependencies
+- [x] Install local dev dependencies
   - Command: `pip install -e ".[dev]"`
   - Verify: `make lint`, `make typecheck`, `make test`
 
 ## 1) Data Pipeline (Chapter 2 Track)
-- [ ] Create `src/llm/data.py`
-  - [ ] Dataset class for token sequence windows
-  - [ ] Next-token input/target shifting
-  - [ ] Train/val split helper
-  - [ ] Batch collation helper
+- [x] Create `src/llm/data.py`
+  - [x] Dataset class for token sequence windows
+  - [x] Next-token input/target shifting
+  - [x] Train/val split helper
+  - [x] Batch collation helper
 - [ ] Extend CLI in `src/llm/cli.py`
   - [ ] Add command to build tokenized dataset artifacts
   - [ ] Add command to preview batch shapes/stats
-- [ ] Add tests in `tests/test_data.py`
-  - [ ] Windowing edge cases
-  - [ ] Shift correctness (`x[t] -> y[t+1]`)
-  - [ ] Reproducible split behavior with seed
+- [x] Add tests in `tests/test_data.py`
+  - [x] Windowing edge cases
+  - [x] Shift correctness (`x[t] -> y[t+1]`)
+  - [x] Reproducible split behavior with seed
 
 ## 2) Model Core (Chapters 3-4 Track)
 - [ ] Expand `src/llm/model.py`

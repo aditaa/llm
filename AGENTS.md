@@ -2,8 +2,8 @@
 
 ## Project Structure & Module Organization
 The codebase is a Python LLM-from-scratch scaffold.
-- `src/llm/`: core package (`tokenizer.py`, `cli.py`, `model.py`)
-- `tests/`: unit tests (currently tokenizer coverage)
+- `src/llm/`: core package (`tokenizer.py`, `data.py`, `cli.py`, `model.py`)
+- `tests/`: unit tests (tokenizer + data pipeline coverage)
 - `docs/`: architecture and roadmap docs
 - `information/`: references, imported notes, and source material
 - `artifacts/`: generated outputs such as vocab/checkpoints (gitignored)

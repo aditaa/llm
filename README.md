@@ -47,13 +47,14 @@ Detailed guide: `docs/SERVER_SETUP.md`
 ## Current Capabilities
 - Text stats CLI for quick corpus sanity checks.
 - Basic character-level tokenizer with train/save/load.
+- Token-window data pipeline (`TokenWindowDataset`) for next-token training pairs.
 - Unit tests for tokenizer round-trips and unknown token behavior.
 
 ## Next Milestones
-1. Add dataset batching and sequence packing.
-2. Implement GPT-style transformer blocks in `src/llm/model.py`.
-3. Add a first training loop and checkpointing.
-4. Add validation metrics (loss, perplexity) and text generation.
+1. Implement GPT-style transformer blocks in `src/llm/model.py`.
+2. Add a first training loop and checkpointing.
+3. Add validation metrics (loss, perplexity) and text generation.
+4. Add finetuning flows for classification and instruction datasets.
 
 ## References
 - Internal reference index: `information/README.md`

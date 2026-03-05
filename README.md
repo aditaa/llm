@@ -64,7 +64,17 @@ PYTHONPATH=src .venv/bin/python -m llm.cli train-tokenizer \
   --output artifacts/tokenizer/vocab.json
 ```
 
-3. Inspect corpus quickly:
+3. Shard tokenized corpus for training:
+```bash
+PYTHONPATH=src .venv/bin/python -m llm.cli shard-corpus \
+  --input data/extracted/wiki_corpus.txt \
+  --tokenizer artifacts/tokenizer/vocab.json \
+  --output-dir data/shards/wiki_char \
+  --shard-size-tokens 5000000 \
+  --val-ratio 0.01
+```
+
+4. Inspect corpus quickly:
 ```bash
 PYTHONPATH=src .venv/bin/python -m llm.cli stats --input data/extracted/wiki_corpus.txt
 ```
@@ -74,6 +84,7 @@ PYTHONPATH=src .venv/bin/python -m llm.cli stats --input data/extracted/wiki_cor
 - Basic character-level tokenizer with train/save/load.
 - Token-window data pipeline (`TokenWindowDataset`) for next-token training pairs.
 - ZIM archive text extraction (`extract-zim-text`) for server-hosted `.zim` files.
+- Corpus sharding (`shard-corpus`) into train/val token shard binaries + manifest.
 - Unit tests for tokenizer round-trips and unknown token behavior.
 
 ## Next Milestones

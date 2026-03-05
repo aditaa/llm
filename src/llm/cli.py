@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
+from llm.sharding import ShardConfig, shard_corpus
 from llm.tokenizer import BasicCharTokenizer
 from llm.zim import ZimExtractConfig, extract_text_from_zim
 
@@ -64,6 +65,37 @@ def cmd_extract_zim_text(
     return 0
 
 
+def cmd_shard_corpus(
+    input_path: str,
+    tokenizer_path: str,
+    output_dir: str,
+    shard_size_tokens: int,
+    val_ratio: float,
+    seed: int,
+    max_lines: int,
+) -> int:
+    config = ShardConfig(
+        input_path=Path(input_path),
+        tokenizer_path=Path(tokenizer_path),
+        output_dir=Path(output_dir),
+        shard_size_tokens=shard_size_tokens,
+        val_ratio=val_ratio,
+        seed=seed,
+        max_lines=max_lines,
+    )
+    manifest = shard_corpus(config)
+    print(f"input={manifest['input_path']}")
+    print(f"tokenizer={manifest['tokenizer_path']}")
+    print(f"output_dir={output_dir}")
+    print(f"token_dtype={manifest['token_dtype']}")
+    print(f"line_count={manifest['line_count']}")
+    print(f"train_tokens={manifest['train']['total_tokens']}")
+    print(f"train_shards={len(manifest['train']['shards'])}")
+    print(f"val_tokens={manifest['val']['total_tokens']}")
+    print(f"val_shards={len(manifest['val']['shards'])}")
+    return 0
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="LLM project helper CLI")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -99,6 +131,27 @@ def parse_args() -> argparse.Namespace:
         help="Optional newline-separated entry paths if ZIM has no fulltext index",
     )
 
+    shard_parser = subparsers.add_parser(
+        "shard-corpus", help="Tokenize corpus and write token shards"
+    )
+    shard_parser.add_argument("--input", required=True, help="Input corpus text file")
+    shard_parser.add_argument("--tokenizer", required=True, help="Tokenizer vocab JSON path")
+    shard_parser.add_argument(
+        "--output-dir", required=True, help="Output directory for shard files"
+    )
+    shard_parser.add_argument(
+        "--shard-size-tokens", type=int, default=5_000_000, help="Tokens per shard file"
+    )
+    shard_parser.add_argument(
+        "--val-ratio", type=float, default=0.01, help="Validation split ratio"
+    )
+    shard_parser.add_argument(
+        "--seed", type=int, default=42, help="Random seed for split assignment"
+    )
+    shard_parser.add_argument(
+        "--max-lines", type=int, default=0, help="Optional line cap for test runs (0 = all lines)"
+    )
+
     return parser.parse_args()
 
 
@@ -120,6 +173,16 @@ def main() -> int:
             max_chars=args.max_chars,
             include_title=not args.no_title,
             paths_file=args.paths_file,
+        )
+    if args.command == "shard-corpus":
+        return cmd_shard_corpus(
+            input_path=args.input,
+            tokenizer_path=args.tokenizer,
+            output_dir=args.output_dir,
+            shard_size_tokens=args.shard_size_tokens,
+            val_ratio=args.val_ratio,
+            seed=args.seed,
+            max_lines=args.max_lines,
         )
     raise ValueError(f"Unsupported command: {args.command}")
 

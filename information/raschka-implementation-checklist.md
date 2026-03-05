@@ -23,7 +23,7 @@ Use this as the execution tracker for turning the Raschka references into code i
   - [x] Train/val split helper
   - [x] Batch collation helper
 - [ ] Extend CLI in `src/llm/cli.py`
-  - [ ] Add command to build tokenized dataset artifacts
+  - [x] Add command to build tokenized dataset artifacts
   - [ ] Add command to preview batch shapes/stats
 - [x] Add tests in `tests/test_data.py`
   - [x] Windowing edge cases

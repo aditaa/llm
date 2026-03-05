@@ -55,6 +55,10 @@ Keep PR scope narrow; split refactors and features into separate PRs.
 - Never commit raw dataset dumps or `.zim` archives
 - Keep generated files in `artifacts/` and out of git history
 - Prefer environment variables for machine-specific settings
+- Use warm storage at `/mnt/ceph/llm/data` for large extracted corpora and shard files
+- Use `bash scripts/sync_warm_storage.sh /mnt/ceph/llm/data` to copy local artifacts to warm storage
+- Version extracted/tokenized/sharded outputs with the ZIM date stamp (for example `serverfault_2025-08`)
+- Keep raw ZIM archives in `/mnt/ceph/llm/data/raw_zim/`
 
 ## Reference Material Workflow
 - Store reusable project references in `information/`

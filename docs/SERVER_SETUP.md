@@ -61,3 +61,21 @@ make typecheck
 - Keep raw IIAB `.zim` files outside Git, on server storage (for example `/data/iiab/zim/`).
 - Extract corpus text into `data/extracted/` in this repo.
 - `data/` is gitignored except `data/README.md`.
+
+## 7) Warm Storage (Recommended)
+If a Ceph/NFS mount is available (for example `/mnt/ceph/llm/data`), use it for large extracted and sharded artifacts.
+
+Suggested directories:
+- `/mnt/ceph/llm/data/raw_zim/`
+- `/mnt/ceph/llm/data/extracted/`
+- `/mnt/ceph/llm/data/shards/`
+- `/mnt/ceph/llm/data/tokenizer/`
+
+Use a date-based version tag from the ZIM filename for all derived artifacts.
+Example: `serverfault.com_en_all_2025-08.zim` -> `serverfault_2025-08`.
+
+Sync local artifacts when needed:
+
+```bash
+bash scripts/sync_warm_storage.sh /mnt/ceph/llm/data
+```

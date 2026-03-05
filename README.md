@@ -79,6 +79,27 @@ PYTHONPATH=src .venv/bin/python -m llm.cli shard-corpus \
 PYTHONPATH=src .venv/bin/python -m llm.cli stats --input data/extracted/wiki_corpus.txt
 ```
 
+## Warm Storage (Ceph Mount)
+Use `/mnt/ceph/llm/data` for large and durable dataset artifacts.
+
+- Recommended mount layout:
+  - `/mnt/ceph/llm/data/raw_zim/`
+  - `/mnt/ceph/llm/data/extracted/`
+  - `/mnt/ceph/llm/data/shards/`
+  - `/mnt/ceph/llm/data/tokenizer/`
+- Version datasets by ZIM date stamp:
+  - ZIM: `serverfault.com_en_all_2025-08.zim`
+  - Version tag: `serverfault_2025-08`
+  - Raw ZIM: `/mnt/ceph/llm/data/raw_zim/serverfault.com_en_all_2025-08.zim`
+  - Extracted text: `/mnt/ceph/llm/data/extracted/serverfault_2025-08.txt`
+  - Tokenizer: `/mnt/ceph/llm/data/tokenizer/serverfault_2025-08-vocab.json`
+  - Shards: `/mnt/ceph/llm/data/shards/serverfault_2025-08/`
+- For large runs, write outputs directly to the mount (instead of repo-local `data/`).
+- To sync current local artifacts to warm storage:
+```bash
+bash scripts/sync_warm_storage.sh /mnt/ceph/llm/data
+```
+
 ## Current Capabilities
 - Text stats CLI for quick corpus sanity checks.
 - Basic character-level tokenizer with train/save/load.

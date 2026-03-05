@@ -4,7 +4,7 @@ ifneq ("$(wildcard .venv/bin/python)","")
 PYTHON=.venv/bin/python
 endif
 
-.PHONY: setup-dev setup-train doctor install-server-system test lint format typecheck smoke extract-zim train-tokenizer
+.PHONY: setup-dev setup-train doctor install-server-system test lint format typecheck smoke extract-zim train-tokenizer sync-warm
 
 setup-dev:
 	bash scripts/bootstrap_dev.sh
@@ -40,3 +40,7 @@ extract-zim:
 train-tokenizer:
 	@echo "Usage:"
 	@echo "  PYTHONPATH=src $(PYTHON) -m llm.cli train-tokenizer --input data/extracted/corpus.txt --output artifacts/tokenizer/vocab.json"
+
+sync-warm:
+	@echo "Sync local extracted/shard/tokenizer artifacts to warm storage."
+	@echo "Usage: bash scripts/sync_warm_storage.sh /mnt/ceph/llm/data"

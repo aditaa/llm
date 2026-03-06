@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import html
 import json
 import re
 from collections import Counter
@@ -11,6 +12,21 @@ from pathlib import Path
 from typing import Any
 
 _WS_RE = re.compile(r"\s+")
+_HTML_TAG_RE = re.compile(r"</?[A-Za-z][^>\n]{0,200}>")
+_SITE_SUFFIX_RE = re.compile(r"\s+-\s*(stack overflow|stack exchange)\b", re.IGNORECASE)
+_STACK_SHELL_RE = re.compile(
+    r"\bstack overflow stack exchange\b.*?\bpublic questions tags users about\b",
+    re.IGNORECASE,
+)
+_NAV_PHRASE_RE = re.compile(
+    r"\b(?:questions|tags|users|about|teams|jobs|companies|products|help)"
+    r"(?:\s+(?:questions|tags|users|about|teams|jobs|companies|products|help)){2,}\b",
+    re.IGNORECASE,
+)
+_STACK_BRAND_SEQ_RE = re.compile(
+    r"\b(?:stack overflow|stack exchange)(?:\s+(?:stack overflow|stack exchange)){1,}\b",
+    re.IGNORECASE,
+)
 
 
 @dataclass(frozen=True)
@@ -35,6 +51,10 @@ class CleanCorpusConfig:
     max_lines_per_file: int = 0
     skip_existing: bool = True
     output_suffix: str = ".clean.txt"
+    decode_html_entities: bool = True
+    strip_html_tags: bool = True
+    strip_site_suffixes: bool = True
+    strip_nav_phrases: bool = True
 
 
 def normalize_whitespace(text: str) -> str:
@@ -53,6 +73,21 @@ def _digit_ratio(text: str) -> float:
         return 0.0
     digits = sum(1 for c in text if c.isdigit())
     return digits / len(text)
+
+
+def _strip_web_shell(text: str, config: CleanCorpusConfig) -> str:
+    out = text
+    if config.decode_html_entities:
+        out = html.unescape(out)
+    if config.strip_html_tags:
+        out = _HTML_TAG_RE.sub(" ", out)
+    if config.strip_site_suffixes:
+        out = _SITE_SUFFIX_RE.sub(" ", out)
+    if config.strip_nav_phrases:
+        out = _STACK_SHELL_RE.sub(" ", out)
+        out = _NAV_PHRASE_RE.sub(" ", out)
+        out = _STACK_BRAND_SEQ_RE.sub(" ", out)
+    return normalize_whitespace(out)
 
 
 def analyze_corpora(
@@ -280,7 +315,7 @@ def clean_corpora_batch(
                 line_no += 1
                 totals["input_lines"] += 1
 
-                line = normalize_whitespace(raw_line)
+                line = _strip_web_shell(raw_line, config)
                 if not line:
                     removed["empty"] += 1
                     totals["removed_empty"] += 1
@@ -354,6 +389,10 @@ def clean_corpora_batch(
             "skip_existing": config.skip_existing,
             "output_suffix": config.output_suffix,
             "boilerplate_lines": len(boilerplate_lines),
+            "decode_html_entities": config.decode_html_entities,
+            "strip_html_tags": config.strip_html_tags,
+            "strip_site_suffixes": config.strip_site_suffixes,
+            "strip_nav_phrases": config.strip_nav_phrases,
         },
     }
 

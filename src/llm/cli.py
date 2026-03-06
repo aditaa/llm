@@ -199,6 +199,10 @@ def cmd_clean_corpus_batch(
     dedupe_global: bool,
     skip_existing: bool,
     output_suffix: str,
+    decode_html_entities: bool,
+    strip_html_tags: bool,
+    strip_site_suffixes: bool,
+    strip_nav_phrases: bool,
     report_output: str,
 ) -> int:
     files = iter_corpus_files(
@@ -228,6 +232,10 @@ def cmd_clean_corpus_batch(
             max_lines_per_file=max_lines_per_file,
             skip_existing=skip_existing,
             output_suffix=output_suffix,
+            decode_html_entities=decode_html_entities,
+            strip_html_tags=strip_html_tags,
+            strip_site_suffixes=strip_site_suffixes,
+            strip_nav_phrases=strip_nav_phrases,
         ),
         boilerplate_lines=boilerplate_lines,
     )
@@ -658,6 +666,26 @@ def parse_args() -> argparse.Namespace:
         help="Suffix appended to each cleaned output filename",
     )
     clean_parser.add_argument(
+        "--no-decode-html-entities",
+        action="store_true",
+        help="Disable HTML entity decoding (for example &amp; -> &)",
+    )
+    clean_parser.add_argument(
+        "--no-strip-html-tags",
+        action="store_true",
+        help="Disable stripping HTML/XML-like tags",
+    )
+    clean_parser.add_argument(
+        "--no-strip-site-suffixes",
+        action="store_true",
+        help="Disable stripping site suffixes like '- Stack Overflow'",
+    )
+    clean_parser.add_argument(
+        "--no-strip-nav-phrases",
+        action="store_true",
+        help="Disable stripping repeated navigation phrase fragments",
+    )
+    clean_parser.add_argument(
         "--report-output",
         default="artifacts/reports/clean_corpus_batch_report.json",
         help="Output JSON report path",
@@ -900,6 +928,10 @@ def main() -> int:
             dedupe_global=args.dedupe_global,
             skip_existing=not args.no_skip_existing,
             output_suffix=args.output_suffix,
+            decode_html_entities=not args.no_decode_html_entities,
+            strip_html_tags=not args.no_strip_html_tags,
+            strip_site_suffixes=not args.no_strip_site_suffixes,
+            strip_nav_phrases=not args.no_strip_nav_phrases,
             report_output=args.report_output,
         )
     if args.command == "shard-corpus":

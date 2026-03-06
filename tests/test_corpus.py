@@ -137,6 +137,48 @@ class CorpusCleaningTests(unittest.TestCase):
             # Ensure report payload is JSON serializable.
             json.dumps(report)
 
+    def test_clean_corpora_batch_strips_web_shell_fragments(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            input_dir = root / "input"
+            output_dir = root / "output"
+            input_dir.mkdir(parents=True, exist_ok=True)
+
+            noisy = (
+                "How to parse XML in Python? - Stack Overflow "
+                "Stack Exchange Stack Overflow Questions Tags Users About "
+                "Stack Overflow Public Questions Tags Users About "
+                "<div>How to parse XML in Python using lxml and ElementTree?</div>"
+            )
+            (input_dir / "a.txt").write_text(noisy + "\n", encoding="utf-8")
+
+            report = clean_corpora_batch(
+                input_files=[input_dir / "a.txt"],
+                output_dir=output_dir,
+                config=CleanCorpusConfig(
+                    min_chars=20,
+                    max_chars=0,
+                    min_alpha_ratio=0.20,
+                    max_digit_ratio=0.35,
+                    dedupe_within_file=True,
+                    dedupe_global=False,
+                    max_lines_per_file=0,
+                    skip_existing=True,
+                    output_suffix=".clean.txt",
+                    decode_html_entities=True,
+                    strip_html_tags=True,
+                    strip_site_suffixes=True,
+                    strip_nav_phrases=True,
+                ),
+                boilerplate_lines=set(),
+            )
+
+            out = (output_dir / "a.clean.txt").read_text(encoding="utf-8").strip()
+            self.assertIn("How to parse XML in Python", out)
+            self.assertNotIn("Stack Exchange", out)
+            self.assertNotIn("<div>", out)
+            self.assertEqual(report["totals"]["kept_lines"], 1)
+
 
 if __name__ == "__main__":
     unittest.main()

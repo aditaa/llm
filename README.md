@@ -335,6 +335,8 @@ PYTHONPATH=src .venv/bin/python -m llm.cli train \
   --resume-from artifacts/checkpoints/fineweb-s10bt-incremental-run1/last.pt
 ```
 
+On this 20-core host, default FineWeb shard splitting should use `15` parallel streams.
+
 ## Warm Storage (Ceph Mount)
 Use `./data` and `./artifacts` as the hot working set.
 Use `/mnt/ceph/llm/data` as warm cache/backup for durability and overflow.

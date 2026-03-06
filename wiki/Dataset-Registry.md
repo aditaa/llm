@@ -6,8 +6,8 @@ Track every source we ingest, why it exists, and where it lives.
 | Source | Purpose | Stage | Storage | Status | Notes |
 |---|---|---|---|---|---|
 | IIAB/Kiwix ZIM collections | Core broad-domain pretraining text | Extraction -> cleanup -> sharding | Hot: `data/raw_zim`, Warm: `/mnt/ceph/llm/data/raw_zim` | Active | Version by ZIM date stamp in filename |
-| `gutenberg_en_all_2025-11.zim` | Long-form English prose for language fluency | Extraction -> cleanup -> sharding | Hot + Warm | Ingesting | Copyright-safe because source is public-domain corpus packaging |
-| FineWeb `sample-10BT` rows slice | Add broad web language diversity with bounded size | Pull rows -> cleanup -> sharding | Warm first: `/mnt/ceph/llm/data/extracted/` | Planned/starting | Use bounded rows via `scripts/pull_hf_rows.py` |
+| FineWeb `sample-10BT` parquet | Broad web pretraining text for first pass | Bulk download -> cleanup -> sharding | Hot: `data/fineweb/sample-10BT` | Active | ~30.6 GB total |
+| FineWeb `sample-350BT` parquet | Larger web corpus staged for later scale-up | Bulk download -> warm cache -> staged hot chunks | Warm: `/mnt/ceph/llm/data/fineweb/sample-350BT` | Active (downloading) | ~1.06 TB total |
 
 ## Candidate Sources (Not Yet Approved)
 | Source | Potential Use | Main Risk to Review |
@@ -24,17 +24,31 @@ Track every source we ingest, why it exists, and where it lives.
 
 ## Commands
 ```bash
-# Bounded FineWeb pull to warm storage
-python3 scripts/pull_hf_rows.py \
-  --dataset HuggingFaceFW/fineweb \
-  --config sample-10BT \
-  --split train \
-  --output /mnt/ceph/llm/data/extracted/fineweb_sample-10BT_rows100k.txt \
-  --max-rows 100000
+# HF token (recommended): Hugging Face web UI -> Settings -> Access Tokens (read)
+export HF_TOKEN=hf_xxx
+
+# sample-10BT parquet to hot storage
+HF_HUB_DISABLE_XET=1 .venv/bin/hf download HuggingFaceFW/fineweb \
+  --repo-type dataset \
+  --include "sample/10BT/*.parquet" \
+  --local-dir data/fineweb/sample-10BT \
+  --max-workers 2 \
+  --token "$HF_TOKEN"
+
+# sample-350BT parquet to warm storage
+HF_HUB_DISABLE_XET=1 .venv/bin/hf download HuggingFaceFW/fineweb \
+  --repo-type dataset \
+  --include "sample/350BT/*.parquet" \
+  --local-dir /mnt/ceph/llm/data/fineweb/sample-350BT \
+  --max-workers 2 \
+  --token "$HF_TOKEN"
+
+# stage bounded chunks from warm -> hot
+bash scripts/stage_fineweb_from_warm.sh --max-files 4 --max-gib 8
 
 # Heuristic risk audit on the pulled file once staged in a directory
 PYTHONPATH=src .venv/bin/python -m llm.cli dataset-risk-report \
-  --input-dir /mnt/ceph/llm/data/extracted \
-  --pattern "fineweb_sample-10BT_rows100k.txt" \
-  --output artifacts/reports/dataset_risk_fineweb_sample-10BT_rows100k.json
+  --input-dir data/extracted \
+  --pattern "fineweb*.txt" \
+  --output artifacts/reports/dataset_risk_fineweb.json
 ```

@@ -4,7 +4,7 @@ ifneq ("$(wildcard .venv/bin/python)","")
 PYTHON=.venv/bin/python
 endif
 
-.PHONY: setup-dev setup-train doctor install-server-system test lint format typecheck smoke extract-zim train-tokenizer train-tokenizer-global corpus-quality-report clean-corpus-batch dataset-risk-report pull-hf-rows shard-corpus-batch verify-shards train generate sync-warm hydrate-warm publish-wiki
+.PHONY: setup-dev setup-train doctor install-server-system test lint format typecheck smoke extract-zim train-tokenizer train-tokenizer-global corpus-quality-report clean-corpus-batch dataset-risk-report pull-hf-rows stage-fineweb-from-warm shard-corpus-batch verify-shards train generate sync-warm hydrate-warm publish-wiki
 
 setup-dev:
 	bash scripts/bootstrap_dev.sh
@@ -60,6 +60,10 @@ dataset-risk-report:
 pull-hf-rows:
 	@echo "Usage:"
 	@echo "  python3 scripts/pull_hf_rows.py --dataset HuggingFaceFW/fineweb --config sample-10BT --split train --output /mnt/ceph/llm/data/extracted/fineweb_sample-10BT_rows100k.txt --max-rows 100000"
+
+stage-fineweb-from-warm:
+	@echo "Usage:"
+	@echo "  bash scripts/stage_fineweb_from_warm.sh --max-files 4 --max-gib 8"
 
 shard-corpus-batch:
 	@echo "Usage:"

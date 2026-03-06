@@ -38,6 +38,7 @@ make corpus-quality-report # print quality report command usage
 make clean-corpus-batch # print batch cleanup command usage
 make dataset-risk-report # print heuristic dataset risk audit command usage
 make pull-hf-rows # print Hugging Face rows API pull helper usage
+make stage-fineweb-from-warm # print warm->hot FineWeb chunk staging usage
 make shard-corpus-batch # print shared-tokenizer batch sharding usage
 make doctor      # verify binaries and Python deps
 ```
@@ -129,6 +130,36 @@ python3 scripts/pull_hf_rows.py \
   --max-rows 100000
 ```
 Use warm storage for these pulls first; full FineWeb variants are much larger than typical hot disk.
+
+3aa. Bulk-download FineWeb parquet shards (resumable):
+```bash
+# create token in Hugging Face web UI: Settings -> Access Tokens (read scope)
+export HF_TOKEN=hf_xxx
+
+# sample-10BT (~30.6 GB) -> hot storage
+HF_HUB_DISABLE_XET=1 .venv/bin/hf download HuggingFaceFW/fineweb \
+  --repo-type dataset \
+  --include "sample/10BT/*.parquet" \
+  --local-dir data/fineweb/sample-10BT \
+  --max-workers 2 \
+  --token "$HF_TOKEN"
+
+# sample-350BT (~1.06 TB) -> warm storage
+HF_HUB_DISABLE_XET=1 .venv/bin/hf download HuggingFaceFW/fineweb \
+  --repo-type dataset \
+  --include "sample/350BT/*.parquet" \
+  --local-dir /mnt/ceph/llm/data/fineweb/sample-350BT \
+  --max-workers 2 \
+  --token "$HF_TOKEN"
+```
+Notes:
+- `HF_TOKEN` is recommended (higher limits), not strictly required for public datasets.
+- Hugging Face SSH keys are for Git-over-SSH and are not used by `hf download`.
+
+3ab. Stage FineWeb chunks from warm to hot as needed:
+```bash
+bash scripts/stage_fineweb_from_warm.sh --max-files 4 --max-gib 8
+```
 
 3b. Run heuristic dataset risk audit:
 ```bash

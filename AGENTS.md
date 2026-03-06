@@ -30,6 +30,7 @@ Use the `Makefile` as the source of truth:
 - `make clean-corpus-batch`: usage helper for batch corpus cleanup
 - `make dataset-risk-report`: usage helper for heuristic dataset risk audit
 - `make pull-hf-rows`: usage helper for bounded Hugging Face rows pulls
+- `make stage-fineweb-from-warm`: usage helper for staging FineWeb parquet chunks from warm to hot
 - `make shard-corpus-batch`: usage helper for batch sharding with a shared tokenizer
 
 Server setup reference:
@@ -88,6 +89,7 @@ Keep PR scope narrow; split refactors and features into separate PRs.
 - Use `bash scripts/sync_warm_storage.sh /mnt/ceph/llm/data` to copy local artifacts to warm storage
 - Use `bash scripts/hydrate_from_warm_storage.sh /mnt/ceph/llm/data` to restore local artifacts from warm storage
 - For bounded external pulls (for example FineWeb samples), use `python3 scripts/pull_hf_rows.py` and write to warm storage first
+- For parquet-based FineWeb workflows, use `scripts/stage_fineweb_from_warm.sh` to copy bounded warm chunks into hot storage
 - Version extracted/tokenized/sharded outputs with the ZIM date stamp (for example `serverfault_2025-08`)
 - Keep raw ZIM archives in `/mnt/ceph/llm/data/raw_zim/`
 

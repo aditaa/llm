@@ -6,6 +6,7 @@ import hashlib
 import html
 import json
 import re
+import unicodedata as ud
 from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
@@ -13,6 +14,7 @@ from typing import Any
 
 _WS_RE = re.compile(r"\s+")
 _HTML_TAG_RE = re.compile(r"</?[A-Za-z][^>\n]{0,200}>")
+_WORD_RE = re.compile(r"[A-Za-z']+")
 _SITE_SUFFIX_RE = re.compile(r"\s+-\s*(stack overflow|stack exchange)\b", re.IGNORECASE)
 _STACK_SHELL_RE = re.compile(
     r"\bstack overflow stack exchange\b.*?\bpublic questions tags users about\b",
@@ -32,6 +34,93 @@ _STACK_TIMELINE_RE = re.compile(
     re.IGNORECASE,
 )
 _PUBLIC_TOKEN_RE = re.compile(r"\bpublic\b", re.IGNORECASE)
+_INLINE_SCORE_RE = re.compile(
+    r"^(?P<prefix>.{20,260}?)\s(?P<score>[+-]?\d{1,4})\s(?P<suffix>[A-Z].+)$"
+)
+_CODE_HINT_WORDS = {
+    "select",
+    "insert",
+    "update",
+    "delete",
+    "where",
+    "from",
+    "join",
+    "into",
+    "values",
+    "function",
+    "class",
+    "const",
+    "let",
+    "var",
+    "return",
+    "import",
+    "def",
+}
+
+_EN_STOPWORDS = {
+    "a",
+    "an",
+    "and",
+    "are",
+    "as",
+    "at",
+    "be",
+    "been",
+    "but",
+    "by",
+    "can",
+    "did",
+    "do",
+    "does",
+    "for",
+    "from",
+    "had",
+    "has",
+    "have",
+    "he",
+    "her",
+    "his",
+    "how",
+    "i",
+    "if",
+    "in",
+    "into",
+    "is",
+    "it",
+    "its",
+    "me",
+    "my",
+    "not",
+    "of",
+    "on",
+    "or",
+    "our",
+    "she",
+    "so",
+    "that",
+    "the",
+    "their",
+    "them",
+    "there",
+    "they",
+    "this",
+    "to",
+    "up",
+    "us",
+    "was",
+    "we",
+    "were",
+    "what",
+    "when",
+    "where",
+    "which",
+    "who",
+    "why",
+    "will",
+    "with",
+    "you",
+    "your",
+}
 
 
 @dataclass(frozen=True)
@@ -62,6 +151,12 @@ class CleanCorpusConfig:
     strip_nav_phrases: bool = True
     strip_stack_metadata: bool = True
     collapse_repeated_prefix: bool = True
+    strip_inline_score_tokens: bool = True
+    english_only: bool = False
+    english_min_words: int = 6
+    english_min_stopword_ratio: float = 0.02
+    english_min_stopword_count: int = 1
+    english_min_latin_ratio: float = 0.90
 
 
 def normalize_whitespace(text: str) -> str:
@@ -99,6 +194,8 @@ def _strip_web_shell(text: str, config: CleanCorpusConfig) -> str:
         out = _PUBLIC_TOKEN_RE.sub(" ", out)
     if config.collapse_repeated_prefix:
         out = _collapse_repeated_prefix(out)
+    if config.strip_inline_score_tokens:
+        out = _strip_inline_score_token(out)
     return normalize_whitespace(out)
 
 
@@ -114,6 +211,47 @@ def _collapse_repeated_prefix(text: str, *, min_words: int = 5, max_words: int =
             collapsed = words[:span] + words[span * 2 :]
             return " ".join(collapsed)
     return text
+
+
+def _strip_inline_score_token(text: str) -> str:
+    normalized = normalize_whitespace(text)
+    match = _INLINE_SCORE_RE.match(normalized)
+    if not match:
+        return normalized
+    prefix = str(match.group("prefix")).strip()
+    suffix = str(match.group("suffix")).strip()
+    # Restrict this to question/title-like prefixes to avoid deleting legitimate numbers.
+    if "?" not in prefix and ":" not in prefix:
+        return normalized
+    if len(suffix) < 20:
+        return normalized
+    return normalize_whitespace(f"{prefix} {suffix}")
+
+
+def _looks_english(text: str, config: CleanCorpusConfig) -> bool:
+    words = _WORD_RE.findall(text.lower())
+    if len(words) < config.english_min_words:
+        return False
+
+    letters = [c for c in text if c.isalpha()]
+    if not letters:
+        return False
+    latin = sum(1 for c in letters if "LATIN" in ud.name(c, ""))
+    latin_ratio = latin / len(letters)
+    if latin_ratio < config.english_min_latin_ratio:
+        return False
+
+    stop_hits = sum(1 for w in words if w in _EN_STOPWORDS)
+    if stop_hits < config.english_min_stopword_count:
+        return False
+    if (stop_hits / len(words)) < config.english_min_stopword_ratio:
+        return False
+
+    code_hint_hits = sum(1 for w in words if w in _CODE_HINT_WORDS)
+    code_symbols = sum(1 for c in text if c in "{}[]<>_=*/\\|`~$;")
+    if code_hint_hits >= 2 and code_symbols >= 1:
+        return False
+    return True
 
 
 def analyze_corpora(
@@ -283,6 +421,14 @@ def clean_corpora_batch(
         raise ValueError("max_digit_ratio must be in [0, 1]")
     if config.max_lines_per_file < 0:
         raise ValueError("max_lines_per_file must be >= 0")
+    if config.english_min_words < 0:
+        raise ValueError("english_min_words must be >= 0")
+    if config.english_min_stopword_count < 0:
+        raise ValueError("english_min_stopword_count must be >= 0")
+    if not 0.0 <= config.english_min_stopword_ratio <= 1.0:
+        raise ValueError("english_min_stopword_ratio must be in [0, 1]")
+    if not 0.0 <= config.english_min_latin_ratio <= 1.0:
+        raise ValueError("english_min_latin_ratio must be in [0, 1]")
 
     output_dir.mkdir(parents=True, exist_ok=True)
     boilerplate_lines = boilerplate_lines or set()
@@ -299,6 +445,7 @@ def clean_corpora_batch(
         "removed_low_alpha": 0,
         "removed_high_digit": 0,
         "removed_boilerplate": 0,
+        "removed_non_english": 0,
         "removed_duplicate_within": 0,
         "removed_duplicate_global": 0,
         "files_skipped_existing": 0,
@@ -326,6 +473,7 @@ def clean_corpora_batch(
             "low_alpha": 0,
             "high_digit": 0,
             "boilerplate": 0,
+            "non_english": 0,
             "duplicate_within": 0,
             "duplicate_global": 0,
         }
@@ -370,6 +518,11 @@ def clean_corpora_batch(
                 if _alpha_ratio(line) < config.min_alpha_ratio:
                     removed["low_alpha"] += 1
                     totals["removed_low_alpha"] += 1
+                    continue
+
+                if config.english_only and not _looks_english(line, config):
+                    removed["non_english"] += 1
+                    totals["removed_non_english"] += 1
                     continue
 
                 digest = hashlib.blake2b(line.encode("utf-8"), digest_size=16).hexdigest()
@@ -421,6 +574,12 @@ def clean_corpora_batch(
             "strip_nav_phrases": config.strip_nav_phrases,
             "strip_stack_metadata": config.strip_stack_metadata,
             "collapse_repeated_prefix": config.collapse_repeated_prefix,
+            "strip_inline_score_tokens": config.strip_inline_score_tokens,
+            "english_only": config.english_only,
+            "english_min_words": config.english_min_words,
+            "english_min_stopword_ratio": config.english_min_stopword_ratio,
+            "english_min_stopword_count": config.english_min_stopword_count,
+            "english_min_latin_ratio": config.english_min_latin_ratio,
         },
     }
 

@@ -96,7 +96,11 @@ By default this cleanup step also decodes HTML entities and strips common web-sh
 (HTML-like tags, repeated nav/menu phrases, site suffixes such as `- Stack Overflow`).
 Disable individual transforms with:
 `--no-decode-html-entities`, `--no-strip-html-tags`, `--no-strip-site-suffixes`,
-`--no-strip-nav-phrases`, `--no-strip-stack-metadata`, `--no-collapse-repeated-prefix`.
+`--no-strip-nav-phrases`, `--no-strip-stack-metadata`, `--no-collapse-repeated-prefix`,
+`--no-strip-inline-score-tokens`.
+To enforce English-only cleanup, add `--en-only` (with tunable thresholds:
+`--en-min-words`, `--en-min-stopword-ratio`, `--en-min-stopword-count`,
+`--en-min-latin-ratio`).
 
 4. Train tokenizer on cleaned corpus:
 ```bash

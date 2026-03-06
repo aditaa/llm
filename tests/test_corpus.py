@@ -173,6 +173,7 @@ class CorpusCleaningTests(unittest.TestCase):
                     strip_nav_phrases=True,
                     strip_stack_metadata=True,
                     collapse_repeated_prefix=True,
+                    strip_inline_score_tokens=True,
                 ),
                 boilerplate_lines=set(),
             )
@@ -184,7 +185,51 @@ class CorpusCleaningTests(unittest.TestCase):
             self.assertNotIn("Asked", out)
             self.assertNotIn("Viewed", out)
             self.assertNotIn("Public", out)
+            self.assertNotIn("? 0 ", out)
             self.assertEqual(report["totals"]["kept_lines"], 1)
+
+    def test_clean_corpora_batch_en_only_filter(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            input_dir = root / "input"
+            output_dir = root / "output"
+            input_dir.mkdir(parents=True, exist_ok=True)
+
+            english = "This is a practical guide for building a reliable backup strategy on Linux."
+            spanish = "Este es un ejemplo de texto en espanol para comprobar el filtro de idioma."
+            mostly_code = "SELECT * FROM users WHERE id = 42; INSERT INTO logs VALUES ('x');"
+            (input_dir / "a.txt").write_text(
+                "\n".join([english, spanish, mostly_code]) + "\n",
+                encoding="utf-8",
+            )
+
+            report = clean_corpora_batch(
+                input_files=[input_dir / "a.txt"],
+                output_dir=output_dir,
+                config=CleanCorpusConfig(
+                    min_chars=20,
+                    max_chars=0,
+                    min_alpha_ratio=0.20,
+                    max_digit_ratio=0.35,
+                    dedupe_within_file=True,
+                    dedupe_global=False,
+                    max_lines_per_file=0,
+                    skip_existing=True,
+                    output_suffix=".clean.txt",
+                    english_only=True,
+                    english_min_words=6,
+                    english_min_stopword_ratio=0.05,
+                    english_min_stopword_count=1,
+                    english_min_latin_ratio=0.90,
+                ),
+                boilerplate_lines=set(),
+            )
+
+            out_lines = (output_dir / "a.clean.txt").read_text(encoding="utf-8").splitlines()
+            self.assertIn(english, out_lines)
+            self.assertNotIn(spanish, out_lines)
+            self.assertNotIn(mostly_code, out_lines)
+            self.assertEqual(report["totals"]["removed_non_english"], 2)
 
 
 if __name__ == "__main__":

@@ -205,6 +205,12 @@ def cmd_clean_corpus_batch(
     strip_nav_phrases: bool,
     strip_stack_metadata: bool,
     collapse_repeated_prefix: bool,
+    strip_inline_score_tokens: bool,
+    english_only: bool,
+    english_min_words: int,
+    english_min_stopword_ratio: float,
+    english_min_stopword_count: int,
+    english_min_latin_ratio: float,
     report_output: str,
 ) -> int:
     files = iter_corpus_files(
@@ -240,6 +246,12 @@ def cmd_clean_corpus_batch(
             strip_nav_phrases=strip_nav_phrases,
             strip_stack_metadata=strip_stack_metadata,
             collapse_repeated_prefix=collapse_repeated_prefix,
+            strip_inline_score_tokens=strip_inline_score_tokens,
+            english_only=english_only,
+            english_min_words=english_min_words,
+            english_min_stopword_ratio=english_min_stopword_ratio,
+            english_min_stopword_count=english_min_stopword_count,
+            english_min_latin_ratio=english_min_latin_ratio,
         ),
         boilerplate_lines=boilerplate_lines,
     )
@@ -258,6 +270,7 @@ def cmd_clean_corpus_batch(
     print(f"removed_low_alpha={totals['removed_low_alpha']}")
     print(f"removed_high_digit={totals['removed_high_digit']}")
     print(f"removed_boilerplate={totals['removed_boilerplate']}")
+    print(f"removed_non_english={totals['removed_non_english']}")
     print(f"removed_duplicate_within={totals['removed_duplicate_within']}")
     print(f"removed_duplicate_global={totals['removed_duplicate_global']}")
     return 0
@@ -700,6 +713,40 @@ def parse_args() -> argparse.Namespace:
         help="Disable collapsing duplicated prefix spans",
     )
     clean_parser.add_argument(
+        "--no-strip-inline-score-tokens",
+        action="store_true",
+        help="Disable stripping inline score tokens (for example '? 0 Body...')",
+    )
+    clean_parser.add_argument(
+        "--en-only",
+        action="store_true",
+        help="Enable heuristic English-only filtering during cleanup",
+    )
+    clean_parser.add_argument(
+        "--en-min-words",
+        type=int,
+        default=6,
+        help="Minimum word count for English-line acceptance",
+    )
+    clean_parser.add_argument(
+        "--en-min-stopword-ratio",
+        type=float,
+        default=0.02,
+        help="Minimum English stopword ratio for English-line acceptance",
+    )
+    clean_parser.add_argument(
+        "--en-min-stopword-count",
+        type=int,
+        default=1,
+        help="Minimum English stopword count for English-line acceptance",
+    )
+    clean_parser.add_argument(
+        "--en-min-latin-ratio",
+        type=float,
+        default=0.90,
+        help="Minimum Latin-letter ratio for English-line acceptance",
+    )
+    clean_parser.add_argument(
         "--report-output",
         default="artifacts/reports/clean_corpus_batch_report.json",
         help="Output JSON report path",
@@ -948,6 +995,12 @@ def main() -> int:
             strip_nav_phrases=not args.no_strip_nav_phrases,
             strip_stack_metadata=not args.no_strip_stack_metadata,
             collapse_repeated_prefix=not args.no_collapse_repeated_prefix,
+            strip_inline_score_tokens=not args.no_strip_inline_score_tokens,
+            english_only=args.en_only,
+            english_min_words=args.en_min_words,
+            english_min_stopword_ratio=args.en_min_stopword_ratio,
+            english_min_stopword_count=args.en_min_stopword_count,
+            english_min_latin_ratio=args.en_min_latin_ratio,
             report_output=args.report_output,
         )
     if args.command == "shard-corpus":

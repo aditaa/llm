@@ -26,6 +26,8 @@ Use the `Makefile` as the source of truth:
 - `make train`: usage helper for baseline GPT training
 - `make generate`: usage helper for checkpoint text generation
 - `make train-tokenizer-global`: usage helper for shared tokenizer training
+- `make corpus-quality-report`: usage helper for corpus quality scan
+- `make clean-corpus-batch`: usage helper for batch corpus cleanup
 - `make shard-corpus-batch`: usage helper for batch sharding with a shared tokenizer
 
 Server setup reference:
@@ -75,6 +77,7 @@ Keep PR scope narrow; split refactors and features into separate PRs.
 - For ZIMs without fulltext index, generate a paths list from suggestion/title index and run `extract-zim-text --paths-file ...`
 - `llm.cli train` requires a tokenizer-compatible shard set (same tokenizer mapping across all selected manifests)
 - Preferred multi-dataset flow: `train-tokenizer-global` -> `shard-corpus-batch` -> `train`
+- Preferred pre-tokenization flow: `corpus-quality-report` -> `clean-corpus-batch` -> `train-tokenizer-global`
 - Use `bash scripts/sync_warm_storage.sh /mnt/ceph/llm/data` to copy local artifacts to warm storage
 - Use `bash scripts/hydrate_from_warm_storage.sh /mnt/ceph/llm/data` to restore local artifacts from warm storage
 - Version extracted/tokenized/sharded outputs with the ZIM date stamp (for example `serverfault_2025-08`)

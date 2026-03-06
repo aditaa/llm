@@ -1,0 +1,142 @@
+from __future__ import annotations
+
+import json
+import tempfile
+import unittest
+from pathlib import Path
+
+from llm.corpus import (
+    CleanCorpusConfig,
+    CorpusQualityConfig,
+    analyze_corpora,
+    clean_corpora_batch,
+    load_boilerplate_lines_from_report,
+    save_quality_report,
+)
+
+
+class CorpusQualityTests(unittest.TestCase):
+    def test_analyze_corpora_detects_boilerplate_candidates(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            f1 = root / "one.txt"
+            f2 = root / "two.txt"
+
+            boiler = "Shared boilerplate line for all pages and templates"
+            f1.write_text(
+                "\n".join(
+                    [
+                        "Home | About | Contact",
+                        "This is an article about survival skills and water purification.",
+                        boiler,
+                        boiler,
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            f2.write_text(
+                "\n".join(
+                    [
+                        boiler,
+                        "Another useful technical paragraph with enough letters for training text.",
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            report = analyze_corpora(
+                [f1, f2],
+                CorpusQualityConfig(
+                    top_k=10,
+                    boilerplate_min_occurrences=3,
+                    boilerplate_min_files=2,
+                    boilerplate_min_chars=10,
+                    boilerplate_max_chars=200,
+                ),
+            )
+
+            self.assertEqual(report["files_seen"], 2)
+            self.assertGreater(report["duplicate_nonempty_lines"], 0)
+            self.assertGreaterEqual(len(report["boilerplate_candidates"]), 1)
+            self.assertIn(
+                boiler,
+                {row["line"] for row in report["boilerplate_candidates"]},
+            )
+
+            report_path = root / "quality.json"
+            save_quality_report(report, report_path)
+            loaded_lines = load_boilerplate_lines_from_report(report_path)
+            self.assertIn(boiler, loaded_lines)
+
+
+class CorpusCleaningTests(unittest.TestCase):
+    def test_clean_corpora_batch_filters_and_dedupes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            input_dir = root / "input"
+            output_dir = root / "output"
+            input_dir.mkdir(parents=True, exist_ok=True)
+
+            boiler = "Shared boilerplate line for all pages and templates"
+            valid = "Valid technical content line about Linux kernel networking and routing"
+            valid2 = "Another useful technical paragraph with enough letters for training text"
+
+            file_a = input_dir / "a.txt"
+            file_b = input_dir / "b.txt"
+            file_a.write_text(
+                "\n".join(
+                    [
+                        "short",
+                        "1234567890123456789012345",
+                        boiler,
+                        valid,
+                        valid,
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            file_b.write_text(
+                "\n".join([valid, valid2]) + "\n",
+                encoding="utf-8",
+            )
+
+            report = clean_corpora_batch(
+                input_files=[file_a, file_b],
+                output_dir=output_dir,
+                config=CleanCorpusConfig(
+                    min_chars=20,
+                    max_chars=0,
+                    min_alpha_ratio=0.20,
+                    max_digit_ratio=0.35,
+                    dedupe_within_file=True,
+                    dedupe_global=True,
+                    max_lines_per_file=0,
+                    skip_existing=True,
+                    output_suffix=".clean.txt",
+                ),
+                boilerplate_lines={boiler},
+            )
+
+            out_a = (output_dir / "a.clean.txt").read_text(encoding="utf-8").splitlines()
+            out_b = (output_dir / "b.clean.txt").read_text(encoding="utf-8").splitlines()
+
+            self.assertEqual(out_a, [valid])
+            self.assertEqual(out_b, [valid2])
+
+            totals = report["totals"]
+            self.assertEqual(totals["kept_lines"], 2)
+            self.assertEqual(totals["removed_too_short"], 1)
+            self.assertEqual(totals["removed_high_digit"], 1)
+            self.assertEqual(totals["removed_boilerplate"], 1)
+            self.assertEqual(totals["removed_duplicate_within"], 1)
+            self.assertEqual(totals["removed_duplicate_global"], 1)
+
+            # Ensure report payload is JSON serializable.
+            json.dumps(report)
+
+
+if __name__ == "__main__":
+    unittest.main()

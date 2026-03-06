@@ -6,6 +6,15 @@ import argparse
 import json
 from pathlib import Path
 
+from llm.corpus import (
+    CleanCorpusConfig,
+    CorpusQualityConfig,
+    analyze_corpora,
+    clean_corpora_batch,
+    load_boilerplate_lines_from_report,
+    save_clean_report,
+    save_quality_report,
+)
 from llm.integrity import verify_shards
 from llm.sharding import ShardConfig, iter_corpus_files, shard_corpora_batch, shard_corpus
 from llm.tokenizer import BasicCharTokenizer
@@ -123,6 +132,122 @@ def cmd_extract_zim_text(
     print(f"skipped_nontext={stats['skipped_nontext']}")
     print(f"skipped_too_short={stats['skipped_too_short']}")
     print(f"errors={stats['errors']}")
+    return 0
+
+
+def cmd_corpus_quality_report(
+    input_dir: str,
+    output_path: str,
+    pattern: str,
+    exclude_pattern: list[str],
+    max_files: int,
+    max_lines_per_file: int,
+    max_total_lines: int,
+    top_k: int,
+    boilerplate_min_occurrences: int,
+    boilerplate_min_files: int,
+    boilerplate_min_chars: int,
+    boilerplate_max_chars: int,
+) -> int:
+    files = iter_corpus_files(
+        input_dir=Path(input_dir),
+        pattern=pattern,
+        exclude_patterns=exclude_pattern,
+        include_stems=None,
+        limit_files=max_files,
+    )
+    if not files:
+        raise ValueError("no input files matched for quality report")
+
+    report = analyze_corpora(
+        input_files=files,
+        config=CorpusQualityConfig(
+            top_k=top_k,
+            max_lines_per_file=max_lines_per_file,
+            max_total_lines=max_total_lines,
+            boilerplate_min_occurrences=boilerplate_min_occurrences,
+            boilerplate_min_files=boilerplate_min_files,
+            boilerplate_min_chars=boilerplate_min_chars,
+            boilerplate_max_chars=boilerplate_max_chars,
+        ),
+    )
+    save_quality_report(report, Path(output_path))
+
+    print(f"output={output_path}")
+    print(f"files_seen={report['files_seen']}")
+    print(f"lines_seen={report['lines_seen']}")
+    print(f"lines_nonempty={report['lines_nonempty']}")
+    print(f"duplicate_nonempty_lines={report['duplicate_nonempty_lines']}")
+    print(f"boilerplate_candidates={len(report['boilerplate_candidates'])}")
+    print(f"truncated={int(report['truncated'])}")
+    return 0
+
+
+def cmd_clean_corpus_batch(
+    input_dir: str,
+    output_dir: str,
+    pattern: str,
+    exclude_pattern: list[str],
+    max_files: int,
+    max_lines_per_file: int,
+    boilerplate_report: str | None,
+    min_chars: int,
+    max_chars: int,
+    min_alpha_ratio: float,
+    max_digit_ratio: float,
+    dedupe_within_file: bool,
+    dedupe_global: bool,
+    skip_existing: bool,
+    output_suffix: str,
+    report_output: str,
+) -> int:
+    files = iter_corpus_files(
+        input_dir=Path(input_dir),
+        pattern=pattern,
+        exclude_patterns=exclude_pattern,
+        include_stems=None,
+        limit_files=max_files,
+    )
+    if not files:
+        raise ValueError("no input files matched for clean-corpus-batch")
+
+    boilerplate_lines: set[str] = set()
+    if boilerplate_report is not None:
+        boilerplate_lines = load_boilerplate_lines_from_report(Path(boilerplate_report))
+
+    report = clean_corpora_batch(
+        input_files=files,
+        output_dir=Path(output_dir),
+        config=CleanCorpusConfig(
+            min_chars=min_chars,
+            max_chars=max_chars,
+            min_alpha_ratio=min_alpha_ratio,
+            max_digit_ratio=max_digit_ratio,
+            dedupe_within_file=dedupe_within_file,
+            dedupe_global=dedupe_global,
+            max_lines_per_file=max_lines_per_file,
+            skip_existing=skip_existing,
+            output_suffix=output_suffix,
+        ),
+        boilerplate_lines=boilerplate_lines,
+    )
+    save_clean_report(report, Path(report_output))
+
+    totals = report["totals"]
+    print(f"output_dir={output_dir}")
+    print(f"report={report_output}")
+    print(f"files_total={len(files)}")
+    print(f"files_skipped_existing={totals['files_skipped_existing']}")
+    print(f"input_lines={totals['input_lines']}")
+    print(f"kept_lines={totals['kept_lines']}")
+    print(f"removed_empty={totals['removed_empty']}")
+    print(f"removed_too_short={totals['removed_too_short']}")
+    print(f"removed_too_long={totals['removed_too_long']}")
+    print(f"removed_low_alpha={totals['removed_low_alpha']}")
+    print(f"removed_high_digit={totals['removed_high_digit']}")
+    print(f"removed_boilerplate={totals['removed_boilerplate']}")
+    print(f"removed_duplicate_within={totals['removed_duplicate_within']}")
+    print(f"removed_duplicate_global={totals['removed_duplicate_global']}")
     return 0
 
 
@@ -406,6 +531,138 @@ def parse_args() -> argparse.Namespace:
         help="Optional newline-separated entry paths if ZIM has no fulltext index",
     )
 
+    quality_parser = subparsers.add_parser(
+        "corpus-quality-report",
+        help="Analyze extracted corpus files and emit a quality/boilerplate report",
+    )
+    quality_parser.add_argument("--input-dir", required=True, help="Directory of corpus files")
+    quality_parser.add_argument("--output", required=True, help="Output quality JSON report path")
+    quality_parser.add_argument("--pattern", default="*.txt", help="Glob pattern")
+    quality_parser.add_argument(
+        "--exclude-pattern",
+        action="append",
+        default=["*.paths.txt"],
+        help="Glob pattern to exclude (repeatable)",
+    )
+    quality_parser.add_argument(
+        "--max-files",
+        type=int,
+        default=0,
+        help="Optional cap on file count (0 = all matches)",
+    )
+    quality_parser.add_argument(
+        "--max-lines-per-file",
+        type=int,
+        default=0,
+        help="Optional line cap per file (0 = all lines)",
+    )
+    quality_parser.add_argument(
+        "--max-total-lines",
+        type=int,
+        default=0,
+        help="Optional global line cap across all files (0 = all lines)",
+    )
+    quality_parser.add_argument(
+        "--top-k",
+        type=int,
+        default=50,
+        help="Top repeated lines to include in report",
+    )
+    quality_parser.add_argument(
+        "--boilerplate-min-occurrences",
+        type=int,
+        default=20,
+        help="Minimum repeat count to mark boilerplate candidate",
+    )
+    quality_parser.add_argument(
+        "--boilerplate-min-files",
+        type=int,
+        default=5,
+        help="Minimum distinct file count for boilerplate candidate",
+    )
+    quality_parser.add_argument(
+        "--boilerplate-min-chars",
+        type=int,
+        default=30,
+        help="Minimum line length for boilerplate candidate",
+    )
+    quality_parser.add_argument(
+        "--boilerplate-max-chars",
+        type=int,
+        default=240,
+        help="Maximum line length for boilerplate candidate",
+    )
+
+    clean_parser = subparsers.add_parser(
+        "clean-corpus-batch",
+        help="Clean many extracted corpus files before tokenizer training",
+    )
+    clean_parser.add_argument("--input-dir", required=True, help="Directory of corpus files")
+    clean_parser.add_argument("--output-dir", required=True, help="Output directory")
+    clean_parser.add_argument("--pattern", default="*.txt", help="Glob pattern")
+    clean_parser.add_argument(
+        "--exclude-pattern",
+        action="append",
+        default=["*.paths.txt"],
+        help="Glob pattern to exclude (repeatable)",
+    )
+    clean_parser.add_argument(
+        "--max-files",
+        type=int,
+        default=0,
+        help="Optional cap on file count (0 = all matches)",
+    )
+    clean_parser.add_argument(
+        "--max-lines-per-file",
+        type=int,
+        default=0,
+        help="Optional line cap per file (0 = all lines)",
+    )
+    clean_parser.add_argument(
+        "--boilerplate-report",
+        default=None,
+        help="Optional quality report JSON; remove lines marked as boilerplate candidates",
+    )
+    clean_parser.add_argument("--min-chars", type=int, default=40, help="Minimum kept line length")
+    clean_parser.add_argument("--max-chars", type=int, default=0, help="Maximum kept line length")
+    clean_parser.add_argument(
+        "--min-alpha-ratio",
+        type=float,
+        default=0.20,
+        help="Drop lines with lower alphabetic-char ratio",
+    )
+    clean_parser.add_argument(
+        "--max-digit-ratio",
+        type=float,
+        default=0.35,
+        help="Drop lines with higher digit-char ratio",
+    )
+    clean_parser.add_argument(
+        "--no-dedupe-within-file",
+        action="store_true",
+        help="Keep duplicate lines within each output file",
+    )
+    clean_parser.add_argument(
+        "--dedupe-global",
+        action="store_true",
+        help="Drop duplicate lines across all output files",
+    )
+    clean_parser.add_argument(
+        "--no-skip-existing",
+        action="store_true",
+        help="Rebuild cleaned file even when output already exists",
+    )
+    clean_parser.add_argument(
+        "--output-suffix",
+        default=".clean.txt",
+        help="Suffix appended to each cleaned output filename",
+    )
+    clean_parser.add_argument(
+        "--report-output",
+        default="artifacts/reports/clean_corpus_batch_report.json",
+        help="Output JSON report path",
+    )
+
     shard_parser = subparsers.add_parser(
         "shard-corpus", help="Tokenize corpus and write token shards"
     )
@@ -523,9 +780,7 @@ def parse_args() -> argparse.Namespace:
     train_parser.add_argument(
         "--learning-rate", type=float, default=3e-4, help="Optimizer learning rate"
     )
-    train_parser.add_argument(
-        "--weight-decay", type=float, default=0.1, help="AdamW weight decay"
-    )
+    train_parser.add_argument("--weight-decay", type=float, default=0.1, help="AdamW weight decay")
     train_parser.add_argument(
         "--grad-clip", type=float, default=1.0, help="Gradient clipping max norm"
     )
@@ -612,6 +867,40 @@ def main() -> int:
             max_chars=args.max_chars,
             include_title=not args.no_title,
             paths_file=args.paths_file,
+        )
+    if args.command == "corpus-quality-report":
+        return cmd_corpus_quality_report(
+            input_dir=args.input_dir,
+            output_path=args.output,
+            pattern=args.pattern,
+            exclude_pattern=args.exclude_pattern,
+            max_files=args.max_files,
+            max_lines_per_file=args.max_lines_per_file,
+            max_total_lines=args.max_total_lines,
+            top_k=args.top_k,
+            boilerplate_min_occurrences=args.boilerplate_min_occurrences,
+            boilerplate_min_files=args.boilerplate_min_files,
+            boilerplate_min_chars=args.boilerplate_min_chars,
+            boilerplate_max_chars=args.boilerplate_max_chars,
+        )
+    if args.command == "clean-corpus-batch":
+        return cmd_clean_corpus_batch(
+            input_dir=args.input_dir,
+            output_dir=args.output_dir,
+            pattern=args.pattern,
+            exclude_pattern=args.exclude_pattern,
+            max_files=args.max_files,
+            max_lines_per_file=args.max_lines_per_file,
+            boilerplate_report=args.boilerplate_report,
+            min_chars=args.min_chars,
+            max_chars=args.max_chars,
+            min_alpha_ratio=args.min_alpha_ratio,
+            max_digit_ratio=args.max_digit_ratio,
+            dedupe_within_file=not args.no_dedupe_within_file,
+            dedupe_global=args.dedupe_global,
+            skip_existing=not args.no_skip_existing,
+            output_suffix=args.output_suffix,
+            report_output=args.report_output,
         )
     if args.command == "shard-corpus":
         return cmd_shard_corpus(

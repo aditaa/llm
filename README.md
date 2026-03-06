@@ -34,6 +34,8 @@ make verify-shards # print shard integrity check usage
 make train       # print baseline training command usage
 make generate    # print checkpoint text-generation command usage
 make train-tokenizer-global # print shared-tokenizer command usage
+make corpus-quality-report # print quality report command usage
+make clean-corpus-batch # print batch cleanup command usage
 make shard-corpus-batch # print shared-tokenizer batch sharding usage
 make doctor      # verify binaries and Python deps
 ```
@@ -76,46 +78,63 @@ If extraction returns `written_articles=0`, retry with a lower `--min-chars` (fo
 If `extract-zim-text` reports no fulltext index, generate a `--paths-file` from
 ZIM suggestions/title index and rerun extraction with that file.
 
-2. Train tokenizer on extracted corpus:
+2. Analyze extracted corpora and generate boilerplate candidates:
+```bash
+PYTHONPATH=src .venv/bin/python -m llm.cli corpus-quality-report \
+  --input-dir data/extracted \
+  --output artifacts/reports/corpus_quality.json
+```
+
+3. Clean corpora before tokenizer training:
+```bash
+PYTHONPATH=src .venv/bin/python -m llm.cli clean-corpus-batch \
+  --input-dir data/extracted \
+  --output-dir data/cleaned \
+  --boilerplate-report artifacts/reports/corpus_quality.json
+```
+
+4. Train tokenizer on cleaned corpus:
 ```bash
 PYTHONPATH=src .venv/bin/python -m llm.cli train-tokenizer \
-  --input data/extracted/wiki_corpus.txt \
+  --input data/cleaned/wiki_corpus.clean.txt \
   --output artifacts/tokenizer/vocab.json
 ```
 
-3. Shard tokenized corpus for training:
+5. Shard tokenized corpus for training:
 ```bash
 PYTHONPATH=src .venv/bin/python -m llm.cli shard-corpus \
-  --input data/extracted/wiki_corpus.txt \
+  --input data/cleaned/wiki_corpus.clean.txt \
   --tokenizer artifacts/tokenizer/vocab.json \
   --output-dir data/shards/wiki_char \
   --shard-size-tokens 5000000 \
   --val-ratio 0.01
 ```
 
-3b. Build one global tokenizer for multi-dataset training:
+5b. Build one global tokenizer for multi-dataset training:
 ```bash
 PYTHONPATH=src .venv/bin/python -m llm.cli train-tokenizer-global \
-  --input-dir data/extracted \
+  --input-dir data/cleaned \
+  --pattern "*.clean.txt" \
   --from-shards-path data/shards \
   --output artifacts/tokenizer/global-char-v1.json
 ```
 
-3c. Re-shard many corpora with that global tokenizer:
+5c. Re-shard many corpora with that global tokenizer:
 ```bash
 PYTHONPATH=src .venv/bin/python -m llm.cli shard-corpus-batch \
-  --input-dir data/extracted \
+  --input-dir data/cleaned \
+  --pattern "*.clean.txt" \
   --from-shards-path data/shards \
   --tokenizer artifacts/tokenizer/global-char-v1.json \
   --output-root data/shards_global/global-char-v1
 ```
 
-4. Inspect corpus quickly:
+6. Inspect corpus quickly:
 ```bash
-PYTHONPATH=src .venv/bin/python -m llm.cli stats --input data/extracted/wiki_corpus.txt
+PYTHONPATH=src .venv/bin/python -m llm.cli stats --input data/cleaned/wiki_corpus.clean.txt
 ```
 
-5. Verify shard integrity before training:
+7. Verify shard integrity before training:
 ```bash
 PYTHONPATH=src .venv/bin/python -m llm.cli verify-shards \
   --path data/shards \
@@ -123,7 +142,7 @@ PYTHONPATH=src .venv/bin/python -m llm.cli verify-shards \
   --strict-source
 ```
 
-6. Run a baseline training test:
+8. Run a baseline training test:
 ```bash
 PYTHONPATH=src .venv/bin/python -m llm.cli train \
   --shards-path data/shards/medlineplus.gov_en_all_2025-01 \
@@ -135,7 +154,7 @@ PYTHONPATH=src .venv/bin/python -m llm.cli train \
 Note: `train` requires all selected manifests to share the exact same tokenizer mapping.
 Use a global tokenizer + `shard-corpus-batch` output root for multi-dataset runs.
 
-7. Generate text from a checkpoint:
+9. Generate text from a checkpoint:
 ```bash
 PYTHONPATH=src .venv/bin/python -m llm.cli generate \
   --checkpoint artifacts/checkpoints/medlineplus_baseline/last.pt \
@@ -175,6 +194,8 @@ bash scripts/hydrate_from_warm_storage.sh /mnt/ceph/llm/data
 
 ## Current Capabilities
 - Text stats CLI for quick corpus sanity checks.
+- Batch corpus quality report generation (`corpus-quality-report`).
+- Batch corpus cleanup and dedupe (`clean-corpus-batch`).
 - Basic character-level tokenizer with train/save/load.
 - Token-window data pipeline (`TokenWindowDataset`) for next-token training pairs.
 - ZIM archive text extraction (`extract-zim-text`) for server-hosted `.zim` files.

@@ -93,6 +93,7 @@ Keep PR scope narrow; split refactors and features into separate PRs.
 - For parquet-based FineWeb workflows, use `scripts/stage_fineweb_from_warm.sh` to copy bounded warm chunks into hot storage
 - For FineWeb-first training runs, build shards directly with `PYTHONPATH=src .venv/bin/python scripts/fineweb_parquet_to_shards.py --input-dir data/fineweb/sample-10BT --output-dir data/shards_global/fineweb-s10bt-global-char-v1 --tokenizer-out artifacts/tokenizer/fineweb-s10bt-global-char-v1.json --field text`
 - FineWeb-only baseline flow: `fineweb_parquet_to_shards -> verify-shards -> train`
+- For incremental FineWeb adds, freeze tokenizer on phase1 and build later phases with `--tokenizer-in` plus `--files-list`; resume training from `last.pt` with same `--shards-path` root
 - Version extracted/tokenized/sharded outputs with the ZIM date stamp (for example `serverfault_2025-08`)
 - Keep raw ZIM archives in `/mnt/ceph/llm/data/raw_zim/`
 

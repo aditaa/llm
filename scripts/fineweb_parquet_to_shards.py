@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Build a char tokenizer and token shards directly from FineWeb parquet files."""
+"""Build token shards directly from FineWeb parquet files.
+
+Default mode trains a char tokenizer from selected parquet rows, then writes shards.
+Incremental mode reuses an existing tokenizer via --tokenizer-in.
+"""
 
 from __future__ import annotations
 
@@ -82,6 +86,23 @@ def _iter_parquet_files(input_dir: Path, pattern: str, max_files: int) -> list[P
     return files
 
 
+def _read_files_list(files_list_path: Path, input_dir: Path) -> list[Path]:
+    files: list[Path] = []
+    for raw_line in files_list_path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        path = Path(line)
+        if not path.is_absolute():
+            path = (input_dir / path).resolve()
+        if not path.exists() or not path.is_file():
+            raise FileNotFoundError(f"listed parquet file not found: {path}")
+        files.append(path)
+    if not files:
+        raise ValueError(f"files-list has no usable parquet files: {files_list_path}")
+    return files
+
+
 def _iter_text_rows(
     *,
     parquet_files: list[Path],
@@ -126,8 +147,22 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--input-dir", required=True, help="Directory containing parquet files")
     parser.add_argument("--output-dir", required=True, help="Output directory for token shards")
-    parser.add_argument("--tokenizer-out", required=True, help="Output tokenizer JSON path")
+    parser.add_argument(
+        "--tokenizer-out",
+        default=None,
+        help="Output tokenizer JSON path (required when --tokenizer-in is unset)",
+    )
+    parser.add_argument(
+        "--tokenizer-in",
+        default=None,
+        help="Existing tokenizer JSON path (reuse for incremental shard builds)",
+    )
     parser.add_argument("--pattern", default="*.parquet", help="Parquet glob pattern")
+    parser.add_argument(
+        "--files-list",
+        default=None,
+        help="Optional newline-separated parquet list (absolute or relative to --input-dir)",
+    )
     parser.add_argument("--field", default="text", help="Parquet text column")
     parser.add_argument("--batch-size", type=int, default=8192, help="Parquet read batch size")
     parser.add_argument("--shard-size-tokens", type=int, default=5_000_000, help="Tokens per shard")
@@ -167,7 +202,8 @@ def main() -> int:
 
     input_dir = Path(args.input_dir)
     output_dir = Path(args.output_dir)
-    tokenizer_out = Path(args.tokenizer_out)
+    tokenizer_out = Path(args.tokenizer_out) if args.tokenizer_out else None
+    tokenizer_in = Path(args.tokenizer_in) if args.tokenizer_in else None
     report_output = Path(args.report_output)
 
     if not input_dir.exists() or not input_dir.is_dir():
@@ -180,7 +216,14 @@ def main() -> int:
             "pyarrow is required. Install train deps or run: python -m pip install pyarrow"
         ) from exc
 
-    parquet_files = _iter_parquet_files(input_dir=input_dir, pattern=args.pattern, max_files=args.max_files)
+    if args.files_list:
+        parquet_files = _read_files_list(Path(args.files_list), input_dir)
+    else:
+        parquet_files = _iter_parquet_files(
+            input_dir=input_dir,
+            pattern=args.pattern,
+            max_files=args.max_files,
+        )
     if not parquet_files:
         raise ValueError("no parquet files matched")
 
@@ -190,26 +233,40 @@ def main() -> int:
 
     started_at = time.time()
 
-    print(f"pass=1 action=scan_chars parquet_files={len(parquet_files)}")
-    chars: set[str] = set()
-    pass1_rows = 0
-    for text in _iter_text_rows(
-        parquet_files=parquet_files,
-        field=args.field,
-        batch_size=args.batch_size,
-        min_chars=args.min_chars,
-        max_chars=args.max_chars,
-        max_rows_per_file=args.max_rows_per_file,
-    ):
-        chars.update(text)
-        chars.add("\n")
-        pass1_rows += 1
-        if pass1_rows % 500_000 == 0:
-            print(f"pass=1 rows={pass1_rows} unique_chars={len(chars)}")
+    if tokenizer_in is not None:
+        if not tokenizer_in.exists():
+            raise FileNotFoundError(f"tokenizer-in not found: {tokenizer_in}")
+        tokenizer = BasicCharTokenizer.load(tokenizer_in)
+        tokenizer_path = tokenizer_in
+        pass1_rows = 0
+        print(
+            f"pass=1 action=load_tokenizer tokenizer={tokenizer_path} "
+            f"vocab_size={tokenizer.vocab_size}"
+        )
+    else:
+        if tokenizer_out is None:
+            raise ValueError("tokenizer-out is required when tokenizer-in is not set")
+        print(f"pass=1 action=scan_chars parquet_files={len(parquet_files)}")
+        chars: set[str] = set()
+        pass1_rows = 0
+        for text in _iter_text_rows(
+            parquet_files=parquet_files,
+            field=args.field,
+            batch_size=args.batch_size,
+            min_chars=args.min_chars,
+            max_chars=args.max_chars,
+            max_rows_per_file=args.max_rows_per_file,
+        ):
+            chars.update(text)
+            chars.add("\n")
+            pass1_rows += 1
+            if pass1_rows % 500_000 == 0:
+                print(f"pass=1 rows={pass1_rows} unique_chars={len(chars)}")
 
-    tokenizer = BasicCharTokenizer.train("".join(sorted(chars)))
-    tokenizer_out.parent.mkdir(parents=True, exist_ok=True)
-    tokenizer.save(tokenizer_out)
+        tokenizer = BasicCharTokenizer.train("".join(sorted(chars)))
+        tokenizer_out.parent.mkdir(parents=True, exist_ok=True)
+        tokenizer.save(tokenizer_out)
+        tokenizer_path = tokenizer_out
 
     array_type, token_dtype = _array_type_for_vocab(tokenizer.vocab_size)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -259,7 +316,7 @@ def main() -> int:
         "input_path": str(input_dir),
         "input_pattern": args.pattern,
         "input_files": [str(path) for path in parquet_files],
-        "tokenizer_path": str(tokenizer_out),
+        "tokenizer_path": str(tokenizer_path),
         "tokenizer_vocab_size": tokenizer.vocab_size,
         "token_dtype": token_dtype,
         "shard_size_tokens": args.shard_size_tokens,
@@ -287,7 +344,7 @@ def main() -> int:
 
     report = {
         "manifest": str(manifest_path),
-        "tokenizer": str(tokenizer_out),
+        "tokenizer": str(tokenizer_path),
         "parquet_files": len(parquet_files),
         "rows_seen": pass1_rows,
         "rows_sharded": pass2_rows,
@@ -303,7 +360,7 @@ def main() -> int:
     report_output.write_text(json.dumps(report, indent=2), encoding="utf-8")
 
     print(f"manifest={manifest_path}")
-    print(f"tokenizer={tokenizer_out}")
+    print(f"tokenizer={tokenizer_path}")
     print(f"parquet_files={len(parquet_files)}")
     print(f"rows_seen={pass1_rows}")
     print(f"rows_sharded={pass2_rows}")

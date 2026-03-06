@@ -296,6 +296,45 @@ PYTHONPATH=src .venv/bin/python -m llm.cli train \
 Optional text-first path still exists for inspection-heavy runs:
 `parquet_to_corpus -> clean-corpus-batch -> train-tokenizer-global -> shard-corpus-batch`.
 
+### Incremental FineWeb Adds While Training
+You can start training on a subset, then add new parquet files with the same tokenizer and resume:
+
+```bash
+# phase 1 file snapshot (example: first 10 files)
+find data/fineweb/sample-10BT/sample/10BT -maxdepth 1 -type f -name '*.parquet' | sort | head -n 10 | sed 's#^data/fineweb/sample-10BT/##' > artifacts/reports/fineweb_sample10bt_phase1_files.txt
+
+# build phase 1 tokenizer + shards
+PYTHONPATH=src .venv/bin/python scripts/fineweb_parquet_to_shards.py \
+  --input-dir data/fineweb/sample-10BT \
+  --files-list artifacts/reports/fineweb_sample10bt_phase1_files.txt \
+  --output-dir data/shards_global/fineweb-s10bt-incremental/phase1 \
+  --tokenizer-out artifacts/tokenizer/fineweb-s10bt-incremental-char-v1.json \
+  --field text
+
+# start training on phase 1
+PYTHONPATH=src .venv/bin/python -m llm.cli train \
+  --shards-path data/shards_global/fineweb-s10bt-incremental \
+  --output-dir artifacts/checkpoints/fineweb-s10bt-incremental-run1 \
+  --device cuda
+
+# later: build phase 2 from newly arrived files using same tokenizer
+find data/fineweb/sample-10BT/sample/10BT -maxdepth 1 -type f -name '*.parquet' | sort | sed 's#^data/fineweb/sample-10BT/##' > /tmp/all_parquets.txt
+comm -23 /tmp/all_parquets.txt artifacts/reports/fineweb_sample10bt_phase1_files.txt > artifacts/reports/fineweb_sample10bt_phase2_files.txt
+PYTHONPATH=src .venv/bin/python scripts/fineweb_parquet_to_shards.py \
+  --input-dir data/fineweb/sample-10BT \
+  --files-list artifacts/reports/fineweb_sample10bt_phase2_files.txt \
+  --output-dir data/shards_global/fineweb-s10bt-incremental/phase2 \
+  --tokenizer-in artifacts/tokenizer/fineweb-s10bt-incremental-char-v1.json \
+  --field text
+
+# resume; train sees both manifests under shards-path
+PYTHONPATH=src .venv/bin/python -m llm.cli train \
+  --shards-path data/shards_global/fineweb-s10bt-incremental \
+  --output-dir artifacts/checkpoints/fineweb-s10bt-incremental-run1 \
+  --device cuda \
+  --resume-from artifacts/checkpoints/fineweb-s10bt-incremental-run1/last.pt
+```
+
 ## Warm Storage (Ceph Mount)
 Use `./data` and `./artifacts` as the hot working set.
 Use `/mnt/ceph/llm/data` as warm cache/backup for durability and overflow.

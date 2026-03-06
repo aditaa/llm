@@ -37,6 +37,7 @@ make train-tokenizer-global # print shared-tokenizer command usage
 make corpus-quality-report # print quality report command usage
 make clean-corpus-batch # print batch cleanup command usage
 make dataset-risk-report # print heuristic dataset risk audit command usage
+make pull-hf-rows # print Hugging Face rows API pull helper usage
 make shard-corpus-batch # print shared-tokenizer batch sharding usage
 make doctor      # verify binaries and Python deps
 ```
@@ -117,6 +118,17 @@ To enforce English-only cleanup, add `--en-only` (with tunable thresholds:
 `--en-min-latin-ratio`).
 For talking-only passes, keep code filtering enabled (default) or tune with:
 `--code-symbol-ratio-threshold` and `--code-keyword-hits-threshold`.
+
+3a. Pull a bounded Hugging Face dataset slice (for example FineWeb sample rows):
+```bash
+python3 scripts/pull_hf_rows.py \
+  --dataset HuggingFaceFW/fineweb \
+  --config sample-10BT \
+  --split train \
+  --output /mnt/ceph/llm/data/extracted/fineweb_sample-10BT_rows100k.txt \
+  --max-rows 100000
+```
+Use warm storage for these pulls first; full FineWeb variants are much larger than typical hot disk.
 
 3b. Run heuristic dataset risk audit:
 ```bash
@@ -274,3 +286,6 @@ Preferred workflow:
 1. Update `README.md` and `AGENTS.md` as needed.
 2. Update matching pages in `wiki/`.
 3. Publish wiki with `scripts/publish_wiki.sh`.
+
+Dataset inventory and intended use are tracked in:
+- `wiki/Dataset-Registry.md`

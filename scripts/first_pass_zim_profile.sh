@@ -104,7 +104,14 @@ fi
 
 mkdir -p "$WARM_DIR"
 log="$REPORTS_DIR/move_excluded_to_warm_$(date +%Y%m%d_%H%M%S).log"
-active="$(ps -eo cmd | rg -o "${RAW_DIR%/}/[^ ]+\\.zim" | sed "s#${RAW_DIR%/}/##" | sort -u | tr '\n' ' ')"
+active="$(
+  ps -eo cmd \
+    | rg -o "${RAW_DIR%/}/[^ ]+\\.zim" \
+    | sed "s#${RAW_DIR%/}/##" \
+    | sort -u \
+    | tr '\n' ' ' \
+    || true
+)"
 
 echo "[$(date -Iseconds)] start move excluded zims -> warm" | tee -a "$log"
 echo "active_zims=${active:-none}" | tee -a "$log"

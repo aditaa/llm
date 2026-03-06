@@ -79,6 +79,7 @@ Keep PR scope narrow; split refactors and features into separate PRs.
 - Preferred multi-dataset flow: `train-tokenizer-global` -> `shard-corpus-batch` -> `train`
 - Preferred pre-tokenization flow: `corpus-quality-report` -> `clean-corpus-batch` -> `train-tokenizer-global`
 - For English-only runs, enable `clean-corpus-batch --en-only` before tokenizer training
+- For talking-only runs, keep `clean-corpus-batch` code-like filtering enabled (default)
 - Use `bash scripts/sync_warm_storage.sh /mnt/ceph/llm/data` to copy local artifacts to warm storage
 - Use `bash scripts/hydrate_from_warm_storage.sh /mnt/ceph/llm/data` to restore local artifacts from warm storage
 - Version extracted/tokenized/sharded outputs with the ZIM date stamp (for example `serverfault_2025-08`)

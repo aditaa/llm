@@ -101,6 +101,8 @@ Disable individual transforms with:
 To enforce English-only cleanup, add `--en-only` (with tunable thresholds:
 `--en-min-words`, `--en-min-stopword-ratio`, `--en-min-stopword-count`,
 `--en-min-latin-ratio`).
+For talking-only passes, keep code filtering enabled (default) or tune with:
+`--code-symbol-ratio-threshold` and `--code-keyword-hits-threshold`.
 
 4. Train tokenizer on cleaned corpus:
 ```bash

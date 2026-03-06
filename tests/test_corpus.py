@@ -229,7 +229,42 @@ class CorpusCleaningTests(unittest.TestCase):
             self.assertIn(english, out_lines)
             self.assertNotIn(spanish, out_lines)
             self.assertNotIn(mostly_code, out_lines)
-            self.assertEqual(report["totals"]["removed_non_english"], 2)
+            self.assertEqual(report["totals"]["removed_non_english"], 1)
+            self.assertEqual(report["totals"]["removed_code_like"], 1)
+
+    def test_clean_corpora_batch_drops_code_like_lines(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            input_dir = root / "input"
+            output_dir = root / "output"
+            input_dir.mkdir(parents=True, exist_ok=True)
+
+            plain = "This paragraph explains how to prepare a backup drive and verify checksums."
+            codey = "df<-data.frame(a,a,a,a,a,a,a,a,a,a,a,a,a,a,a,a,a,a,a,a,a,a,a)"
+            (input_dir / "a.txt").write_text("\n".join([plain, codey]) + "\n", encoding="utf-8")
+
+            report = clean_corpora_batch(
+                input_files=[input_dir / "a.txt"],
+                output_dir=output_dir,
+                config=CleanCorpusConfig(
+                    min_chars=20,
+                    max_chars=0,
+                    min_alpha_ratio=0.20,
+                    max_digit_ratio=0.35,
+                    dedupe_within_file=True,
+                    dedupe_global=False,
+                    max_lines_per_file=0,
+                    skip_existing=True,
+                    output_suffix=".clean.txt",
+                    english_only=False,
+                    drop_code_like=True,
+                ),
+                boilerplate_lines=set(),
+            )
+
+            out_lines = (output_dir / "a.clean.txt").read_text(encoding="utf-8").splitlines()
+            self.assertEqual(out_lines, [plain])
+            self.assertEqual(report["totals"]["removed_code_like"], 1)
 
 
 if __name__ == "__main__":

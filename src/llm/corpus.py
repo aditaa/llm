@@ -55,7 +55,18 @@ _CODE_HINT_WORDS = {
     "return",
     "import",
     "def",
+    "data",
+    "frame",
+    "ggplot",
+    "library",
+    "numpy",
+    "pandas",
+    "sql",
 }
+_CODE_DROP_RE = re.compile(
+    r"(<-\s*data\.frame\()|(\bdata\.frame\()|(::)|(#include\s*<)|(\bSELECT\b.+\bFROM\b)",
+    re.IGNORECASE,
+)
 
 _EN_STOPWORDS = {
     "a",
@@ -157,6 +168,9 @@ class CleanCorpusConfig:
     english_min_stopword_ratio: float = 0.02
     english_min_stopword_count: int = 1
     english_min_latin_ratio: float = 0.90
+    drop_code_like: bool = True
+    code_symbol_ratio_threshold: float = 0.08
+    code_keyword_hits_threshold: int = 2
 
 
 def normalize_whitespace(text: str) -> str:
@@ -247,11 +261,23 @@ def _looks_english(text: str, config: CleanCorpusConfig) -> bool:
     if (stop_hits / len(words)) < config.english_min_stopword_ratio:
         return False
 
+    return True
+
+
+def _is_code_like(text: str, config: CleanCorpusConfig) -> bool:
+    if _CODE_DROP_RE.search(text):
+        return True
+    words = _WORD_RE.findall(text.lower())
     code_hint_hits = sum(1 for w in words if w in _CODE_HINT_WORDS)
     code_symbols = sum(1 for c in text if c in "{}[]<>_=*/\\|`~$;")
-    if code_hint_hits >= 2 and code_symbols >= 1:
-        return False
-    return True
+    symbol_ratio = code_symbols / len(text) if text else 0.0
+    if code_hint_hits >= config.code_keyword_hits_threshold:
+        return True
+    if symbol_ratio >= config.code_symbol_ratio_threshold and code_hint_hits >= 1:
+        return True
+    if text.count("{") + text.count("}") >= 2:
+        return True
+    return False
 
 
 def analyze_corpora(
@@ -429,6 +455,10 @@ def clean_corpora_batch(
         raise ValueError("english_min_stopword_ratio must be in [0, 1]")
     if not 0.0 <= config.english_min_latin_ratio <= 1.0:
         raise ValueError("english_min_latin_ratio must be in [0, 1]")
+    if not 0.0 <= config.code_symbol_ratio_threshold <= 1.0:
+        raise ValueError("code_symbol_ratio_threshold must be in [0, 1]")
+    if config.code_keyword_hits_threshold < 0:
+        raise ValueError("code_keyword_hits_threshold must be >= 0")
 
     output_dir.mkdir(parents=True, exist_ok=True)
     boilerplate_lines = boilerplate_lines or set()
@@ -446,6 +476,7 @@ def clean_corpora_batch(
         "removed_high_digit": 0,
         "removed_boilerplate": 0,
         "removed_non_english": 0,
+        "removed_code_like": 0,
         "removed_duplicate_within": 0,
         "removed_duplicate_global": 0,
         "files_skipped_existing": 0,
@@ -474,6 +505,7 @@ def clean_corpora_batch(
             "high_digit": 0,
             "boilerplate": 0,
             "non_english": 0,
+            "code_like": 0,
             "duplicate_within": 0,
             "duplicate_global": 0,
         }
@@ -523,6 +555,11 @@ def clean_corpora_batch(
                 if config.english_only and not _looks_english(line, config):
                     removed["non_english"] += 1
                     totals["removed_non_english"] += 1
+                    continue
+
+                if config.drop_code_like and _is_code_like(line, config):
+                    removed["code_like"] += 1
+                    totals["removed_code_like"] += 1
                     continue
 
                 digest = hashlib.blake2b(line.encode("utf-8"), digest_size=16).hexdigest()
@@ -580,6 +617,9 @@ def clean_corpora_batch(
             "english_min_stopword_ratio": config.english_min_stopword_ratio,
             "english_min_stopword_count": config.english_min_stopword_count,
             "english_min_latin_ratio": config.english_min_latin_ratio,
+            "drop_code_like": config.drop_code_like,
+            "code_symbol_ratio_threshold": config.code_symbol_ratio_threshold,
+            "code_keyword_hits_threshold": config.code_keyword_hits_threshold,
         },
     }
 

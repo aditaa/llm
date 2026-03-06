@@ -211,6 +211,9 @@ def cmd_clean_corpus_batch(
     english_min_stopword_ratio: float,
     english_min_stopword_count: int,
     english_min_latin_ratio: float,
+    drop_code_like: bool,
+    code_symbol_ratio_threshold: float,
+    code_keyword_hits_threshold: int,
     report_output: str,
 ) -> int:
     files = iter_corpus_files(
@@ -252,6 +255,9 @@ def cmd_clean_corpus_batch(
             english_min_stopword_ratio=english_min_stopword_ratio,
             english_min_stopword_count=english_min_stopword_count,
             english_min_latin_ratio=english_min_latin_ratio,
+            drop_code_like=drop_code_like,
+            code_symbol_ratio_threshold=code_symbol_ratio_threshold,
+            code_keyword_hits_threshold=code_keyword_hits_threshold,
         ),
         boilerplate_lines=boilerplate_lines,
     )
@@ -271,6 +277,7 @@ def cmd_clean_corpus_batch(
     print(f"removed_high_digit={totals['removed_high_digit']}")
     print(f"removed_boilerplate={totals['removed_boilerplate']}")
     print(f"removed_non_english={totals['removed_non_english']}")
+    print(f"removed_code_like={totals['removed_code_like']}")
     print(f"removed_duplicate_within={totals['removed_duplicate_within']}")
     print(f"removed_duplicate_global={totals['removed_duplicate_global']}")
     return 0
@@ -747,6 +754,23 @@ def parse_args() -> argparse.Namespace:
         help="Minimum Latin-letter ratio for English-line acceptance",
     )
     clean_parser.add_argument(
+        "--no-drop-code-like",
+        action="store_true",
+        help="Disable dropping lines detected as code-like",
+    )
+    clean_parser.add_argument(
+        "--code-symbol-ratio-threshold",
+        type=float,
+        default=0.08,
+        help="Drop line as code-like if symbol ratio exceeds this threshold",
+    )
+    clean_parser.add_argument(
+        "--code-keyword-hits-threshold",
+        type=int,
+        default=2,
+        help="Drop line as code-like if code-keyword hits meet this threshold",
+    )
+    clean_parser.add_argument(
         "--report-output",
         default="artifacts/reports/clean_corpus_batch_report.json",
         help="Output JSON report path",
@@ -1001,6 +1025,9 @@ def main() -> int:
             english_min_stopword_ratio=args.en_min_stopword_ratio,
             english_min_stopword_count=args.en_min_stopword_count,
             english_min_latin_ratio=args.en_min_latin_ratio,
+            drop_code_like=not args.no_drop_code_like,
+            code_symbol_ratio_threshold=args.code_symbol_ratio_threshold,
+            code_keyword_hits_threshold=args.code_keyword_hits_threshold,
             report_output=args.report_output,
         )
     if args.command == "shard-corpus":

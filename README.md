@@ -375,6 +375,10 @@ Use `/mnt/ceph/llm/data` as warm cache/backup for durability and overflow.
 ```bash
 bash scripts/sync_warm_storage.sh /mnt/ceph/llm/data
 ```
+This now syncs training-critical inputs/outputs including:
+`data/raw_zim`, `data/fineweb`, `data/cleaned`, `data/extracted`,
+`data/shards`, `data/shards_global`, `artifacts/tokenizer`,
+`artifacts/checkpoints`, and `artifacts/reports`.
 - Continuous ZIM offload worker (hot -> warm):
 ```bash
 bash scripts/zim_offload_worker.sh data/raw_zim /mnt/ceph/llm/data/raw_zim 120

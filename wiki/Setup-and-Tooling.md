@@ -30,6 +30,10 @@ make sync-warm
 make hydrate-warm
 ```
 
+`make sync-warm` now includes raw/training inputs (`data/raw_zim`, `data/fineweb`,
+`data/cleaned`, `data/extracted`) and training artifacts (`data/shards`,
+`data/shards_global`, `artifacts/tokenizer`, `artifacts/checkpoints`, `artifacts/reports`).
+
 ## CI/CD
 - `CI` workflow runs lint, typecheck, tests, and smoke checks.
 - `Wiki Sync` workflow publishes docs in `wiki/` to the GitHub Wiki.

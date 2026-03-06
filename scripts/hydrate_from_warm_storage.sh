@@ -13,7 +13,16 @@ if ! command -v rsync >/dev/null 2>&1; then
   exit 1
 fi
 
-mkdir -p data/extracted data/shards artifacts/tokenizer data/raw_zim
+mkdir -p \
+  data/raw_zim \
+  data/fineweb \
+  data/cleaned \
+  data/extracted \
+  data/shards \
+  data/shards_global \
+  artifacts/tokenizer \
+  artifacts/checkpoints \
+  artifacts/reports
 
 sync_dir() {
   local src="$1"
@@ -27,8 +36,13 @@ sync_dir() {
 }
 
 sync_dir "${SRC_ROOT}/raw_zim" "data/raw_zim"
+sync_dir "${SRC_ROOT}/fineweb" "data/fineweb"
+sync_dir "${SRC_ROOT}/cleaned" "data/cleaned"
 sync_dir "${SRC_ROOT}/extracted" "data/extracted"
 sync_dir "${SRC_ROOT}/shards" "data/shards"
+sync_dir "${SRC_ROOT}/shards_global" "data/shards_global"
 sync_dir "${SRC_ROOT}/tokenizer" "artifacts/tokenizer"
+sync_dir "${SRC_ROOT}/checkpoints" "artifacts/checkpoints"
+sync_dir "${SRC_ROOT}/reports" "artifacts/reports"
 
 echo "hydrate complete"

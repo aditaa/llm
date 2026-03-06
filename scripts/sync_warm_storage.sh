@@ -16,9 +16,14 @@ fi
 echo "sync destination: ${DEST_ROOT}"
 mkdir -p \
   "${DEST_ROOT}/raw_zim" \
+  "${DEST_ROOT}/fineweb" \
+  "${DEST_ROOT}/cleaned" \
   "${DEST_ROOT}/extracted" \
   "${DEST_ROOT}/shards" \
+  "${DEST_ROOT}/shards_global" \
   "${DEST_ROOT}/tokenizer" \
+  "${DEST_ROOT}/checkpoints" \
+  "${DEST_ROOT}/reports" \
   "${DEST_ROOT}/logs"
 
 sync_dir() {
@@ -49,8 +54,13 @@ else
 fi
 
 sync_dir "data/extracted" "${DEST_ROOT}/extracted" "--exclude=*.zim"
+sync_dir "data/fineweb" "${DEST_ROOT}/fineweb"
+sync_dir "data/cleaned" "${DEST_ROOT}/cleaned"
 sync_dir "data/shards" "${DEST_ROOT}/shards"
+sync_dir "data/shards_global" "${DEST_ROOT}/shards_global"
 sync_dir "artifacts/tokenizer" "${DEST_ROOT}/tokenizer"
+sync_dir "artifacts/checkpoints" "${DEST_ROOT}/checkpoints"
+sync_dir "artifacts/reports" "${DEST_ROOT}/reports"
 
 date -u +"%Y-%m-%dT%H:%M:%SZ" > "${DEST_ROOT}/logs/last_sync_utc.txt"
 echo "sync complete"

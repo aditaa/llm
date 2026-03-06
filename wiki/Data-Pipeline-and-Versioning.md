@@ -56,6 +56,19 @@ Rehydrate local hot workspace from warm storage:
 bash scripts/hydrate_from_warm_storage.sh /mnt/ceph/llm/data
 ```
 
+## First-Pass Talking Profile
+For an English prose-first pass, generate include/exclude manifests and optionally move excluded ZIMs to warm storage:
+
+```bash
+bash scripts/first_pass_zim_profile.sh
+bash scripts/first_pass_zim_profile.sh --move-excluded
+```
+
+Generated manifests:
+- `artifacts/reports/first_pass_include_targets.txt`
+- `artifacts/reports/first_pass_include_zims.txt`
+- `artifacts/reports/first_pass_exclude_zims.txt`
+
 ## Pre-Training Integrity Gate
 Before training, verify shard datasets:
 

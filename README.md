@@ -95,7 +95,8 @@ PYTHONPATH=src .venv/bin/python -m llm.cli clean-corpus-batch \
 By default this cleanup step also decodes HTML entities and strips common web-shell artifacts
 (HTML-like tags, repeated nav/menu phrases, site suffixes such as `- Stack Overflow`).
 Disable individual transforms with:
-`--no-decode-html-entities`, `--no-strip-html-tags`, `--no-strip-site-suffixes`, `--no-strip-nav-phrases`.
+`--no-decode-html-entities`, `--no-strip-html-tags`, `--no-strip-site-suffixes`,
+`--no-strip-nav-phrases`, `--no-strip-stack-metadata`, `--no-collapse-repeated-prefix`.
 
 4. Train tokenizer on cleaned corpus:
 ```bash

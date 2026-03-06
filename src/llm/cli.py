@@ -203,6 +203,8 @@ def cmd_clean_corpus_batch(
     strip_html_tags: bool,
     strip_site_suffixes: bool,
     strip_nav_phrases: bool,
+    strip_stack_metadata: bool,
+    collapse_repeated_prefix: bool,
     report_output: str,
 ) -> int:
     files = iter_corpus_files(
@@ -236,6 +238,8 @@ def cmd_clean_corpus_batch(
             strip_html_tags=strip_html_tags,
             strip_site_suffixes=strip_site_suffixes,
             strip_nav_phrases=strip_nav_phrases,
+            strip_stack_metadata=strip_stack_metadata,
+            collapse_repeated_prefix=collapse_repeated_prefix,
         ),
         boilerplate_lines=boilerplate_lines,
     )
@@ -686,6 +690,16 @@ def parse_args() -> argparse.Namespace:
         help="Disable stripping repeated navigation phrase fragments",
     )
     clean_parser.add_argument(
+        "--no-strip-stack-metadata",
+        action="store_true",
+        help="Disable stripping StackExchange timeline metadata fragments",
+    )
+    clean_parser.add_argument(
+        "--no-collapse-repeated-prefix",
+        action="store_true",
+        help="Disable collapsing duplicated prefix spans",
+    )
+    clean_parser.add_argument(
         "--report-output",
         default="artifacts/reports/clean_corpus_batch_report.json",
         help="Output JSON report path",
@@ -932,6 +946,8 @@ def main() -> int:
             strip_html_tags=not args.no_strip_html_tags,
             strip_site_suffixes=not args.no_strip_site_suffixes,
             strip_nav_phrases=not args.no_strip_nav_phrases,
+            strip_stack_metadata=not args.no_strip_stack_metadata,
+            collapse_repeated_prefix=not args.no_collapse_repeated_prefix,
             report_output=args.report_output,
         )
     if args.command == "shard-corpus":

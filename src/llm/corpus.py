@@ -27,6 +27,11 @@ _STACK_BRAND_SEQ_RE = re.compile(
     r"\b(?:stack overflow|stack exchange)(?:\s+(?:stack overflow|stack exchange)){1,}\b",
     re.IGNORECASE,
 )
+_STACK_TIMELINE_RE = re.compile(
+    r"\b(?:public\s+)?(?:asked|active|modified)\b.{0,320}?\bviewed\s+\d[\d,]*\s+times\b",
+    re.IGNORECASE,
+)
+_PUBLIC_TOKEN_RE = re.compile(r"\bpublic\b", re.IGNORECASE)
 
 
 @dataclass(frozen=True)
@@ -55,6 +60,8 @@ class CleanCorpusConfig:
     strip_html_tags: bool = True
     strip_site_suffixes: bool = True
     strip_nav_phrases: bool = True
+    strip_stack_metadata: bool = True
+    collapse_repeated_prefix: bool = True
 
 
 def normalize_whitespace(text: str) -> str:
@@ -87,7 +94,26 @@ def _strip_web_shell(text: str, config: CleanCorpusConfig) -> str:
         out = _STACK_SHELL_RE.sub(" ", out)
         out = _NAV_PHRASE_RE.sub(" ", out)
         out = _STACK_BRAND_SEQ_RE.sub(" ", out)
+    if config.strip_stack_metadata:
+        out = _STACK_TIMELINE_RE.sub(" ", out)
+        out = _PUBLIC_TOKEN_RE.sub(" ", out)
+    if config.collapse_repeated_prefix:
+        out = _collapse_repeated_prefix(out)
     return normalize_whitespace(out)
+
+
+def _collapse_repeated_prefix(text: str, *, min_words: int = 5, max_words: int = 24) -> str:
+    words = text.split()
+    if len(words) < min_words * 2:
+        return text
+
+    lowered = [w.lower() for w in words]
+    upper = min(max_words, len(words) // 2)
+    for span in range(upper, min_words - 1, -1):
+        if lowered[:span] == lowered[span : span * 2]:
+            collapsed = words[:span] + words[span * 2 :]
+            return " ".join(collapsed)
+    return text
 
 
 def analyze_corpora(
@@ -393,6 +419,8 @@ def clean_corpora_batch(
             "strip_html_tags": config.strip_html_tags,
             "strip_site_suffixes": config.strip_site_suffixes,
             "strip_nav_phrases": config.strip_nav_phrases,
+            "strip_stack_metadata": config.strip_stack_metadata,
+            "collapse_repeated_prefix": config.collapse_repeated_prefix,
         },
     }
 

@@ -148,7 +148,9 @@ class CorpusCleaningTests(unittest.TestCase):
                 "How to parse XML in Python? - Stack Overflow "
                 "Stack Exchange Stack Overflow Questions Tags Users About "
                 "Stack Overflow Public Questions Tags Users About "
-                "<div>How to parse XML in Python using lxml and ElementTree?</div>"
+                "Public Asked Apr 23 '21 at 12:09 Active Apr 23 '21 at 12:09 Viewed 53 times "
+                "<div>How to parse XML in Python? How to parse XML in Python using lxml and "
+                "ElementTree?</div>"
             )
             (input_dir / "a.txt").write_text(noisy + "\n", encoding="utf-8")
 
@@ -169,6 +171,8 @@ class CorpusCleaningTests(unittest.TestCase):
                     strip_html_tags=True,
                     strip_site_suffixes=True,
                     strip_nav_phrases=True,
+                    strip_stack_metadata=True,
+                    collapse_repeated_prefix=True,
                 ),
                 boilerplate_lines=set(),
             )
@@ -177,6 +181,9 @@ class CorpusCleaningTests(unittest.TestCase):
             self.assertIn("How to parse XML in Python", out)
             self.assertNotIn("Stack Exchange", out)
             self.assertNotIn("<div>", out)
+            self.assertNotIn("Asked", out)
+            self.assertNotIn("Viewed", out)
+            self.assertNotIn("Public", out)
             self.assertEqual(report["totals"]["kept_lines"], 1)
 
 

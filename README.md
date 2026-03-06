@@ -375,6 +375,10 @@ Use `/mnt/ceph/llm/data` as warm cache/backup for durability and overflow.
 ```bash
 bash scripts/sync_warm_storage.sh /mnt/ceph/llm/data
 ```
+- Continuous ZIM offload worker (hot -> warm):
+```bash
+bash scripts/zim_offload_worker.sh data/raw_zim /mnt/ceph/llm/data/raw_zim 120
+```
 - Pull artifacts back from warm storage to local hot workspace:
 ```bash
 bash scripts/hydrate_from_warm_storage.sh /mnt/ceph/llm/data

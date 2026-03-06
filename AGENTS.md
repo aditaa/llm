@@ -71,6 +71,8 @@ Keep PR scope narrow; split refactors and features into separate PRs.
 - Prefer environment variables for machine-specific settings
 - Run all processing in local hot workspace (`./data`, `./artifacts`)
 - Use warm storage at `/mnt/ceph/llm/data` as cache/backup
+- For first-pass talking-only selection + hot/warm rebalance, run:
+  `bash scripts/first_pass_zim_profile.sh --move-excluded`
 - Run shard integrity verification before training (`llm.cli verify-shards`)
 - `extract-zim-text` now falls back to suggestion-index paths when fulltext search has zero matches
 - If extraction still returns `written_articles=0`, retry with a lower `--min-chars` (for example `20`)

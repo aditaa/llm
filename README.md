@@ -66,6 +66,19 @@ Detailed guide: `docs/SERVER_SETUP.md`
 ## ZIM Data Workflow (IIAB)
 Keep raw `.zim` files on server storage (for example `/data/iiab/zim/`), not in Git.
 
+For a first-pass talking-only dataset profile (English prose focus), generate include/exclude manifests:
+```bash
+bash scripts/first_pass_zim_profile.sh
+```
+To also move excluded local ZIMs from hot storage to warm storage:
+```bash
+bash scripts/first_pass_zim_profile.sh --move-excluded
+```
+This writes:
+- `artifacts/reports/first_pass_include_targets.txt` (target profile, includes Gutenberg)
+- `artifacts/reports/first_pass_include_zims.txt` (currently present and included)
+- `artifacts/reports/first_pass_exclude_zims.txt` (currently present and excluded)
+
 1. Extract text corpus from ZIM:
 ```bash
 PYTHONPATH=src .venv/bin/python -m llm.cli extract-zim-text \

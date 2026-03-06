@@ -479,6 +479,10 @@ def cmd_train(
     d_model: int,
     dropout: float,
     resume_from: str | None,
+    precision: str,
+    tf32: bool,
+    compile_model: bool,
+    compile_mode: str,
 ) -> int:
     from llm.train import TrainConfig, run_training
 
@@ -501,6 +505,10 @@ def cmd_train(
         d_model=d_model,
         dropout=dropout,
         resume_from=Path(resume_from) if resume_from else None,
+        precision=precision,
+        tf32=tf32,
+        compile_model=compile_model,
+        compile_mode=compile_mode,
     )
     result = run_training(config)
     print(f"output_dir={result['output_dir']}")
@@ -1003,6 +1011,28 @@ def parse_args() -> argparse.Namespace:
     train_parser.add_argument("--d-model", type=int, default=256, help="Model hidden size")
     train_parser.add_argument("--dropout", type=float, default=0.1, help="Dropout")
     train_parser.add_argument(
+        "--precision",
+        choices=["auto", "fp32", "fp16", "bf16"],
+        default="auto",
+        help="Compute precision mode (auto picks bf16/fp16 on CUDA)",
+    )
+    train_parser.add_argument(
+        "--no-tf32",
+        action="store_true",
+        help="Disable TF32 matmul/convolution kernels on CUDA",
+    )
+    train_parser.add_argument(
+        "--compile-model",
+        action="store_true",
+        help="Enable torch.compile for the training model graph",
+    )
+    train_parser.add_argument(
+        "--compile-mode",
+        choices=["default", "reduce-overhead", "max-autotune", "max-autotune-no-cudagraphs"],
+        default="reduce-overhead",
+        help="torch.compile mode (used only with --compile-model)",
+    )
+    train_parser.add_argument(
         "--resume-from",
         default=None,
         help="Optional checkpoint path to resume training from",
@@ -1180,6 +1210,10 @@ def main() -> int:
             d_model=args.d_model,
             dropout=args.dropout,
             resume_from=args.resume_from,
+            precision=args.precision,
+            tf32=not args.no_tf32,
+            compile_model=args.compile_model,
+            compile_mode=args.compile_mode,
         )
     if args.command == "generate":
         return cmd_generate(

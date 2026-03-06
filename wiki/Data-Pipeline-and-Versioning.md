@@ -16,7 +16,7 @@ FineWeb-first fast path (preferred for first build):
 PYTHONPATH=src .venv/bin/python -m llm.cli extract-zim-text --input-zim /path/file.zim --output /path/corpus.txt
 PYTHONPATH=src .venv/bin/python -m llm.cli train-tokenizer --input /path/corpus.txt --output /path/vocab.json
 PYTHONPATH=src .venv/bin/python -m llm.cli shard-corpus --input /path/corpus.txt --tokenizer /path/vocab.json --output-dir /path/shards
-PYTHONPATH=src .venv/bin/python -m llm.cli train --shards-path /path/shards --output-dir /path/checkpoints
+PYTHONPATH=src .venv/bin/python -m llm.cli train --shards-path /path/shards --output-dir /path/checkpoints --precision auto
 ```
 
 Heuristic risk audit before tokenizer training:
@@ -31,6 +31,11 @@ Shared tokenizer workflow for multi-dataset training:
 PYTHONPATH=src .venv/bin/python -m llm.cli train-tokenizer-global --input-dir data/extracted --from-shards-path data/shards --output artifacts/tokenizer/global-char-v1.json
 PYTHONPATH=src .venv/bin/python -m llm.cli shard-corpus-batch --input-dir data/extracted --from-shards-path data/shards --tokenizer artifacts/tokenizer/global-char-v1.json --output-root data/shards_global/global-char-v1
 PYTHONPATH=src .venv/bin/python -m llm.cli train --shards-path data/shards_global/global-char-v1 --output-dir artifacts/checkpoints/global-char-v1
+
+Throughput tuning notes:
+- Prefer `--precision auto` on CUDA.
+- Keep eval overhead bounded (`--eval-interval 500+`, `--eval-steps 5-10`).
+- If utilization is bursty, test `--compile-model --compile-mode reduce-overhead`.
 ```
 
 Direct FineWeb parquet to shards:

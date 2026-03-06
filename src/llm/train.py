@@ -37,6 +37,10 @@ class TrainConfig:
     d_model: int = 256
     dropout: float = 0.1
     resume_from: Path | None = None
+    precision: str = "auto"
+    tf32: bool = True
+    compile_model: bool = False
+    compile_mode: str = "reduce-overhead"
 
     def to_dict(self) -> dict[str, Any]:
         payload = asdict(self)
@@ -175,7 +179,7 @@ class ShardBatchSampler:
         if context_length <= 0:
             raise ValueError("context_length must be > 0")
         self.context_length = context_length
-        self.rng = random.Random(seed)
+        self.np_rng = np.random.default_rng(seed)
         self.device = device
         dtype = _np_dtype(token_dtype)
         self.arrays = [np.memmap(path, mode="r", dtype=dtype) for path in shard_paths]
@@ -187,24 +191,38 @@ class ShardBatchSampler:
                 self.weights.append(int(arr.size) - context_length)
         if not self.eligible:
             raise ValueError("no shards have enough tokens for context_length")
+        self._eligible_np = np.asarray(self.eligible, dtype=np.int32)
+        probs = np.asarray(self.weights, dtype=np.float64)
+        self._weight_probs = probs / probs.sum()
+        self._offsets = np.arange(self.context_length, dtype=np.int64)
 
     def sample_batch(self, batch_size: int) -> tuple[Tensor, Tensor]:
         if batch_size <= 0:
             raise ValueError("batch_size must be > 0")
         x = np.zeros((batch_size, self.context_length), dtype=np.int64)
         y = np.zeros((batch_size, self.context_length), dtype=np.int64)
-        for row in range(batch_size):
-            arr_idx = self.rng.choices(self.eligible, weights=self.weights, k=1)[0]
-            arr = self.arrays[arr_idx]
+        chosen = self.np_rng.choice(self._eligible_np, size=batch_size, p=self._weight_probs)
+        for arr_idx in np.unique(chosen):
+            rows = np.nonzero(chosen == arr_idx)[0]
+            arr = self.arrays[int(arr_idx)]
             max_start = int(arr.size) - self.context_length - 1
             if max_start <= 0:
                 raise ValueError("encountered shard smaller than context window")
-            start = self.rng.randint(0, max_start)
-            x[row, :] = arr[start : start + self.context_length]
-            y[row, :] = arr[start + 1 : start + 1 + self.context_length]
+            starts = self.np_rng.integers(0, max_start + 1, size=rows.size, dtype=np.int64)
+            gather_idx = starts[:, None] + self._offsets[None, :]
+            x[rows, :] = arr[gather_idx]
+            y[rows, :] = arr[gather_idx + 1]
+
+        xb = torch.from_numpy(x)
+        yb = torch.from_numpy(y)
+        if self.device.type == "cuda":
+            return (
+                xb.pin_memory().to(device=self.device, dtype=torch.long, non_blocking=True),
+                yb.pin_memory().to(device=self.device, dtype=torch.long, non_blocking=True),
+            )
         return (
-            torch.from_numpy(x).to(device=self.device, dtype=torch.long),
-            torch.from_numpy(y).to(device=self.device, dtype=torch.long),
+            xb.to(device=self.device, dtype=torch.long),
+            yb.to(device=self.device, dtype=torch.long),
         )
 
 
@@ -216,19 +234,63 @@ def _resolve_device(device_arg: str) -> torch.device:
     return torch.device(device_arg)
 
 
+def _cuda_bf16_supported() -> bool:
+    is_supported = getattr(torch.cuda, "is_bf16_supported", None)
+    if is_supported is None:
+        return False
+    return bool(is_supported())
+
+
+def _resolve_amp_mode(
+    device: torch.device, precision: str
+) -> tuple[bool, torch.dtype | None, bool, str]:
+    normalized = precision.lower().strip()
+    allowed = {"auto", "fp32", "fp16", "bf16"}
+    if normalized not in allowed:
+        allowed_values = ", ".join(sorted(allowed))
+        raise ValueError(f"precision must be one of: {allowed_values}")
+
+    if device.type != "cuda":
+        if normalized in {"fp16", "bf16"}:
+            raise ValueError(f"precision={normalized} requires a CUDA device")
+        return False, None, False, "fp32"
+
+    if normalized == "auto":
+        if _cuda_bf16_supported():
+            return True, torch.bfloat16, False, "bf16"
+        return True, torch.float16, True, "fp16"
+
+    if normalized == "fp32":
+        return False, None, False, "fp32"
+
+    if normalized == "bf16":
+        if not _cuda_bf16_supported():
+            raise ValueError("precision=bf16 is not supported on this GPU")
+        return True, torch.bfloat16, False, "bf16"
+
+    return True, torch.float16, True, "fp16"
+
+
 def _estimate_loss(
-    model: GPTModel,
+    model: torch.nn.Module,
     sampler: ShardBatchSampler,
     *,
     batch_size: int,
     eval_steps: int,
+    amp_enabled: bool,
+    amp_dtype: torch.dtype | None,
+    device_type: str,
 ) -> float:
     model.eval()
     losses: list[float] = []
+    autocast_kwargs: dict[str, Any] = {"device_type": device_type, "enabled": amp_enabled}
+    if amp_dtype is not None:
+        autocast_kwargs["dtype"] = amp_dtype
     with torch.no_grad():
         for _ in range(eval_steps):
             xb, yb = sampler.sample_batch(batch_size)
-            _, loss = model(xb, yb)
+            with torch.autocast(**autocast_kwargs):
+                _, loss = model(xb, yb)
             if loss is None:
                 raise RuntimeError("loss should not be None when targets are provided")
             losses.append(float(loss.item()))
@@ -242,6 +304,7 @@ def _save_checkpoint(
     step: int,
     model: GPTModel,
     optimizer: torch.optim.Optimizer,
+    scaler: Any,
     config: TrainConfig,
     model_config: ModelConfig,
     info: ShardTrainingInfo,
@@ -252,6 +315,7 @@ def _save_checkpoint(
         "step": step,
         "model_state": model.state_dict(),
         "optimizer_state": optimizer.state_dict(),
+        "scaler_state": scaler.state_dict() if scaler.is_enabled() else None,
         "train_config": config.to_dict(),
         "model_config": model_config.to_dict(),
         "tokenizer_path": str(info.tokenizer_path),
@@ -279,6 +343,13 @@ def run_training(config: TrainConfig) -> dict[str, Any]:
     torch.manual_seed(config.seed)
 
     device = _resolve_device(config.device)
+    amp_enabled, amp_dtype, use_grad_scaler, effective_precision = _resolve_amp_mode(
+        device, config.precision
+    )
+    if device.type == "cuda":
+        torch.backends.cuda.matmul.allow_tf32 = config.tf32
+        torch.backends.cudnn.allow_tf32 = config.tf32
+
     info = collect_shard_training_info(config.shards_path)
 
     model_config = ModelConfig(
@@ -295,13 +366,26 @@ def run_training(config: TrainConfig) -> dict[str, Any]:
         lr=config.learning_rate,
         weight_decay=config.weight_decay,
     )
+    if hasattr(torch, "amp") and hasattr(torch.amp, "GradScaler"):
+        scaler = torch.amp.GradScaler("cuda", enabled=use_grad_scaler)
+    else:
+        scaler = torch.cuda.amp.GradScaler(enabled=use_grad_scaler)
 
     start_step = 0
     if config.resume_from is not None:
         checkpoint = torch.load(config.resume_from, map_location=device)
         model.load_state_dict(checkpoint["model_state"])
         optimizer.load_state_dict(checkpoint["optimizer_state"])
+        scaler_state = checkpoint.get("scaler_state")
+        if use_grad_scaler and scaler_state is not None:
+            scaler.load_state_dict(scaler_state)
         start_step = int(checkpoint["step"])
+
+    train_model: torch.nn.Module = model
+    if config.compile_model:
+        if not hasattr(torch, "compile"):
+            raise ValueError("compile_model requested but torch.compile is unavailable")
+        train_model = torch.compile(model, mode=config.compile_mode)
 
     train_sampler = ShardBatchSampler(
         shard_paths=info.train_shards,
@@ -339,16 +423,32 @@ def run_training(config: TrainConfig) -> dict[str, Any]:
     print(f"train_tokens={info.train_tokens}")
     print(f"val_tokens={info.val_tokens}")
     print(f"start_step={start_step}")
+    print(f"precision={effective_precision}")
+    print(f"tf32={int(config.tf32)}")
+    print(f"compile_model={int(config.compile_model)}")
+    if config.compile_model:
+        print(f"compile_mode={config.compile_mode}")
 
+    autocast_kwargs: dict[str, Any] = {"device_type": device.type, "enabled": amp_enabled}
+    if amp_dtype is not None:
+        autocast_kwargs["dtype"] = amp_dtype
     for step in range(start_step + 1, config.max_steps + 1):
         xb, yb = train_sampler.sample_batch(config.batch_size)
         optimizer.zero_grad(set_to_none=True)
-        _, loss = model(xb, yb)
+        with torch.autocast(**autocast_kwargs):
+            _, loss = train_model(xb, yb)
         if loss is None:
             raise RuntimeError("loss should not be None when targets are provided")
-        loss.backward()
-        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=config.grad_clip)
-        optimizer.step()
+        if scaler.is_enabled():
+            scaler.scale(loss).backward()
+            scaler.unscale_(optimizer)
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=config.grad_clip)
+            scaler.step(optimizer)
+            scaler.update()
+        else:
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=config.grad_clip)
+            optimizer.step()
 
         if step == 1 or step % config.log_interval == 0:
             print(f"step={step} train_loss={loss.item():.6f}")
@@ -356,16 +456,20 @@ def run_training(config: TrainConfig) -> dict[str, Any]:
         should_eval = step == 1 or step % config.eval_interval == 0 or step == config.max_steps
         if should_eval:
             val_loss = _estimate_loss(
-                model,
+                train_model,
                 val_sampler,
                 batch_size=config.batch_size,
                 eval_steps=config.eval_steps,
+                amp_enabled=amp_enabled,
+                amp_dtype=amp_dtype,
+                device_type=device.type,
             )
             ckpt = _save_checkpoint(
                 output_dir=config.output_dir,
                 step=step,
                 model=model,
                 optimizer=optimizer,
+                scaler=scaler,
                 config=config,
                 model_config=model_config,
                 info=info,

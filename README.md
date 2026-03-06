@@ -241,10 +241,14 @@ PYTHONPATH=src .venv/bin/python -m llm.cli train \
   --output-dir artifacts/checkpoints/medlineplus_baseline \
   --max-steps 200 \
   --batch-size 8 \
-  --context-length 256
+  --context-length 256 \
+  --precision auto
 ```
 Note: `train` requires all selected manifests to share the exact same tokenizer mapping.
 Use a global tokenizer + `shard-corpus-batch` output root for multi-dataset runs.
+For higher sustained GPU utilization on CUDA, use `--precision auto` and keep
+validation less frequent (`--eval-interval 500 --eval-steps 10`).
+If utilization is still bursty on smaller models, test `--compile-model`.
 
 9. Generate text from a checkpoint:
 ```bash
@@ -280,7 +284,8 @@ PYTHONPATH=src .venv/bin/python -m llm.cli train \
   --device cuda \
   --max-steps 1000 \
   --batch-size 12 \
-  --context-length 256
+  --context-length 256 \
+  --precision auto
 ```
 
 Resume training from the latest checkpoint:

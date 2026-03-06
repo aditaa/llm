@@ -7,10 +7,11 @@ from pathlib import Path
 try:
     import torch
 
-    from llm.train import ShardBatchSampler, collect_shard_training_info
+    from llm.train import ShardBatchSampler, _resolve_amp_mode, collect_shard_training_info
 except ModuleNotFoundError:
     torch = None
     ShardBatchSampler = None
+    _resolve_amp_mode = None
     collect_shard_training_info = None
 
 
@@ -51,6 +52,21 @@ def _write_manifest(
 
 @unittest.skipIf(torch is None, "torch is not installed")
 class TrainDataTests(unittest.TestCase):
+    def test_resolve_amp_mode_cpu_defaults_to_fp32(self) -> None:
+        enabled, dtype, use_scaler, effective = _resolve_amp_mode(torch.device("cpu"), "auto")
+        self.assertFalse(enabled)
+        self.assertIsNone(dtype)
+        self.assertFalse(use_scaler)
+        self.assertEqual(effective, "fp32")
+
+    def test_resolve_amp_mode_rejects_invalid_precision(self) -> None:
+        with self.assertRaises(ValueError):
+            _resolve_amp_mode(torch.device("cpu"), "bad")
+
+    def test_resolve_amp_mode_rejects_half_precision_on_cpu(self) -> None:
+        with self.assertRaises(ValueError):
+            _resolve_amp_mode(torch.device("cpu"), "fp16")
+
     def test_collect_shard_training_info_rejects_mismatched_tokenizers(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

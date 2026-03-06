@@ -38,7 +38,7 @@ make corpus-quality-report # print quality report command usage
 make clean-corpus-batch # print batch cleanup command usage
 make dataset-risk-report # print heuristic dataset risk audit command usage
 make pull-hf-rows # print Hugging Face rows API pull helper usage
-make parquet-to-corpus # print local parquet->text corpus conversion usage
+make fineweb-parquet-to-shards # print direct FineWeb parquet->token-shards usage
 make stage-fineweb-from-warm # print warm->hot FineWeb chunk staging usage
 make shard-corpus-batch # print shared-tokenizer batch sharding usage
 make doctor      # verify binaries and Python deps
@@ -162,16 +162,19 @@ Notes:
 bash scripts/stage_fineweb_from_warm.sh --max-files 4 --max-gib 8
 ```
 
-3ac. Convert downloaded FineWeb parquet files to newline text corpora:
+3ac. Build tokenizer + token shards directly from FineWeb parquet:
 ```bash
-python3 scripts/parquet_to_corpus.py \
+PYTHONPATH=src .venv/bin/python scripts/fineweb_parquet_to_shards.py \
   --input-dir data/fineweb/sample-10BT \
-  --output-dir data/extracted/fineweb/sample-10BT \
+  --output-dir data/shards_global/fineweb-s10bt-global-char-v1 \
+  --tokenizer-out artifacts/tokenizer/fineweb-s10bt-global-char-v1.json \
   --field text \
-  --min-chars 80
+  --min-chars 80 \
+  --shard-size-tokens 5000000 \
+  --val-ratio 0.01
 ```
-This writes `.txt` files mirroring parquet paths (for example
-`data/extracted/fineweb/sample-10BT/sample/10BT/*.txt`).
+This writes `manifest.json` + shard `.bin` files directly, skipping extracted text.
+Use `--max-files` to do bounded test runs.
 
 3b. Run heuristic dataset risk audit:
 ```bash
@@ -257,34 +260,17 @@ PYTHONPATH=src .venv/bin/python -m llm.cli generate \
 Use this when you want round-1 pretraining only from FineWeb (no ZIM mix yet):
 
 ```bash
-# 1) convert parquet -> extracted text
-python3 scripts/parquet_to_corpus.py \
+# 1) build tokenizer + shards directly from parquet
+PYTHONPATH=src .venv/bin/python scripts/fineweb_parquet_to_shards.py \
   --input-dir data/fineweb/sample-10BT \
-  --output-dir data/extracted/fineweb/sample-10BT \
+  --output-dir data/shards_global/fineweb-s10bt-global-char-v1 \
+  --tokenizer-out artifacts/tokenizer/fineweb-s10bt-global-char-v1.json \
   --field text \
-  --min-chars 80
+  --min-chars 80 \
+  --shard-size-tokens 5000000 \
+  --val-ratio 0.01
 
-# 2) clean for English prose
-PYTHONPATH=src .venv/bin/python -m llm.cli clean-corpus-batch \
-  --input-dir data/extracted/fineweb/sample-10BT \
-  --output-dir data/cleaned/fineweb/sample-10BT \
-  --pattern \"*.txt\" \
-  --en-only
-
-# 3) build shared tokenizer from cleaned FineWeb
-PYTHONPATH=src .venv/bin/python -m llm.cli train-tokenizer-global \
-  --input-dir data/cleaned/fineweb/sample-10BT \
-  --pattern \"*.clean.txt\" \
-  --output artifacts/tokenizer/fineweb-s10bt-global-char-v1.json
-
-# 4) shard cleaned FineWeb with that tokenizer
-PYTHONPATH=src .venv/bin/python -m llm.cli shard-corpus-batch \
-  --input-dir data/cleaned/fineweb/sample-10BT \
-  --pattern \"*.clean.txt\" \
-  --tokenizer artifacts/tokenizer/fineweb-s10bt-global-char-v1.json \
-  --output-root data/shards_global/fineweb-s10bt-global-char-v1
-
-# 5) verify and train
+# 2) verify and train
 PYTHONPATH=src .venv/bin/python -m llm.cli verify-shards \
   --path data/shards_global/fineweb-s10bt-global-char-v1
 
@@ -306,6 +292,9 @@ PYTHONPATH=src .venv/bin/python -m llm.cli train \
   --resume-from artifacts/checkpoints/fineweb-s10bt-run1/last.pt \
   --max-steps 3000
 ```
+
+Optional text-first path still exists for inspection-heavy runs:
+`parquet_to_corpus -> clean-corpus-batch -> train-tokenizer-global -> shard-corpus-batch`.
 
 ## Warm Storage (Ceph Mount)
 Use `./data` and `./artifacts` as the hot working set.
@@ -340,7 +329,7 @@ bash scripts/hydrate_from_warm_storage.sh /mnt/ceph/llm/data
 - Batch corpus quality report generation (`corpus-quality-report`).
 - Batch corpus cleanup and dedupe (`clean-corpus-batch`).
 - Heuristic dataset risk auditing (`dataset-risk-report`).
-- Local parquet-to-corpus conversion for FineWeb-style datasets (`scripts/parquet_to_corpus.py`).
+- Direct FineWeb parquet -> tokenizer -> shard pipeline (`scripts/fineweb_parquet_to_shards.py`).
 - Basic character-level tokenizer with train/save/load.
 - Token-window data pipeline (`TokenWindowDataset`) for next-token training pairs.
 - ZIM archive text extraction (`extract-zim-text`) for server-hosted `.zim` files.

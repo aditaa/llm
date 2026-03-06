@@ -4,7 +4,7 @@ ifneq ("$(wildcard .venv/bin/python)","")
 PYTHON=.venv/bin/python
 endif
 
-.PHONY: setup-dev setup-train doctor install-server-system test lint format typecheck smoke extract-zim train-tokenizer train-tokenizer-global corpus-quality-report clean-corpus-batch dataset-risk-report pull-hf-rows parquet-to-corpus stage-fineweb-from-warm shard-corpus-batch verify-shards train generate sync-warm hydrate-warm publish-wiki
+.PHONY: setup-dev setup-train doctor install-server-system test lint format typecheck smoke extract-zim train-tokenizer train-tokenizer-global corpus-quality-report clean-corpus-batch dataset-risk-report pull-hf-rows parquet-to-corpus fineweb-parquet-to-shards stage-fineweb-from-warm shard-corpus-batch verify-shards train generate sync-warm hydrate-warm publish-wiki
 
 setup-dev:
 	bash scripts/bootstrap_dev.sh
@@ -64,6 +64,10 @@ pull-hf-rows:
 parquet-to-corpus:
 	@echo "Usage:"
 	@echo "  python3 scripts/parquet_to_corpus.py --input-dir data/fineweb/sample-10BT --output-dir data/extracted/fineweb/sample-10BT --field text"
+
+fineweb-parquet-to-shards:
+	@echo "Usage:"
+	@echo "  PYTHONPATH=src $(PYTHON) scripts/fineweb_parquet_to_shards.py --input-dir data/fineweb/sample-10BT --output-dir data/shards_global/fineweb-s10bt-global-char-v1 --tokenizer-out artifacts/tokenizer/fineweb-s10bt-global-char-v1.json --field text"
 
 stage-fineweb-from-warm:
 	@echo "Usage:"

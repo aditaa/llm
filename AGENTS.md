@@ -97,6 +97,7 @@ Keep PR scope narrow; split refactors and features into separate PRs.
 - On this 20-core server, use 15 parallel streams for split shard-build runs
 - For CUDA training throughput, prefer `llm.cli train --precision auto` (disable TF32 only if needed with `--no-tf32`)
 - If GPU utilization stays bursty, try `llm.cli train --compile-model --compile-mode reduce-overhead`
+- RTX 5070 tuned training profiles live in `configs/train/rtx5070/`; default launcher: `bash scripts/train_rtx5070_fineweb_v2_big.sh`
 - Version extracted/tokenized/sharded outputs with the ZIM date stamp (for example `serverfault_2025-08`)
 - Keep raw ZIM archives in `/mnt/ceph/llm/data/raw_zim/`
 

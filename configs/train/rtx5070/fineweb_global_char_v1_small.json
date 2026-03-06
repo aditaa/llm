@@ -1,0 +1,40 @@
+{
+  "profile_id": "rtx5070-fineweb-global-char-v1-small",
+  "created_on": "2026-03-06",
+  "hardware": {
+    "gpu": "NVIDIA GeForce RTX 5070 Ti Laptop GPU",
+    "vram_mib": 12227
+  },
+  "dataset": {
+    "shards_path": "data/shards_global/fineweb-global-char-v1"
+  },
+  "model": {
+    "n_layers": 4,
+    "n_heads": 4,
+    "d_model": 256,
+    "context_length": 256
+  },
+  "train": {
+    "device": "cuda",
+    "max_steps": 50000,
+    "batch_size": 164,
+    "learning_rate": 0.0002,
+    "eval_interval": 2000,
+    "eval_steps": 5,
+    "log_interval": 200,
+    "precision": "auto",
+    "tf32": true,
+    "compile_model": false,
+    "pytorch_alloc_conf": "expandable_segments:True"
+  },
+  "validated": {
+    "batch_166": "oom",
+    "batch_164": "pass",
+    "gpu_utilization_avg_percent": 45.4,
+    "gpu_utilization_max_percent": 91
+  },
+  "notes": [
+    "This profile is memory-stable on the RTX 5070 but under-utilizes GPU compute.",
+    "Use the v2-big profile for high sustained utilization."
+  ]
+}

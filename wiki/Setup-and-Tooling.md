@@ -43,6 +43,14 @@ make hydrate-warm
 - `information/`: reference notes and external source material
 - `scripts/`: setup and operational scripts
 
+## RTX 5070 Training Profile
+- Tuning notes: `docs/RTX5070_TUNING.md`
+- Saved configs: `configs/train/rtx5070/`
+- Recommended launcher:
+```bash
+bash scripts/train_rtx5070_fineweb_v2_big.sh
+```
+
 ## Wiki Publishing
 Wiki pages are source-controlled in `wiki/` and published with:
 

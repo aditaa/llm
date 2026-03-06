@@ -342,6 +342,16 @@ PYTHONPATH=src .venv/bin/python -m llm.cli train \
 
 On this 20-core host, default FineWeb shard splitting should use `15` parallel streams.
 
+## RTX 5070 Tuned Profiles
+- Tuned profile docs: `docs/RTX5070_TUNING.md`
+- Saved JSON profiles:
+  - `configs/train/rtx5070/fineweb_global_char_v2_big.json` (recommended)
+  - `configs/train/rtx5070/fineweb_global_char_v1_small.json` (legacy baseline)
+- Launch tuned big profile:
+```bash
+bash scripts/train_rtx5070_fineweb_v2_big.sh
+```
+
 ## Warm Storage (Ceph Mount)
 Use `./data` and `./artifacts` as the hot working set.
 Use `/mnt/ceph/llm/data` as warm cache/backup for durability and overflow.

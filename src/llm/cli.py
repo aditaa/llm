@@ -6,6 +6,7 @@ import argparse
 import json
 from pathlib import Path
 
+from llm.audit import DatasetRiskConfig, analyze_dataset_risk, save_dataset_risk_report
 from llm.corpus import (
     CleanCorpusConfig,
     CorpusQualityConfig,
@@ -280,6 +281,53 @@ def cmd_clean_corpus_batch(
     print(f"removed_code_like={totals['removed_code_like']}")
     print(f"removed_duplicate_within={totals['removed_duplicate_within']}")
     print(f"removed_duplicate_global={totals['removed_duplicate_global']}")
+    return 0
+
+
+def cmd_dataset_risk_report(
+    input_dir: str,
+    output_path: str,
+    pattern: str,
+    exclude_pattern: list[str],
+    max_files: int,
+    max_lines_per_file: int,
+    max_total_lines: int,
+    top_k: int,
+) -> int:
+    files = iter_corpus_files(
+        input_dir=Path(input_dir),
+        pattern=pattern,
+        exclude_patterns=exclude_pattern,
+        include_stems=None,
+        limit_files=max_files,
+    )
+    if not files:
+        raise ValueError("no input files matched for dataset-risk-report")
+
+    report = analyze_dataset_risk(
+        input_files=files,
+        config=DatasetRiskConfig(
+            top_k=top_k,
+            max_lines_per_file=max_lines_per_file,
+            max_total_lines=max_total_lines,
+        ),
+    )
+    save_dataset_risk_report(report, Path(output_path))
+
+    summary = report["summary"]
+    print(f"output={output_path}")
+    print(f"files_seen={report['files_seen']}")
+    print(f"lines_seen={report['lines_seen']}")
+    print(f"lines_nonempty={report['lines_nonempty']}")
+    print(f"truncated={int(report['truncated'])}")
+    print(f"lines_with_toxicity={summary['lines_with_toxicity']}")
+    print(f"lines_with_stereotype={summary['lines_with_stereotype']}")
+    print(f"lines_with_political={summary['lines_with_political']}")
+    print(f"lines_with_refusal={summary['lines_with_refusal']}")
+    print(f"toxicity_lines_per_10k={summary['toxicity_lines_per_10k']}")
+    print(f"stereotype_lines_per_10k={summary['stereotype_lines_per_10k']}")
+    print(f"political_lines_per_10k={summary['political_lines_per_10k']}")
+    print(f"refusal_lines_per_10k={summary['refusal_lines_per_10k']}")
     return 0
 
 
@@ -776,6 +824,44 @@ def parse_args() -> argparse.Namespace:
         help="Output JSON report path",
     )
 
+    risk_parser = subparsers.add_parser(
+        "dataset-risk-report",
+        help="Heuristic lexical audit for toxicity/stereotype/political/refusal cues",
+    )
+    risk_parser.add_argument("--input-dir", required=True, help="Directory of corpus files")
+    risk_parser.add_argument("--output", required=True, help="Output risk JSON report path")
+    risk_parser.add_argument("--pattern", default="*.txt", help="Glob pattern")
+    risk_parser.add_argument(
+        "--exclude-pattern",
+        action="append",
+        default=["*.paths.txt"],
+        help="Glob pattern to exclude (repeatable)",
+    )
+    risk_parser.add_argument(
+        "--max-files",
+        type=int,
+        default=0,
+        help="Optional cap on file count (0 = all matches)",
+    )
+    risk_parser.add_argument(
+        "--max-lines-per-file",
+        type=int,
+        default=0,
+        help="Optional line cap per file (0 = all lines)",
+    )
+    risk_parser.add_argument(
+        "--max-total-lines",
+        type=int,
+        default=0,
+        help="Optional global line cap across all files (0 = all lines)",
+    )
+    risk_parser.add_argument(
+        "--top-k",
+        type=int,
+        default=25,
+        help="Top matched terms/phrases to include in report",
+    )
+
     shard_parser = subparsers.add_parser(
         "shard-corpus", help="Tokenize corpus and write token shards"
     )
@@ -1029,6 +1115,17 @@ def main() -> int:
             code_symbol_ratio_threshold=args.code_symbol_ratio_threshold,
             code_keyword_hits_threshold=args.code_keyword_hits_threshold,
             report_output=args.report_output,
+        )
+    if args.command == "dataset-risk-report":
+        return cmd_dataset_risk_report(
+            input_dir=args.input_dir,
+            output_path=args.output,
+            pattern=args.pattern,
+            exclude_pattern=args.exclude_pattern,
+            max_files=args.max_files,
+            max_lines_per_file=args.max_lines_per_file,
+            max_total_lines=args.max_total_lines,
+            top_k=args.top_k,
         )
     if args.command == "shard-corpus":
         return cmd_shard_corpus(

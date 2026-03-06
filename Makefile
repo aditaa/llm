@@ -4,7 +4,7 @@ ifneq ("$(wildcard .venv/bin/python)","")
 PYTHON=.venv/bin/python
 endif
 
-.PHONY: setup-dev setup-train doctor install-server-system test lint format typecheck smoke extract-zim train-tokenizer train-tokenizer-global corpus-quality-report clean-corpus-batch shard-corpus-batch verify-shards train generate sync-warm hydrate-warm publish-wiki
+.PHONY: setup-dev setup-train doctor install-server-system test lint format typecheck smoke extract-zim train-tokenizer train-tokenizer-global corpus-quality-report clean-corpus-batch dataset-risk-report shard-corpus-batch verify-shards train generate sync-warm hydrate-warm publish-wiki
 
 setup-dev:
 	bash scripts/bootstrap_dev.sh
@@ -52,6 +52,10 @@ corpus-quality-report:
 clean-corpus-batch:
 	@echo "Usage:"
 	@echo "  PYTHONPATH=src $(PYTHON) -m llm.cli clean-corpus-batch --input-dir data/extracted --output-dir data/cleaned --boilerplate-report artifacts/reports/corpus_quality.json"
+
+dataset-risk-report:
+	@echo "Usage:"
+	@echo "  PYTHONPATH=src $(PYTHON) -m llm.cli dataset-risk-report --input-dir data/extracted --output artifacts/reports/dataset_risk.json"
 
 shard-corpus-batch:
 	@echo "Usage:"

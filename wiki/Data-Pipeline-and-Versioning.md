@@ -14,6 +14,13 @@ PYTHONPATH=src .venv/bin/python -m llm.cli shard-corpus --input /path/corpus.txt
 PYTHONPATH=src .venv/bin/python -m llm.cli train --shards-path /path/shards --output-dir /path/checkpoints
 ```
 
+Heuristic risk audit before tokenizer training:
+```bash
+PYTHONPATH=src .venv/bin/python -m llm.cli dataset-risk-report \
+  --input-dir data/cleaned \
+  --output artifacts/reports/dataset_risk.json
+```
+
 Shared tokenizer workflow for multi-dataset training:
 ```bash
 PYTHONPATH=src .venv/bin/python -m llm.cli train-tokenizer-global --input-dir data/extracted --from-shards-path data/shards --output artifacts/tokenizer/global-char-v1.json

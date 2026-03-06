@@ -28,6 +28,7 @@ Use the `Makefile` as the source of truth:
 - `make train-tokenizer-global`: usage helper for shared tokenizer training
 - `make corpus-quality-report`: usage helper for corpus quality scan
 - `make clean-corpus-batch`: usage helper for batch corpus cleanup
+- `make dataset-risk-report`: usage helper for heuristic dataset risk audit
 - `make shard-corpus-batch`: usage helper for batch sharding with a shared tokenizer
 
 Server setup reference:
@@ -80,6 +81,7 @@ Keep PR scope narrow; split refactors and features into separate PRs.
 - `llm.cli train` requires a tokenizer-compatible shard set (same tokenizer mapping across all selected manifests)
 - Preferred multi-dataset flow: `train-tokenizer-global` -> `shard-corpus-batch` -> `train`
 - Preferred pre-tokenization flow: `corpus-quality-report` -> `clean-corpus-batch` -> `train-tokenizer-global`
+- Run `dataset-risk-report` on cleaned corpora before tokenizer training and manually review flagged slices
 - For English-only runs, enable `clean-corpus-batch --en-only` before tokenizer training
 - For talking-only runs, keep `clean-corpus-batch` code-like filtering enabled (default)
 - Use `bash scripts/sync_warm_storage.sh /mnt/ceph/llm/data` to copy local artifacts to warm storage

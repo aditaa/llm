@@ -36,6 +36,7 @@ make generate    # print checkpoint text-generation command usage
 make train-tokenizer-global # print shared-tokenizer command usage
 make corpus-quality-report # print quality report command usage
 make clean-corpus-batch # print batch cleanup command usage
+make dataset-risk-report # print heuristic dataset risk audit command usage
 make shard-corpus-batch # print shared-tokenizer batch sharding usage
 make doctor      # verify binaries and Python deps
 ```
@@ -116,6 +117,15 @@ To enforce English-only cleanup, add `--en-only` (with tunable thresholds:
 `--en-min-latin-ratio`).
 For talking-only passes, keep code filtering enabled (default) or tune with:
 `--code-symbol-ratio-threshold` and `--code-keyword-hits-threshold`.
+
+3b. Run heuristic dataset risk audit:
+```bash
+PYTHONPATH=src .venv/bin/python -m llm.cli dataset-risk-report \
+  --input-dir data/cleaned \
+  --output artifacts/reports/dataset_risk.json
+```
+This reports lexical cues for toxicity, stereotypes, political content, and refusal-like phrases.
+Use it as a screening signal, then manually review high-risk segments.
 
 4. Train tokenizer on cleaned corpus:
 ```bash
@@ -220,6 +230,7 @@ bash scripts/hydrate_from_warm_storage.sh /mnt/ceph/llm/data
 - Text stats CLI for quick corpus sanity checks.
 - Batch corpus quality report generation (`corpus-quality-report`).
 - Batch corpus cleanup and dedupe (`clean-corpus-batch`).
+- Heuristic dataset risk auditing (`dataset-risk-report`).
 - Basic character-level tokenizer with train/save/load.
 - Token-window data pipeline (`TokenWindowDataset`) for next-token training pairs.
 - ZIM archive text extraction (`extract-zim-text`) for server-hosted `.zim` files.

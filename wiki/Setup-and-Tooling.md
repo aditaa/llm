@@ -28,6 +28,7 @@ make train-tokenizer-global
 make shard-corpus-batch
 make sync-warm
 make hydrate-warm
+make offload-zim
 ```
 
 `make sync-warm` now includes raw/training inputs (`data/raw_zim`, `data/fineweb`,

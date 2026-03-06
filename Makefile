@@ -4,7 +4,7 @@ ifneq ("$(wildcard .venv/bin/python)","")
 PYTHON=.venv/bin/python
 endif
 
-.PHONY: setup-dev setup-train doctor install-server-system test lint format typecheck smoke extract-zim train-tokenizer train-tokenizer-global corpus-quality-report clean-corpus-batch dataset-risk-report pull-hf-rows parquet-to-corpus fineweb-parquet-to-shards stage-fineweb-from-warm shard-corpus-batch verify-shards train generate sync-warm hydrate-warm publish-wiki
+.PHONY: setup-dev setup-train doctor install-server-system test lint format typecheck smoke extract-zim train-tokenizer train-tokenizer-global corpus-quality-report clean-corpus-batch dataset-risk-report pull-hf-rows parquet-to-corpus fineweb-parquet-to-shards stage-fineweb-from-warm shard-corpus-batch verify-shards train generate sync-warm hydrate-warm offload-zim publish-wiki
 
 setup-dev:
 	bash scripts/bootstrap_dev.sh
@@ -90,12 +90,16 @@ generate:
 	@echo "  PYTHONPATH=src $(PYTHON) -m llm.cli generate --checkpoint artifacts/checkpoints/<run_name>/last.pt --prompt 'Hello'"
 
 sync-warm:
-	@echo "Sync local extracted/shard/tokenizer artifacts to warm storage."
+	@echo "Sync local raw/training data + artifacts to warm storage."
 	@echo "Usage: bash scripts/sync_warm_storage.sh /mnt/ceph/llm/data"
 
 hydrate-warm:
 	@echo "Hydrate local hot workspace from warm storage cache."
 	@echo "Usage: bash scripts/hydrate_from_warm_storage.sh /mnt/ceph/llm/data"
+
+offload-zim:
+	@echo "Continuously move raw ZIMs from hot to warm storage."
+	@echo "Usage: bash scripts/zim_offload_worker.sh data/raw_zim /mnt/ceph/llm/data/raw_zim 120"
 
 publish-wiki:
 	@echo "Publish wiki pages from ./wiki to GitHub wiki repo."

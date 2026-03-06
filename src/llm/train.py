@@ -7,7 +7,7 @@ import random
 from dataclasses import asdict, dataclass
 from hashlib import sha256
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import numpy as np
 import torch
@@ -385,7 +385,7 @@ def run_training(config: TrainConfig) -> dict[str, Any]:
     if config.compile_model:
         if not hasattr(torch, "compile"):
             raise ValueError("compile_model requested but torch.compile is unavailable")
-        train_model = torch.compile(model, mode=config.compile_mode)
+        train_model = cast(torch.nn.Module, torch.compile(model, mode=config.compile_mode))
 
     train_sampler = ShardBatchSampler(
         shard_paths=info.train_shards,

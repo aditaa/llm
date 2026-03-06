@@ -41,6 +41,9 @@ make pull-hf-rows # print Hugging Face rows API pull helper usage
 make fineweb-parquet-to-shards # print direct FineWeb parquet->token-shards usage
 make stage-fineweb-from-warm # print warm->hot FineWeb chunk staging usage
 make shard-corpus-batch # print shared-tokenizer batch sharding usage
+make sync-warm   # sync raw/training data + artifacts to warm storage
+make hydrate-warm # hydrate hot workspace from warm storage
+make offload-zim # continuously move raw ZIMs hot -> warm
 make doctor      # verify binaries and Python deps
 ```
 

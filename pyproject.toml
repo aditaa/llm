@@ -22,6 +22,7 @@ train = [
   "matplotlib>=3.7.1",
   "numpy>=1.26",
   "pandas>=2.2.1",
+  "pyarrow>=15.0.0",
   "tqdm>=4.66.1",
 ]
 notebook = [

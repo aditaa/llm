@@ -260,6 +260,7 @@ def main() -> int:
     if tokenizer_in is not None:
         if not tokenizer_in.exists():
             raise FileNotFoundError(f"tokenizer-in not found: {tokenizer_in}")
+        tokenizer_in = tokenizer_in.resolve()
         tokenizer = load_tokenizer(tokenizer_in)
         tokenizer_path = tokenizer_in
         pass1_rows = 0
@@ -270,6 +271,7 @@ def main() -> int:
     else:
         if tokenizer_out is None:
             raise ValueError("tokenizer-out is required when tokenizer-in is not set")
+        tokenizer_out = tokenizer_out.resolve()
         pass1_rows = 0
         print(f"pass=1 action=train_tokenizer type=bpe parquet_files={len(parquet_files)}")
 

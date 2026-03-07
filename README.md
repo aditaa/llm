@@ -50,6 +50,7 @@ make smoke       # tiny CLI smoke check
 make verify-shards # print shard integrity check usage
 make train       # print baseline training command usage
 make generate    # print checkpoint text-generation command usage
+make eval-checkpoint # print standardized prompt-suite eval usage
 make train-tokenizer-global # print shared-tokenizer command usage
 make corpus-quality-report # print quality report command usage
 make clean-corpus-batch # print batch cleanup command usage
@@ -294,6 +295,14 @@ PYTHONPATH=src .venv/bin/python -m llm.cli generate \
   --temperature 0.9 \
   --top-k 50
 ```
+
+10. Run standardized checkpoint eval (fixed prompt suite + scored report):
+```bash
+PYTHONPATH=src .venv/bin/python scripts/eval_checkpoint_prompts.py \
+  --checkpoint artifacts/checkpoints/medlineplus_baseline/last.pt \
+  --suite configs/eval/standard_prompt_suite_v1.json
+```
+Writes a JSON report under `artifacts/reports/evals/` so runs can be compared over time.
 
 ## FineWeb-Only First-Pass Training
 Use this when you want round-1 pretraining only from FineWeb (no ZIM mix yet):

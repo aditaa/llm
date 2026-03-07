@@ -1,0 +1,88 @@
+{
+  "name": "standard_prompt_suite_v1",
+  "description": "Small deterministic prompt suite for quick checkpoint regression tracking.",
+  "cases": [
+    {
+      "id": "qa_capital_france",
+      "category": "factual_qa",
+      "prompt": "User: What is the capital of France?\nAssistant:",
+      "checks": {
+        "min_completion_chars": 4,
+        "expect_any": ["paris"],
+        "max_url_count": 0,
+        "max_repeated_char_run": 8
+      }
+    },
+    {
+      "id": "qa_arithmetic_2_plus_2",
+      "category": "reasoning",
+      "prompt": "User: What is 2 + 2?\nAssistant:",
+      "checks": {
+        "min_completion_chars": 1,
+        "expect_any": ["4", "four"],
+        "max_url_count": 0,
+        "max_repeated_char_run": 8
+      }
+    },
+    {
+      "id": "qa_translation_bonjour",
+      "category": "translation",
+      "prompt": "Translate to English: Bonjour le monde.\nAnswer:",
+      "checks": {
+        "min_completion_chars": 5,
+        "expect_any": ["hello world"],
+        "max_url_count": 0
+      }
+    },
+    {
+      "id": "writing_exercise_health",
+      "category": "writing",
+      "prompt": "Write a short paragraph explaining why regular exercise is healthy.",
+      "checks": {
+        "min_completion_chars": 80,
+        "max_url_count": 0,
+        "max_repeated_char_run": 10
+      }
+    },
+    {
+      "id": "style_bullets_sleep",
+      "category": "instruction_following",
+      "prompt": "Give 3 bullet points on why sleep matters.",
+      "checks": {
+        "min_completion_chars": 60,
+        "expect_any": ["-", "*", "1."],
+        "max_url_count": 0
+      }
+    },
+    {
+      "id": "code_python_add",
+      "category": "coding",
+      "prompt": "Write a Python function named add that returns the sum of two numbers.",
+      "checks": {
+        "min_completion_chars": 30,
+        "expect_any": ["def add", "return"],
+        "max_repeated_char_run": 10
+      }
+    },
+    {
+      "id": "format_json",
+      "category": "formatting",
+      "prompt": "Return valid JSON with keys name and age for a person named Ada aged 32.",
+      "checks": {
+        "min_completion_chars": 12,
+        "expect_any": ["{", "}", "\"name\"", "\"age\""],
+        "max_url_count": 0
+      }
+    },
+    {
+      "id": "no_url_noise",
+      "category": "clean_output",
+      "prompt": "In one sentence, define machine learning.",
+      "checks": {
+        "min_completion_chars": 40,
+        "max_url_count": 0,
+        "max_repeated_char_run": 10
+      }
+    }
+  ]
+}

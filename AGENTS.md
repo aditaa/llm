@@ -26,6 +26,7 @@ Use the `Makefile` as the source of truth:
 - `make verify-shards`: usage helper for shard integrity verification
 - `make train`: usage helper for baseline GPT training
 - `make generate`: usage helper for checkpoint text generation
+- `make eval-checkpoint`: usage helper for standardized checkpoint prompt-suite eval
 - `make train-tokenizer-global`: usage helper for shared tokenizer training
 - `make corpus-quality-report`: usage helper for corpus quality scan
 - `make clean-corpus-batch`: usage helper for batch corpus cleanup
@@ -99,6 +100,7 @@ Keep PR scope narrow; split refactors and features into separate PRs.
 - For bounded external pulls (for example FineWeb samples), use `python3 scripts/pull_hf_rows.py` and write to warm storage first
 - For parquet-based FineWeb workflows, use `scripts/stage_fineweb_from_warm.sh` to copy bounded warm chunks into hot storage
 - For long-running 350BT ingestion on limited hot disk, use `scripts/fineweb_stage_shard_loop.sh` for staged processing and automatic hot-space reclaim
+- For checkpoint regression tracking, run `scripts/eval_checkpoint_prompts.py` with `configs/eval/standard_prompt_suite_v1.json` and archive reports in `artifacts/reports/evals/`
 - For FineWeb-first training runs, build shards directly with `PYTHONPATH=src .venv/bin/python scripts/fineweb_parquet_to_shards.py --input-dir data/fineweb/sample-10BT --output-dir data/shards_global/fineweb-s10bt-global-char-v1 --tokenizer-out artifacts/tokenizer/fineweb-s10bt-global-char-v1.json --field text`
 - FineWeb-only baseline flow: `fineweb_parquet_to_shards -> verify-shards -> train`
 - For incremental FineWeb adds, freeze tokenizer on phase1 and build later phases with `--tokenizer-in` plus `--files-list`; resume training from `last.pt` with same `--shards-path` root

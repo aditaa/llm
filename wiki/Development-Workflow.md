@@ -38,6 +38,17 @@ make test
 make smoke
 ```
 
+## Checkpoint Eval Baseline
+Run a fixed prompt-suite eval after each major training run:
+
+```bash
+PYTHONPATH=src .venv/bin/python scripts/eval_checkpoint_prompts.py \
+  --checkpoint artifacts/checkpoints/<run>/last.pt \
+  --suite configs/eval/standard_prompt_suite_v1.json
+```
+
+This writes scored JSON reports to `artifacts/reports/evals/` for run-to-run comparison.
+
 ## Wiki Maintenance
 When docs change in repo:
 1. Update pages in `wiki/`.

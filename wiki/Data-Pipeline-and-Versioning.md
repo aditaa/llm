@@ -2,9 +2,10 @@
 
 ## Pipeline Stages
 1. Extract text from `.zim` archives.
-2. Train tokenizer vocabulary.
-3. Shard tokenized corpus to train/val binary files.
-4. Train model from shard manifests.
+2. Clean/filter corpus (`clean-corpus-batch`) with English + noise gates.
+3. Train tokenizer vocabulary.
+4. Shard tokenized corpus to train/val binary files.
+5. Train model from shard manifests.
 
 FineWeb-first fast path (preferred for first build):
 1. Download FineWeb parquet shards.
@@ -14,8 +15,9 @@ FineWeb-first fast path (preferred for first build):
 ## Commands
 ```bash
 PYTHONPATH=src .venv/bin/python -m llm.cli extract-zim-text --input-zim /path/file.zim --output /path/corpus.txt
-PYTHONPATH=src .venv/bin/python -m llm.cli train-tokenizer --input /path/corpus.txt --output /path/vocab.json --bpe-vocab-size 32000 --bpe-min-frequency 2
-PYTHONPATH=src .venv/bin/python -m llm.cli shard-corpus --input /path/corpus.txt --tokenizer /path/vocab.json --output-dir /path/shards
+PYTHONPATH=src .venv/bin/python -m llm.cli clean-corpus-batch --input-dir /path/extracted --output-dir /path/cleaned --en-only
+PYTHONPATH=src .venv/bin/python -m llm.cli train-tokenizer --input /path/cleaned/corpus.clean.txt --output /path/vocab.json --bpe-vocab-size 32000 --bpe-min-frequency 2
+PYTHONPATH=src .venv/bin/python -m llm.cli shard-corpus --input /path/cleaned/corpus.clean.txt --tokenizer /path/vocab.json --output-dir /path/shards
 PYTHONPATH=src .venv/bin/python -m llm.cli train --shards-path /path/shards --output-dir /path/checkpoints --precision auto
 ```
 
@@ -28,8 +30,8 @@ PYTHONPATH=src .venv/bin/python -m llm.cli dataset-risk-report \
 
 Shared tokenizer workflow for multi-dataset training:
 ```bash
-PYTHONPATH=src .venv/bin/python -m llm.cli train-tokenizer-global --input-dir data/extracted --from-shards-path data/shards --output artifacts/tokenizer/global-bpe-v1.json --bpe-vocab-size 32000 --bpe-min-frequency 2
-PYTHONPATH=src .venv/bin/python -m llm.cli shard-corpus-batch --input-dir data/extracted --from-shards-path data/shards --tokenizer artifacts/tokenizer/global-bpe-v1.json --output-root data/shards_global/global-bpe-v1
+PYTHONPATH=src .venv/bin/python -m llm.cli train-tokenizer-global --input-dir data/cleaned --pattern "*.clean.txt" --from-shards-path data/shards --output artifacts/tokenizer/global-bpe-v1.json --bpe-vocab-size 32000 --bpe-min-frequency 2
+PYTHONPATH=src .venv/bin/python -m llm.cli shard-corpus-batch --input-dir data/cleaned --pattern "*.clean.txt" --from-shards-path data/shards --tokenizer artifacts/tokenizer/global-bpe-v1.json --output-root data/shards_global/global-bpe-v1
 PYTHONPATH=src .venv/bin/python -m llm.cli train --shards-path data/shards_global/global-bpe-v1 --output-dir artifacts/checkpoints/global-bpe-v1
 
 Throughput tuning notes:
@@ -136,4 +138,5 @@ For FineWeb shard manifests, run without `--raw-zim-dir`.
 - Switch training to new manifest only after smoke validation.
 - Delete stale extracted/shards only when space is needed.
 - Train on tokenizer-compatible shard sets only (same tokenizer mapping across selected manifests).
+- Manifest compatibility checks include `tokenizer_hash` and `tokenizer_contract_hash`.
 - For no-fulltext ZIM files, generate `--paths-file` from suggestion/title index and use it for extraction.

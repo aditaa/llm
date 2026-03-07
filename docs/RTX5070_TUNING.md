@@ -5,6 +5,7 @@ GPU: NVIDIA GeForce RTX 5070 Ti Laptop GPU (12,227 MiB)
 
 ## Scope
 - Dataset: `data/shards_global/fineweb-global-bpe-v1`
+- Model architecture: `gpt_rope_rmsnorm_swiglu_v1` (default)
 - Precision mode: `--precision auto` (bf16 on this GPU)
 - Allocator: `PYTORCH_ALLOC_CONF=expandable_segments:True`
 

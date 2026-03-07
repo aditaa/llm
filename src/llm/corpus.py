@@ -6,6 +6,7 @@ import hashlib
 import html
 import json
 import re
+import string
 import unicodedata as ud
 from collections import Counter
 from dataclasses import dataclass
@@ -15,6 +16,8 @@ from typing import Any
 _WS_RE = re.compile(r"\s+")
 _HTML_TAG_RE = re.compile(r"</?[A-Za-z][^>\n]{0,200}>")
 _WORD_RE = re.compile(r"[A-Za-z']+")
+_TOKEN_RE = re.compile(r"[A-Za-z0-9_']+")
+_URL_RE = re.compile(r"https?://|www\.", re.IGNORECASE)
 _SITE_SUFFIX_RE = re.compile(r"\s+-\s*(stack overflow|stack exchange)\b", re.IGNORECASE)
 _STACK_SHELL_RE = re.compile(
     r"\bstack overflow stack exchange\b.*?\bpublic questions tags users about\b",
@@ -149,8 +152,13 @@ class CorpusQualityConfig:
 class CleanCorpusConfig:
     min_chars: int = 40
     max_chars: int = 0
+    min_words: int = 6
     min_alpha_ratio: float = 0.20
     max_digit_ratio: float = 0.35
+    max_symbol_ratio: float = 0.20
+    max_urls_per_line: int = 1
+    repeated_token_run_threshold: int = 8
+    min_unique_token_ratio: float = 0.35
     dedupe_within_file: bool = True
     dedupe_global: bool = False
     max_lines_per_file: int = 0
@@ -189,6 +197,43 @@ def _digit_ratio(text: str) -> float:
         return 0.0
     digits = sum(1 for c in text if c.isdigit())
     return digits / len(text)
+
+
+def _word_count(text: str) -> int:
+    return len(_WORD_RE.findall(text))
+
+
+def _symbol_ratio(text: str) -> float:
+    if not text:
+        return 0.0
+    symbols = sum(1 for c in text if c in string.punctuation and c not in {"'", "-"})
+    return symbols / len(text)
+
+
+def _url_count(text: str) -> int:
+    return len(_URL_RE.findall(text))
+
+
+def _is_repetitive_token_noise(text: str, config: CleanCorpusConfig) -> bool:
+    tokens = _TOKEN_RE.findall(text.lower())
+    if not tokens:
+        return False
+
+    if len(tokens) >= config.repeated_token_run_threshold:
+        run = 1
+        for idx in range(1, len(tokens)):
+            if tokens[idx] == tokens[idx - 1]:
+                run += 1
+                if run >= config.repeated_token_run_threshold:
+                    return True
+            else:
+                run = 1
+
+    if len(tokens) >= 12:
+        unique_ratio = len(set(tokens)) / len(tokens)
+        if unique_ratio < config.min_unique_token_ratio:
+            return True
+    return False
 
 
 def _strip_web_shell(text: str, config: CleanCorpusConfig) -> str:
@@ -441,10 +486,20 @@ def clean_corpora_batch(
         raise ValueError("min_chars must be >= 0")
     if config.max_chars < 0:
         raise ValueError("max_chars must be >= 0")
+    if config.min_words < 0:
+        raise ValueError("min_words must be >= 0")
     if not 0.0 <= config.min_alpha_ratio <= 1.0:
         raise ValueError("min_alpha_ratio must be in [0, 1]")
     if not 0.0 <= config.max_digit_ratio <= 1.0:
         raise ValueError("max_digit_ratio must be in [0, 1]")
+    if not 0.0 <= config.max_symbol_ratio <= 1.0:
+        raise ValueError("max_symbol_ratio must be in [0, 1]")
+    if config.max_urls_per_line < 0:
+        raise ValueError("max_urls_per_line must be >= 0")
+    if config.repeated_token_run_threshold < 2:
+        raise ValueError("repeated_token_run_threshold must be >= 2")
+    if not 0.0 <= config.min_unique_token_ratio <= 1.0:
+        raise ValueError("min_unique_token_ratio must be in [0, 1]")
     if config.max_lines_per_file < 0:
         raise ValueError("max_lines_per_file must be >= 0")
     if config.english_min_words < 0:
@@ -472,8 +527,12 @@ def clean_corpora_batch(
         "removed_empty": 0,
         "removed_too_short": 0,
         "removed_too_long": 0,
+        "removed_too_few_words": 0,
         "removed_low_alpha": 0,
         "removed_high_digit": 0,
+        "removed_high_symbol": 0,
+        "removed_url_heavy": 0,
+        "removed_repetitive_noise": 0,
         "removed_boilerplate": 0,
         "removed_non_english": 0,
         "removed_code_like": 0,
@@ -501,8 +560,12 @@ def clean_corpora_batch(
             "empty": 0,
             "too_short": 0,
             "too_long": 0,
+            "too_few_words": 0,
             "low_alpha": 0,
             "high_digit": 0,
+            "high_symbol": 0,
+            "url_heavy": 0,
+            "repetitive_noise": 0,
             "boilerplate": 0,
             "non_english": 0,
             "code_like": 0,
@@ -547,6 +610,11 @@ def clean_corpora_batch(
                     totals["removed_high_digit"] += 1
                     continue
 
+                if _url_count(line) > config.max_urls_per_line:
+                    removed["url_heavy"] += 1
+                    totals["removed_url_heavy"] += 1
+                    continue
+
                 if _alpha_ratio(line) < config.min_alpha_ratio:
                     removed["low_alpha"] += 1
                     totals["removed_low_alpha"] += 1
@@ -560,6 +628,21 @@ def clean_corpora_batch(
                 if config.drop_code_like and _is_code_like(line, config):
                     removed["code_like"] += 1
                     totals["removed_code_like"] += 1
+                    continue
+
+                if _symbol_ratio(line) > config.max_symbol_ratio:
+                    removed["high_symbol"] += 1
+                    totals["removed_high_symbol"] += 1
+                    continue
+
+                if _is_repetitive_token_noise(line, config):
+                    removed["repetitive_noise"] += 1
+                    totals["removed_repetitive_noise"] += 1
+                    continue
+
+                if _word_count(line) < config.min_words:
+                    removed["too_few_words"] += 1
+                    totals["removed_too_few_words"] += 1
                     continue
 
                 digest = hashlib.blake2b(line.encode("utf-8"), digest_size=16).hexdigest()
@@ -597,8 +680,13 @@ def clean_corpora_batch(
         "config": {
             "min_chars": config.min_chars,
             "max_chars": config.max_chars,
+            "min_words": config.min_words,
             "min_alpha_ratio": config.min_alpha_ratio,
             "max_digit_ratio": config.max_digit_ratio,
+            "max_symbol_ratio": config.max_symbol_ratio,
+            "max_urls_per_line": config.max_urls_per_line,
+            "repeated_token_run_threshold": config.repeated_token_run_threshold,
+            "min_unique_token_ratio": config.min_unique_token_ratio,
             "dedupe_within_file": config.dedupe_within_file,
             "dedupe_global": config.dedupe_global,
             "max_lines_per_file": config.max_lines_per_file,

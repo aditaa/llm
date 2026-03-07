@@ -88,11 +88,13 @@ Keep PR scope narrow; split refactors and features into separate PRs.
 - If extraction still returns `written_articles=0`, retry with a lower `--min-chars` (for example `20`)
 - For ZIMs without fulltext index, generate a paths list from suggestion/title index and run `extract-zim-text --paths-file ...`
 - `llm.cli train` requires a tokenizer-compatible shard set (same tokenizer mapping across all selected manifests)
+- Shard manifests now record `tokenizer_hash` + `tokenizer_contract_hash`; do not mix manifests with mismatched values
 - Preferred multi-dataset flow: `train-tokenizer-global` -> `shard-corpus-batch` -> `train`
 - Preferred pre-tokenization flow: `corpus-quality-report` -> `clean-corpus-batch` -> `train-tokenizer-global`
 - Run `dataset-risk-report` on cleaned corpora before tokenizer training and manually review flagged slices
-- For English-only runs, enable `clean-corpus-batch --en-only` before tokenizer training
+- Prefer `clean-corpus-batch --en-only` for first-pass talking runs
 - For talking-only runs, keep `clean-corpus-batch` code-like filtering enabled (default)
+- Cleanup defaults also enforce min words, URL density, symbol density, and repetitive-token filters
 - Use `bash scripts/sync_warm_storage.sh /mnt/ceph/llm/data` to copy local artifacts to warm storage
 - `sync_warm_storage.sh` covers raw + training data: `data/raw_zim`, `data/fineweb`, `data/cleaned`, `data/extracted`, `data/shards`, `data/shards_global`, `artifacts/tokenizer`, `artifacts/checkpoints`, `artifacts/reports`
 - Use `bash scripts/zim_offload_worker.sh data/raw_zim /mnt/ceph/llm/data/raw_zim 120` for continuous hot->warm raw ZIM offload
@@ -107,6 +109,7 @@ Keep PR scope narrow; split refactors and features into separate PRs.
 - On this 20-core server, use 15 parallel streams for split shard-build runs
 - For CUDA training throughput, prefer `llm.cli train --precision auto` (disable TF32 only if needed with `--no-tf32`)
 - If GPU utilization stays bursty, try `llm.cli train --compile-model --compile-mode reduce-overhead`
+- Default training architecture is `gpt_rope_rmsnorm_swiglu_v1`; use legacy profile only for old checkpoint compatibility
 - RTX 5070 tuned training profiles live in `configs/train/rtx5070/`; preferred BPE launcher: `bash scripts/train_rtx5070_fineweb_bpe_v1_big.sh`
 - Version extracted/tokenized/sharded outputs with the ZIM date stamp (for example `serverfault_2025-08`)
 - Keep raw ZIM archives in `/mnt/ceph/llm/data/raw_zim/`

@@ -11,9 +11,10 @@ Pipeline progression:
 
 Current implemented modules:
 - `src/llm/zim.py`: ZIM extraction helpers
-- `src/llm/tokenizer.py`: tokenizer training/save/load
+- `src/llm/tokenizer.py`: BPE tokenizer training/save/load + contract hashing
 - `src/llm/data.py`: token window dataset scaffolding
-- `src/llm/sharding.py`: shard writing + manifest generation
+- `src/llm/sharding.py`: shard writing + manifest generation with tokenizer hash enforcement
+- `src/llm/model.py`: modern GPT block stack (RoPE + RMSNorm + SwiGLU)
 - `src/llm/cli.py`: operational commands
 
 ## Roadmap Phases
@@ -22,10 +23,10 @@ Current implemented modules:
 - Tokenizer baseline + tests
 - Data prep commands + sharding + manifests
 
-### Phase 2 (In Progress)
+### Phase 2 (Done)
 - Model forward pass and loss computation
 - Training loop with checkpoint save/resume
-- Basic validation metrics
+- Basic validation metrics + generation path
 
 ### Phase 3
 - Sampling strategies (greedy, top-k, top-p)

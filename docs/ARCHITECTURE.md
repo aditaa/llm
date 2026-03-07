@@ -10,10 +10,12 @@
 
 ## Current Scope
 - Tokenizer baseline: byte-level BPE tokenizer in `src/llm/tokenizer.py`
+- Tokenizer contract hashing (`tokenizer_hash`, `tokenizer_contract_hash`) enforced in sharding/training/integrity
 - Data inspection: corpus stats CLI in `src/llm/cli.py`
-- Model config scaffold: `src/llm/model.py`
+- Model baseline in `src/llm/model.py`: RoPE + RMSNorm + SwiGLU (`gpt_rope_rmsnorm_swiglu_v1`)
+- Legacy checkpoint compatibility path: `gpt_learnedpos_layernorm_gelu_v0`
 
 ## Planned Extensions
-- Attention mask and positional encodings
-- Trainer module with optimizer, scheduler, and gradient clipping
-- Evaluation module with perplexity and sample generation reports
+- Expanded eval benchmark suite and checkpoint regression tracking
+- Larger-context training profiles + throughput benchmarks
+- Fine-tuning/instruction-data training flows

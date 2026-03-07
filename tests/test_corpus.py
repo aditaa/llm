@@ -266,6 +266,77 @@ class CorpusCleaningTests(unittest.TestCase):
             self.assertEqual(out_lines, [plain])
             self.assertEqual(report["totals"]["removed_code_like"], 1)
 
+    def test_clean_corpora_batch_drops_repetitive_noise_lines(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            input_dir = root / "input"
+            output_dir = root / "output"
+            input_dir.mkdir(parents=True, exist_ok=True)
+
+            valid = (
+                "This sentence explains how to safely rotate backups and "
+                "validate restore steps."
+            )
+            repetitive = "a a a a a a a a a a a a a a a a a a a a a a a a"
+            (input_dir / "a.txt").write_text(
+                "\n".join([valid, repetitive]) + "\n",
+                encoding="utf-8",
+            )
+
+            report = clean_corpora_batch(
+                input_files=[input_dir / "a.txt"],
+                output_dir=output_dir,
+                config=CleanCorpusConfig(
+                    min_chars=20,
+                    min_words=6,
+                    max_symbol_ratio=0.20,
+                    max_urls_per_line=1,
+                    repeated_token_run_threshold=8,
+                    min_unique_token_ratio=0.35,
+                ),
+                boilerplate_lines=set(),
+            )
+            out_lines = (output_dir / "a.clean.txt").read_text(encoding="utf-8").splitlines()
+            self.assertEqual(out_lines, [valid])
+            self.assertEqual(report["totals"]["removed_repetitive_noise"], 1)
+
+    def test_clean_corpora_batch_drops_url_heavy_lines(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            input_dir = root / "input"
+            output_dir = root / "output"
+            input_dir.mkdir(parents=True, exist_ok=True)
+
+            valid = (
+                "This paragraph describes filesystem snapshots and retention "
+                "policies in plain English."
+            )
+            noisy = (
+                "Useful references https://a.example/docs https://b.example/wiki "
+                "https://c.example/faq for browsing."
+            )
+            (input_dir / "a.txt").write_text(
+                "\n".join([valid, noisy]) + "\n",
+                encoding="utf-8",
+            )
+
+            report = clean_corpora_batch(
+                input_files=[input_dir / "a.txt"],
+                output_dir=output_dir,
+                config=CleanCorpusConfig(
+                    min_chars=20,
+                    min_words=6,
+                    max_symbol_ratio=0.20,
+                    max_urls_per_line=1,
+                    repeated_token_run_threshold=8,
+                    min_unique_token_ratio=0.35,
+                ),
+                boilerplate_lines=set(),
+            )
+            out_lines = (output_dir / "a.clean.txt").read_text(encoding="utf-8").splitlines()
+            self.assertEqual(out_lines, [valid])
+            self.assertEqual(report["totals"]["removed_url_heavy"], 1)
+
 
 if __name__ == "__main__":
     unittest.main()

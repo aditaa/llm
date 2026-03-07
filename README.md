@@ -132,7 +132,8 @@ PYTHONPATH=src .venv/bin/python -m llm.cli corpus-quality-report \
 PYTHONPATH=src .venv/bin/python -m llm.cli clean-corpus-batch \
   --input-dir data/extracted \
   --output-dir data/cleaned \
-  --boilerplate-report artifacts/reports/corpus_quality.json
+  --boilerplate-report artifacts/reports/corpus_quality.json \
+  --en-only
 ```
 By default this cleanup step also decodes HTML entities and strips common web-shell artifacts
 (HTML-like tags, repeated nav/menu phrases, site suffixes such as `- Stack Overflow`).
@@ -143,6 +144,11 @@ Disable individual transforms with:
 To enforce English-only cleanup, add `--en-only` (with tunable thresholds:
 `--en-min-words`, `--en-min-stopword-ratio`, `--en-min-stopword-count`,
 `--en-min-latin-ratio`).
+Additional quality guards are enabled by default:
+- minimum words per line (`--min-words`, default `6`)
+- symbol-density filter (`--max-symbol-ratio`, default `0.20`)
+- URL-heavy line filter (`--max-urls-per-line`, default `1`)
+- repetitive-token noise filter (`--repeated-token-run-threshold`, default `8`)
 For talking-only passes, keep code filtering enabled (default) or tune with:
 `--code-symbol-ratio-threshold` and `--code-keyword-hits-threshold`.
 
@@ -441,20 +447,21 @@ bash scripts/hydrate_from_warm_storage.sh /mnt/ceph/llm/data
 - Batch corpus cleanup and dedupe (`clean-corpus-batch`).
 - Heuristic dataset risk auditing (`dataset-risk-report`).
 - Direct FineWeb parquet -> tokenizer -> shard pipeline (`scripts/fineweb_parquet_to_shards.py`).
-- Character and BPE tokenizer support with train/save/load.
+- BPE tokenizer workflow with train/save/load + contract fingerprinting.
 - Token-window data pipeline (`TokenWindowDataset`) for next-token training pairs.
 - ZIM archive text extraction (`extract-zim-text`) for server-hosted `.zim` files.
   - Automatically falls back to suggestion-index paths if fulltext search returns no matches.
 - Corpus sharding (`shard-corpus`) into train/val token shard binaries + manifest.
 - Batch corpus sharding (`shard-corpus-batch`) with one shared tokenizer.
 - Baseline GPT training (`train`) with checkpoint save/resume.
+  - Default architecture: RoPE + RMSNorm + SwiGLU (`gpt_rope_rmsnorm_swiglu_v1`).
 - Checkpoint-based text generation (`generate`) with temperature/top-k sampling.
 - Unit tests for tokenizer round-trips and unknown token behavior.
 
 ## Next Milestones
-1. Implement GPT-style transformer blocks in `src/llm/model.py`.
-2. Add a first training loop and checkpointing.
-3. Add validation metrics (loss, perplexity) and text generation.
+1. Expand checkpoint eval suite and track regressions in CI.
+2. Add tokenizer-aware dataset manifests for long-running incremental FineWeb phases.
+3. Add larger-context training profiles and memory/throughput benchmarking.
 4. Add finetuning flows for classification and instruction datasets.
 
 ## References

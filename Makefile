@@ -42,11 +42,11 @@ extract-zim:
 
 train-tokenizer:
 	@echo "Usage:"
-	@echo "  PYTHONPATH=src $(PYTHON) -m llm.cli train-tokenizer --input data/extracted/corpus.txt --output artifacts/tokenizer/vocab.json --bpe-vocab-size 32000"
+	@echo "  PYTHONPATH=src $(PYTHON) -m llm.cli train-tokenizer --input data/cleaned/corpus.clean.txt --output artifacts/tokenizer/vocab.json --bpe-vocab-size 32000"
 
 train-tokenizer-global:
 	@echo "Usage:"
-	@echo "  PYTHONPATH=src $(PYTHON) -m llm.cli train-tokenizer-global --input-dir data/extracted --from-shards-path data/shards --output artifacts/tokenizer/global-bpe-v1.json --bpe-vocab-size 32000"
+	@echo "  PYTHONPATH=src $(PYTHON) -m llm.cli train-tokenizer-global --input-dir data/cleaned --pattern '*.clean.txt' --from-shards-path data/shards --output artifacts/tokenizer/global-bpe-v1.json --bpe-vocab-size 32000"
 
 corpus-quality-report:
 	@echo "Usage:"
@@ -54,7 +54,7 @@ corpus-quality-report:
 
 clean-corpus-batch:
 	@echo "Usage:"
-	@echo "  PYTHONPATH=src $(PYTHON) -m llm.cli clean-corpus-batch --input-dir data/extracted --output-dir data/cleaned --boilerplate-report artifacts/reports/corpus_quality.json"
+	@echo "  PYTHONPATH=src $(PYTHON) -m llm.cli clean-corpus-batch --input-dir data/extracted --output-dir data/cleaned --boilerplate-report artifacts/reports/corpus_quality.json --en-only"
 
 dataset-risk-report:
 	@echo "Usage:"
@@ -82,7 +82,7 @@ fineweb-stage-shard-loop:
 
 shard-corpus-batch:
 	@echo "Usage:"
-	@echo "  PYTHONPATH=src $(PYTHON) -m llm.cli shard-corpus-batch --input-dir data/extracted --from-shards-path data/shards --tokenizer artifacts/tokenizer/global-bpe-v1.json --output-root data/shards_global/global-bpe-v1"
+	@echo "  PYTHONPATH=src $(PYTHON) -m llm.cli shard-corpus-batch --input-dir data/cleaned --pattern '*.clean.txt' --from-shards-path data/shards --tokenizer artifacts/tokenizer/global-bpe-v1.json --output-root data/shards_global/global-bpe-v1"
 
 verify-shards:
 	@echo "Usage:"

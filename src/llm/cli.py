@@ -235,8 +235,13 @@ def cmd_clean_corpus_batch(
     boilerplate_report: str | None,
     min_chars: int,
     max_chars: int,
+    min_words: int,
     min_alpha_ratio: float,
     max_digit_ratio: float,
+    max_symbol_ratio: float,
+    max_urls_per_line: int,
+    repeated_token_run_threshold: int,
+    min_unique_token_ratio: float,
     dedupe_within_file: bool,
     dedupe_global: bool,
     skip_existing: bool,
@@ -278,8 +283,13 @@ def cmd_clean_corpus_batch(
         config=CleanCorpusConfig(
             min_chars=min_chars,
             max_chars=max_chars,
+            min_words=min_words,
             min_alpha_ratio=min_alpha_ratio,
             max_digit_ratio=max_digit_ratio,
+            max_symbol_ratio=max_symbol_ratio,
+            max_urls_per_line=max_urls_per_line,
+            repeated_token_run_threshold=repeated_token_run_threshold,
+            min_unique_token_ratio=min_unique_token_ratio,
             dedupe_within_file=dedupe_within_file,
             dedupe_global=dedupe_global,
             max_lines_per_file=max_lines_per_file,
@@ -315,8 +325,12 @@ def cmd_clean_corpus_batch(
     print(f"removed_empty={totals['removed_empty']}")
     print(f"removed_too_short={totals['removed_too_short']}")
     print(f"removed_too_long={totals['removed_too_long']}")
+    print(f"removed_too_few_words={totals['removed_too_few_words']}")
     print(f"removed_low_alpha={totals['removed_low_alpha']}")
     print(f"removed_high_digit={totals['removed_high_digit']}")
+    print(f"removed_high_symbol={totals['removed_high_symbol']}")
+    print(f"removed_url_heavy={totals['removed_url_heavy']}")
+    print(f"removed_repetitive_noise={totals['removed_repetitive_noise']}")
     print(f"removed_boilerplate={totals['removed_boilerplate']}")
     print(f"removed_non_english={totals['removed_non_english']}")
     print(f"removed_code_like={totals['removed_code_like']}")
@@ -650,7 +664,7 @@ def parse_args() -> argparse.Namespace:
     )
     global_tok_parser.add_argument("--input-dir", required=True, help="Directory of corpus files")
     global_tok_parser.add_argument("--output", required=True, help="Output global vocab JSON path")
-    global_tok_parser.add_argument("--pattern", default="*.txt", help="Glob pattern")
+    global_tok_parser.add_argument("--pattern", default="*.clean.txt", help="Glob pattern")
     global_tok_parser.add_argument(
         "--exclude-pattern",
         action="append",
@@ -802,6 +816,12 @@ def parse_args() -> argparse.Namespace:
     clean_parser.add_argument("--min-chars", type=int, default=40, help="Minimum kept line length")
     clean_parser.add_argument("--max-chars", type=int, default=0, help="Maximum kept line length")
     clean_parser.add_argument(
+        "--min-words",
+        type=int,
+        default=6,
+        help="Minimum kept line word count",
+    )
+    clean_parser.add_argument(
         "--min-alpha-ratio",
         type=float,
         default=0.20,
@@ -812,6 +832,30 @@ def parse_args() -> argparse.Namespace:
         type=float,
         default=0.35,
         help="Drop lines with higher digit-char ratio",
+    )
+    clean_parser.add_argument(
+        "--max-symbol-ratio",
+        type=float,
+        default=0.20,
+        help="Drop lines with higher punctuation/symbol ratio",
+    )
+    clean_parser.add_argument(
+        "--max-urls-per-line",
+        type=int,
+        default=1,
+        help="Drop lines containing more than this many URLs",
+    )
+    clean_parser.add_argument(
+        "--repeated-token-run-threshold",
+        type=int,
+        default=8,
+        help="Drop lines with repeated identical token runs of this length",
+    )
+    clean_parser.add_argument(
+        "--min-unique-token-ratio",
+        type=float,
+        default=0.35,
+        help="Drop lines if unique-token ratio falls below this value",
     )
     clean_parser.add_argument(
         "--no-dedupe-within-file",
@@ -990,7 +1034,7 @@ def parse_args() -> argparse.Namespace:
         required=True,
         help="Output root; each corpus gets output-root/<stem>/manifest.json",
     )
-    shard_batch_parser.add_argument("--pattern", default="*.txt", help="Glob pattern")
+    shard_batch_parser.add_argument("--pattern", default="*.clean.txt", help="Glob pattern")
     shard_batch_parser.add_argument(
         "--exclude-pattern",
         action="append",
@@ -1252,8 +1296,13 @@ def main() -> int:
             boilerplate_report=args.boilerplate_report,
             min_chars=args.min_chars,
             max_chars=args.max_chars,
+            min_words=args.min_words,
             min_alpha_ratio=args.min_alpha_ratio,
             max_digit_ratio=args.max_digit_ratio,
+            max_symbol_ratio=args.max_symbol_ratio,
+            max_urls_per_line=args.max_urls_per_line,
+            repeated_token_run_threshold=args.repeated_token_run_threshold,
+            min_unique_token_ratio=args.min_unique_token_ratio,
             dedupe_within_file=not args.no_dedupe_within_file,
             dedupe_global=args.dedupe_global,
             skip_existing=not args.no_skip_existing,

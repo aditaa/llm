@@ -1,6 +1,21 @@
 # LLM From Scratch
 
-This repository is the base for building a decoder-only language model from first principles, with clear milestones for data prep, tokenization, model training, evaluation, and inference.
+[![CI](https://github.com/aditaa/llm/actions/workflows/ci.yml/badge.svg)](https://github.com/aditaa/llm/actions/workflows/ci.yml)
+[![Wiki Sync](https://github.com/aditaa/llm/actions/workflows/wiki-sync.yml/badge.svg)](https://github.com/aditaa/llm/actions/workflows/wiki-sync.yml)
+[![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white)](#)
+
+Production-style, decoder-only LLM engineering project focused on reproducible data pipelines, tokenizer/sharding workflows, and GPU training from scratch.
+
+## About
+- Scope: end-to-end LLM workflow from raw corpora to checkpoints and generation.
+- Data focus: ZIM + FineWeb workflows with hot (`./data`) and warm (`/mnt/ceph/llm/data`) storage patterns.
+- Engineering focus: deterministic scripts, integrity checks, CI gating, and wiki-backed docs.
+
+## Quick Links
+- Wiki: [`wiki/`](wiki)
+- Setup: [`docs/SERVER_SETUP.md`](docs/SERVER_SETUP.md)
+- RTX 5070 tuning: [`docs/RTX5070_TUNING.md`](docs/RTX5070_TUNING.md)
+- Contributor guide: [`AGENTS.md`](AGENTS.md)
 
 ## Project Goals
 - Build a minimal but production-style training stack incrementally.

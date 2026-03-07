@@ -1,6 +1,11 @@
 # LLM From Scratch Wiki
 
-This wiki is the operational documentation for the `llm` repository.
+Operational docs for the `llm` repository, focused on reproducible data prep, tokenizer/sharding pipelines, and GPU training.
+
+## About
+- Decoder-only LLM project built from scratch.
+- Emphasis on engineering reliability: CI gate, integrity checks, and versioned data flows.
+- Hot/warm storage model for large corpora (`./data` + `/mnt/ceph/llm/data`).
 
 ## What This Project Does
 - Builds a decoder-only LLM stack from scratch.

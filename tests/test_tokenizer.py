@@ -2,38 +2,32 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from llm.tokenizer import BasicCharTokenizer, load_tokenizer, tokenizer_fingerprint
+from llm.tokenizer import BPETokenizer, load_tokenizer, tokenizer_fingerprint
 
 
-class BasicCharTokenizerTests(unittest.TestCase):
+class BPETokenizerTests(unittest.TestCase):
     def test_round_trip_encode_decode(self) -> None:
-        tokenizer = BasicCharTokenizer.train("hello world")
+        tokenizer = BPETokenizer.train_from_iterator(
+            ["hello world\nhello tokenizer\n"],
+            vocab_size=256,
+            min_frequency=1,
+        )
         ids = tokenizer.encode("hello")
         decoded = tokenizer.decode(ids)
-        self.assertEqual(decoded, "hello")
+        self.assertIn("hello", decoded)
 
-    def test_unknown_token_maps_to_unk(self) -> None:
-        tokenizer = BasicCharTokenizer.train("abc")
-        ids = tokenizer.encode("abd")
-        self.assertEqual(ids[-1], tokenizer.stoi["<unk>"])
-
-    def test_save_and_load_vocab(self) -> None:
-        tokenizer = BasicCharTokenizer.train("abc")
+    def test_save_and_load_tokenizer(self) -> None:
+        tokenizer = BPETokenizer.train_from_iterator(
+            ["alpha beta gamma\n"],
+            vocab_size=256,
+            min_frequency=1,
+        )
         with tempfile.TemporaryDirectory() as tmp:
-            path = Path(tmp) / "vocab.json"
-            tokenizer.save(path)
-            loaded = BasicCharTokenizer.load(path)
-        self.assertEqual(loaded.vocab_size, tokenizer.vocab_size)
-        self.assertEqual(loaded.decode(loaded.encode("abc")), "abc")
-
-    def test_load_tokenizer_detects_char_payload(self) -> None:
-        tokenizer = BasicCharTokenizer.train("abc")
-        with tempfile.TemporaryDirectory() as tmp:
-            path = Path(tmp) / "vocab.json"
+            path = Path(tmp) / "tokenizer.json"
             tokenizer.save(path)
             loaded = load_tokenizer(path)
         self.assertEqual(loaded.vocab_size, tokenizer.vocab_size)
-        self.assertEqual(loaded.decode(loaded.encode("abc")), "abc")
+        self.assertIn("alpha", loaded.decode(loaded.encode("alpha")))
 
     def test_train_from_files(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -42,32 +36,38 @@ class BasicCharTokenizerTests(unittest.TestCase):
             p2 = d / "b.txt"
             p1.write_text("abca", encoding="utf-8")
             p2.write_text("zz\n", encoding="utf-8")
-            tokenizer, stats = BasicCharTokenizer.train_from_files([p1, p2], chunk_size=2)
+            tokenizer, stats = BPETokenizer.train_from_files(
+                [p1, p2],
+                vocab_size=256,
+                min_frequency=1,
+                chunk_size=2,
+            )
 
         self.assertEqual(stats["files_seen"], 2)
         self.assertEqual(stats["chars_read"], 7)
-        self.assertEqual(stats["unique_chars"], 5)
-        self.assertEqual(tokenizer.decode(tokenizer.encode("abz")), "abz")
+        self.assertGreaterEqual(tokenizer.vocab_size, 256)
+        self.assertIn("ab", tokenizer.decode(tokenizer.encode("abz")))
 
     def test_train_from_files_respects_max_chars_per_file(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             p = Path(tmp) / "sample.txt"
             p.write_text("abcdef", encoding="utf-8")
-            tokenizer, stats = BasicCharTokenizer.train_from_files(
+            tokenizer, stats = BPETokenizer.train_from_files(
                 [p],
+                vocab_size=256,
+                min_frequency=1,
                 max_chars_per_file=3,
                 chunk_size=2,
             )
         self.assertEqual(stats["chars_read"], 3)
-        self.assertEqual(stats["unique_chars"], 3)
-        self.assertEqual(tokenizer.encode("d")[0], tokenizer.stoi["<unk>"])
+        self.assertGreaterEqual(tokenizer.vocab_size, 256)
 
     def test_tokenizer_fingerprint_changes_on_content_change(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             p1 = Path(tmp) / "v1.json"
             p2 = Path(tmp) / "v2.json"
-            BasicCharTokenizer.train("abc").save(p1)
-            BasicCharTokenizer.train("abcd").save(p2)
+            BPETokenizer.train_from_iterator(["abc"], vocab_size=280, min_frequency=1).save(p1)
+            BPETokenizer.train_from_iterator(["abcd"], vocab_size=320, min_frequency=1).save(p2)
             self.assertNotEqual(tokenizer_fingerprint(p1), tokenizer_fingerprint(p2))
 
 

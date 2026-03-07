@@ -7,14 +7,14 @@ try:
 
     from llm.generate import GenerateConfig, run_generation
     from llm.model import GPTModel, ModelConfig
-    from llm.tokenizer import BasicCharTokenizer
+    from llm.tokenizer import BPETokenizer
 except ModuleNotFoundError:
     torch = None
     GenerateConfig = None
     run_generation = None
     GPTModel = None
     ModelConfig = None
-    BasicCharTokenizer = None
+    BPETokenizer = None
 
 
 @unittest.skipIf(torch is None, "torch is not installed")
@@ -23,7 +23,11 @@ class GenerateTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
             tokenizer_path = tmp_path / "vocab.json"
-            tokenizer = BasicCharTokenizer.train("hello world\n")
+            tokenizer = BPETokenizer.train_from_iterator(
+                ["hello world\nhello generation\n"],
+                vocab_size=256,
+                min_frequency=1,
+            )
             tokenizer.save(tokenizer_path)
 
             model_config = ModelConfig(
@@ -69,7 +73,11 @@ class GenerateTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
             tokenizer_path = tmp_path / "vocab.json"
-            tokenizer = BasicCharTokenizer.train("abc")
+            tokenizer = BPETokenizer.train_from_iterator(
+                ["abc abc"],
+                vocab_size=256,
+                min_frequency=1,
+            )
             tokenizer.save(tokenizer_path)
 
             model_config = ModelConfig(

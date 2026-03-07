@@ -53,7 +53,7 @@ make offload-zim
 - Saved configs: `configs/train/rtx5070/`
 - Recommended launcher:
 ```bash
-bash scripts/train_rtx5070_fineweb_v2_big.sh
+bash scripts/train_rtx5070_fineweb_bpe_v1_big.sh
 ```
 
 ## Wiki Publishing

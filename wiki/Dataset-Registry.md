@@ -49,11 +49,13 @@ bash scripts/stage_fineweb_from_warm.sh --max-files 4 --max-gib 8
 # build tokenizer + shards directly from sample-10BT parquet
 PYTHONPATH=src .venv/bin/python scripts/fineweb_parquet_to_shards.py \
   --input-dir data/fineweb/sample-10BT \
-  --output-dir data/shards_global/fineweb-s10bt-global-char-v1 \
-  --tokenizer-out artifacts/tokenizer/fineweb-s10bt-global-char-v1.json \
+  --output-dir data/shards_global/fineweb-s10bt-global-bpe-v1 \
+  --tokenizer-out artifacts/tokenizer/fineweb-s10bt-global-bpe-v1.json \
+  --bpe-vocab-size 32000 \
+  --bpe-min-frequency 2 \
   --field text
 
 # verify before training
 PYTHONPATH=src .venv/bin/python -m llm.cli verify-shards \
-  --path data/shards_global/fineweb-s10bt-global-char-v1
+  --path data/shards_global/fineweb-s10bt-global-bpe-v1
 ```

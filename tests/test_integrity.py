@@ -6,7 +6,7 @@ from pathlib import Path
 
 from llm.integrity import verify_shards
 from llm.sharding import ShardConfig, shard_corpus
-from llm.tokenizer import BasicCharTokenizer
+from llm.tokenizer import BPETokenizer
 
 
 def _build_sample_dataset(tmp_path: Path) -> Path:
@@ -16,7 +16,11 @@ def _build_sample_dataset(tmp_path: Path) -> Path:
 
     corpus_text = "alpha\nbeta\ngamma\ndelta\nepsilon\nzeta\neta\ntheta\n"
     corpus_path.write_text(corpus_text, encoding="utf-8")
-    tokenizer = BasicCharTokenizer.train(corpus_text)
+    tokenizer = BPETokenizer.train_from_iterator(
+        [corpus_text],
+        vocab_size=256,
+        min_frequency=1,
+    )
     tokenizer.save(tokenizer_path)
 
     shard_corpus(

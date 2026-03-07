@@ -225,7 +225,9 @@ Use it as a screening signal, then manually review high-risk segments.
 ```bash
 PYTHONPATH=src .venv/bin/python -m llm.cli train-tokenizer \
   --input data/cleaned/wiki_corpus.clean.txt \
-  --output artifacts/tokenizer/vocab.json
+  --output artifacts/tokenizer/vocab.json \
+  --bpe-vocab-size 32000 \
+  --bpe-min-frequency 2
 ```
 
 5. Shard tokenized corpus for training:
@@ -233,7 +235,7 @@ PYTHONPATH=src .venv/bin/python -m llm.cli train-tokenizer \
 PYTHONPATH=src .venv/bin/python -m llm.cli shard-corpus \
   --input data/cleaned/wiki_corpus.clean.txt \
   --tokenizer artifacts/tokenizer/vocab.json \
-  --output-dir data/shards/wiki_char \
+  --output-dir data/shards/wiki_bpe \
   --shard-size-tokens 5000000 \
   --val-ratio 0.01
 ```
@@ -244,7 +246,9 @@ PYTHONPATH=src .venv/bin/python -m llm.cli train-tokenizer-global \
   --input-dir data/cleaned \
   --pattern "*.clean.txt" \
   --from-shards-path data/shards \
-  --output artifacts/tokenizer/global-bpe-v1.json
+  --output artifacts/tokenizer/global-bpe-v1.json \
+  --bpe-vocab-size 32000 \
+  --bpe-min-frequency 2
 ```
 
 5c. Re-shard many corpora with that global tokenizer:
@@ -390,8 +394,6 @@ On this 20-core host, default FineWeb shard splitting should use `15` parallel s
 - Tuned profile docs: `docs/RTX5070_TUNING.md`
 - Saved JSON profiles:
   - `configs/train/rtx5070/fineweb_global_bpe_v1_big.json` (recommended, BPE)
-  - `configs/train/rtx5070/fineweb_global_char_v2_big.json` (legacy char baseline)
-  - `configs/train/rtx5070/fineweb_global_char_v1_small.json` (legacy baseline)
 - Launch tuned big profile:
 ```bash
 bash scripts/train_rtx5070_fineweb_bpe_v1_big.sh

@@ -3,7 +3,7 @@ import unittest
 from pathlib import Path
 
 from llm.sharding import ShardConfig, iter_corpus_files, shard_corpora_batch, shard_corpus
-from llm.tokenizer import BasicCharTokenizer
+from llm.tokenizer import BPETokenizer
 
 
 class ShardingTests(unittest.TestCase):
@@ -16,7 +16,11 @@ class ShardingTests(unittest.TestCase):
 
             corpus_text = "alpha\nbeta\ngamma\ndelta\nepsilon\n"
             corpus_path.write_text(corpus_text, encoding="utf-8")
-            tokenizer = BasicCharTokenizer.train(corpus_text)
+            tokenizer = BPETokenizer.train_from_iterator(
+                [corpus_text],
+                vocab_size=256,
+                min_frequency=1,
+            )
             tokenizer.save(tokenizer_path)
 
             manifest = shard_corpus(
@@ -38,7 +42,9 @@ class ShardingTests(unittest.TestCase):
             total_sharded_tokens = (
                 manifest["train"]["total_tokens"] + manifest["val"]["total_tokens"]
             )
-            expected_tokens = len(tokenizer.encode(corpus_text))
+            expected_tokens = sum(
+                len(tokenizer.encode(line)) for line in corpus_text.splitlines(keepends=True)
+            )
             self.assertEqual(total_sharded_tokens, expected_tokens)
 
             for shard in manifest["train"]["shards"] + manifest["val"]["shards"]:
@@ -53,7 +59,11 @@ class ShardingTests(unittest.TestCase):
 
             corpus_text = "a\nb\nc\nd\ne\n"
             corpus_path.write_text(corpus_text, encoding="utf-8")
-            tokenizer = BasicCharTokenizer.train(corpus_text)
+            tokenizer = BPETokenizer.train_from_iterator(
+                [corpus_text],
+                vocab_size=256,
+                min_frequency=1,
+            )
             tokenizer.save(tokenizer_path)
 
             manifest = shard_corpus(
@@ -67,7 +77,8 @@ class ShardingTests(unittest.TestCase):
             )
             self.assertEqual(manifest["line_count"], 2)
             sharded_tokens = manifest["train"]["total_tokens"] + manifest["val"]["total_tokens"]
-            self.assertEqual(sharded_tokens, len(tokenizer.encode("a\nb\n")))
+            expected_tokens = len(tokenizer.encode("a\n")) + len(tokenizer.encode("b\n"))
+            self.assertEqual(sharded_tokens, expected_tokens)
 
     def test_iter_corpus_files_filters_and_limits(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -97,7 +108,11 @@ class ShardingTests(unittest.TestCase):
 
             (input_dir / "first.txt").write_text("alpha\nbeta\n", encoding="utf-8")
             (input_dir / "second.txt").write_text("gamma\ndelta\n", encoding="utf-8")
-            tokenizer = BasicCharTokenizer.train("alpha\nbeta\ngamma\ndelta\n")
+            tokenizer = BPETokenizer.train_from_iterator(
+                ["alpha\nbeta\ngamma\ndelta\n"],
+                vocab_size=256,
+                min_frequency=1,
+            )
             tokenizer.save(tokenizer_path)
 
             files = iter_corpus_files(input_dir=input_dir)

@@ -12,12 +12,12 @@ export HF_TOKEN=hf_xxx
 # bundle only (local)
 .venv/bin/python scripts/hf_prepare_and_publish_model.py \
   --repo-id aditaa/llm-from-scratch-v1 \
-  --checkpoint artifacts/checkpoints/fineweb-global-char-v2-big-run1/last.pt
+  --checkpoint artifacts/checkpoints/fineweb-global-bpe-v1-big-run1/last.pt
 
 # bundle + push to HF model repo
 .venv/bin/python scripts/hf_prepare_and_publish_model.py \
   --repo-id aditaa/llm-from-scratch-v1 \
-  --checkpoint artifacts/checkpoints/fineweb-global-char-v2-big-run1/last.pt \
+  --checkpoint artifacts/checkpoints/fineweb-global-bpe-v1-big-run1/last.pt \
   --push
 ```
 

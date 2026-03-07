@@ -9,12 +9,11 @@
 6. Evaluation and text generation
 
 ## Current Scope
-- Tokenizer baseline: character-level tokenizer in `src/llm/tokenizer.py`
+- Tokenizer baseline: byte-level BPE tokenizer in `src/llm/tokenizer.py`
 - Data inspection: corpus stats CLI in `src/llm/cli.py`
 - Model config scaffold: `src/llm/model.py`
 
 ## Planned Extensions
-- Subword tokenizer (BPE) with deterministic merges
 - Attention mask and positional encodings
 - Trainer module with optimizer, scheduler, and gradient clipping
 - Evaluation module with perplexity and sample generation reports

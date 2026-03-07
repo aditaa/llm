@@ -1,4 +1,4 @@
-"""Tokenizer utilities for char-level and BPE workflows."""
+"""Tokenizer utilities for BPE workflows."""
 
 from __future__ import annotations
 
@@ -31,118 +31,6 @@ class TokenizerLike(Protocol):
     def decode(self, ids: list[int], skip_special_tokens: bool = True) -> str: ...
 
     def save(self, output_path: str | Path) -> None: ...
-
-
-class BasicCharTokenizer:
-    """A simple character-level tokenizer for baseline experiments."""
-
-    def __init__(self, stoi: dict[str, int], itos: dict[int, str]) -> None:
-        self.stoi = stoi
-        self.itos = itos
-        self._unk_id = self.stoi["<unk>"]
-        self._bos_id = self.stoi.get("<bos>")
-        self._eos_id = self.stoi.get("<eos>")
-
-    @classmethod
-    def train(cls, text: str) -> "BasicCharTokenizer":
-        specials = [SpecialTokens.unk, SpecialTokens.bos, SpecialTokens.eos]
-        chars = sorted(set(text))
-        vocab = specials + [c for c in chars if c not in specials]
-        stoi = {token: idx for idx, token in enumerate(vocab)}
-        itos = {idx: token for token, idx in stoi.items()}
-        return cls(stoi=stoi, itos=itos)
-
-    @classmethod
-    def train_from_files(
-        cls,
-        input_paths: Iterable[str | Path],
-        *,
-        max_chars_per_file: int = 0,
-        chunk_size: int = 1_048_576,
-    ) -> tuple["BasicCharTokenizer", dict[str, int]]:
-        if chunk_size <= 0:
-            raise ValueError("chunk_size must be > 0")
-        if max_chars_per_file < 0:
-            raise ValueError("max_chars_per_file must be >= 0")
-
-        chars: set[str] = set()
-        files_seen = 0
-        chars_read = 0
-
-        for raw_path in input_paths:
-            path = Path(raw_path)
-            if not path.exists():
-                raise FileNotFoundError(path)
-            files_seen += 1
-            remaining = max_chars_per_file if max_chars_per_file > 0 else None
-            with path.open("r", encoding="utf-8") as handle:
-                while True:
-                    if remaining is not None and remaining <= 0:
-                        break
-                    read_size = chunk_size if remaining is None else min(chunk_size, remaining)
-                    chunk = handle.read(read_size)
-                    if not chunk:
-                        break
-                    chars.update(chunk)
-                    chars_read += len(chunk)
-                    if remaining is not None:
-                        remaining -= len(chunk)
-
-        specials = [SpecialTokens.unk, SpecialTokens.bos, SpecialTokens.eos]
-        vocab = specials + [c for c in sorted(chars) if c not in specials]
-        stoi = {token: idx for idx, token in enumerate(vocab)}
-        itos = {idx: token for token, idx in stoi.items()}
-        return cls(stoi=stoi, itos=itos), {
-            "files_seen": files_seen,
-            "chars_read": chars_read,
-            "unique_chars": len(chars),
-        }
-
-    @property
-    def vocab_size(self) -> int:
-        return len(self.stoi)
-
-    @property
-    def bos_id(self) -> int | None:
-        return self._bos_id
-
-    @property
-    def eos_id(self) -> int | None:
-        return self._eos_id
-
-    def encode(self, text: str, add_bos: bool = False, add_eos: bool = False) -> list[int]:
-        ids: list[int] = []
-        if add_bos and self._bos_id is not None:
-            ids.append(self._bos_id)
-        ids.extend(self.stoi.get(ch, self._unk_id) for ch in text)
-        if add_eos and self._eos_id is not None:
-            ids.append(self._eos_id)
-        return ids
-
-    def decode(self, ids: list[int], skip_special_tokens: bool = True) -> str:
-        specials = {"<unk>", "<bos>", "<eos>"}
-        tokens: list[str] = []
-        for token_id in ids:
-            token = self.itos.get(token_id, "<unk>")
-            if skip_special_tokens and token in specials:
-                continue
-            tokens.append(token)
-        return "".join(tokens)
-
-    def save(self, output_path: str | Path) -> None:
-        path = Path(output_path)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        payload = {"tokenizer_type": "char", "stoi": self.stoi}
-        path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
-
-    @classmethod
-    def load(cls, input_path: str | Path) -> "BasicCharTokenizer":
-        payload = json.loads(Path(input_path).read_text(encoding="utf-8"))
-        if "stoi" not in payload:
-            raise ValueError(f"not a char tokenizer payload: {input_path}")
-        stoi = {str(k): int(v) for k, v in payload["stoi"].items()}
-        itos = {idx: token for token, idx in stoi.items()}
-        return cls(stoi=stoi, itos=itos)
 
 
 class BPETokenizer:
@@ -295,9 +183,6 @@ def load_tokenizer(path: str | Path) -> TokenizerLike:
     payload = json.loads(input_path.read_text(encoding="utf-8"))
     if not isinstance(payload, dict):
         raise ValueError(f"invalid tokenizer payload: {input_path}")
-
-    if "stoi" in payload:
-        return BasicCharTokenizer.load(input_path)
 
     model = payload.get("model")
     if isinstance(model, dict):

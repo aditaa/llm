@@ -42,11 +42,11 @@ extract-zim:
 
 train-tokenizer:
 	@echo "Usage:"
-	@echo "  PYTHONPATH=src $(PYTHON) -m llm.cli train-tokenizer --input data/extracted/corpus.txt --output artifacts/tokenizer/vocab.json"
+	@echo "  PYTHONPATH=src $(PYTHON) -m llm.cli train-tokenizer --input data/extracted/corpus.txt --output artifacts/tokenizer/vocab.json --bpe-vocab-size 32000"
 
 train-tokenizer-global:
 	@echo "Usage:"
-	@echo "  PYTHONPATH=src $(PYTHON) -m llm.cli train-tokenizer-global --input-dir data/extracted --from-shards-path data/shards --output artifacts/tokenizer/global-bpe-v1.json --tokenizer-type bpe --bpe-vocab-size 32000"
+	@echo "  PYTHONPATH=src $(PYTHON) -m llm.cli train-tokenizer-global --input-dir data/extracted --from-shards-path data/shards --output artifacts/tokenizer/global-bpe-v1.json --bpe-vocab-size 32000"
 
 corpus-quality-report:
 	@echo "Usage:"
@@ -70,7 +70,7 @@ parquet-to-corpus:
 
 fineweb-parquet-to-shards:
 	@echo "Usage:"
-	@echo "  PYTHONPATH=src $(PYTHON) scripts/fineweb_parquet_to_shards.py --input-dir data/fineweb/sample-10BT --output-dir data/shards_global/fineweb-s10bt-global-bpe-v1 --tokenizer-out artifacts/tokenizer/fineweb-s10bt-global-bpe-v1.json --tokenizer-type bpe --bpe-vocab-size 32000 --field text"
+	@echo "  PYTHONPATH=src $(PYTHON) scripts/fineweb_parquet_to_shards.py --input-dir data/fineweb/sample-10BT --output-dir data/shards_global/fineweb-s10bt-global-bpe-v1 --tokenizer-out artifacts/tokenizer/fineweb-s10bt-global-bpe-v1.json --bpe-vocab-size 32000 --field text"
 
 stage-fineweb-from-warm:
 	@echo "Usage:"
@@ -82,7 +82,7 @@ fineweb-stage-shard-loop:
 
 shard-corpus-batch:
 	@echo "Usage:"
-	@echo "  PYTHONPATH=src $(PYTHON) -m llm.cli shard-corpus-batch --input-dir data/extracted --from-shards-path data/shards --tokenizer artifacts/tokenizer/global-char-v1.json --output-root data/shards_global/global-char-v1"
+	@echo "  PYTHONPATH=src $(PYTHON) -m llm.cli shard-corpus-batch --input-dir data/extracted --from-shards-path data/shards --tokenizer artifacts/tokenizer/global-bpe-v1.json --output-root data/shards_global/global-bpe-v1"
 
 verify-shards:
 	@echo "Usage:"

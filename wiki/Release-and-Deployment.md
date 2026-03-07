@@ -8,7 +8,7 @@ This page covers publishing a trained model to Hugging Face and deploying it on 
 export HF_TOKEN=hf_xxx
 .venv/bin/python scripts/hf_prepare_and_publish_model.py \
   --repo-id aditaa/llm-from-scratch-v1 \
-  --checkpoint artifacts/checkpoints/fineweb-global-char-v2-big-run1/last.pt \
+  --checkpoint artifacts/checkpoints/fineweb-global-bpe-v1-big-run1/last.pt \
   --push
 ```
 

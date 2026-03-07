@@ -36,7 +36,7 @@ pipeline_tag: text-generation
 tags:
 - llm
 - from-scratch
-- char-level
+- bpe
 ---
 
 # {repo_id}

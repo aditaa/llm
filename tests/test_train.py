@@ -7,17 +7,25 @@ from pathlib import Path
 try:
     import torch
 
+    from llm.tokenizer import BPETokenizer
     from llm.train import ShardBatchSampler, _resolve_amp_mode, collect_shard_training_info
 except ModuleNotFoundError:
     torch = None
+    BPETokenizer = None
     ShardBatchSampler = None
     _resolve_amp_mode = None
     collect_shard_training_info = None
 
 
-def _write_tokenizer(path: Path, stoi: dict[str, int]) -> None:
+def _write_tokenizer(path: Path, text: str, vocab_size: int = 256) -> int:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps({"stoi": stoi}, indent=2), encoding="utf-8")
+    tokenizer = BPETokenizer.train_from_iterator(
+        [text],
+        vocab_size=vocab_size,
+        min_frequency=1,
+    )
+    tokenizer.save(path)
+    return int(tokenizer.vocab_size)
 
 
 def _write_shard(path: Path, token_ids: list[int]) -> None:
@@ -75,8 +83,8 @@ class TrainDataTests(unittest.TestCase):
             tok1 = root / "tok1.json"
             tok2 = root / "tok2.json"
 
-            _write_tokenizer(tok1, {"<unk>": 0, "<bos>": 1, "<eos>": 2, "a": 3})
-            _write_tokenizer(tok2, {"<unk>": 0, "<bos>": 1, "<eos>": 2, "b": 3})
+            vocab1 = _write_tokenizer(tok1, "aaaa bbbb cccc", vocab_size=260)
+            vocab2 = _write_tokenizer(tok2, "zzzz yyyy xxxx", vocab_size=320)
 
             _write_shard(ds1 / "train_000000.bin", list(range(40)))
             _write_shard(ds1 / "val_000000.bin", list(range(20)))
@@ -88,12 +96,14 @@ class TrainDataTests(unittest.TestCase):
                 tokenizer_path=tok1,
                 train_shard="train_000000.bin",
                 val_shard="val_000000.bin",
+                vocab_size=vocab1,
             )
             _write_manifest(
                 ds2 / "manifest.json",
                 tokenizer_path=tok2,
                 train_shard="train_000000.bin",
                 val_shard="val_000000.bin",
+                vocab_size=vocab2,
             )
 
             with self.assertRaises(ValueError):
@@ -105,7 +115,7 @@ class TrainDataTests(unittest.TestCase):
             ds = root / "dataset"
             tok = root / "tok.json"
 
-            _write_tokenizer(tok, {"<unk>": 0, "<bos>": 1, "<eos>": 2, "a": 3, "b": 4, "c": 5})
+            vocab_size = _write_tokenizer(tok, "a b c d e f g")
             _write_shard(ds / "train_000000.bin", list(range(100)))
             _write_shard(ds / "val_000000.bin", list(range(40)))
             _write_manifest(
@@ -113,11 +123,11 @@ class TrainDataTests(unittest.TestCase):
                 tokenizer_path=tok,
                 train_shard="train_000000.bin",
                 val_shard="val_000000.bin",
-                vocab_size=6,
+                vocab_size=vocab_size,
             )
 
             info = collect_shard_training_info(ds)
-            self.assertEqual(info.vocab_size, 6)
+            self.assertEqual(info.vocab_size, vocab_size)
             self.assertEqual(len(info.train_shards), 1)
             self.assertEqual(len(info.val_shards), 1)
 

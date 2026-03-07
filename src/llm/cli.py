@@ -18,7 +18,7 @@ from llm.corpus import (
 )
 from llm.integrity import verify_shards
 from llm.sharding import ShardConfig, iter_corpus_files, shard_corpora_batch, shard_corpus
-from llm.tokenizer import BasicCharTokenizer, BPETokenizer
+from llm.tokenizer import BPETokenizer
 from llm.zim import ZimExtractConfig, extract_text_from_zim
 
 
@@ -47,11 +47,25 @@ def cmd_stats(input_path: str) -> int:
     return 0
 
 
-def cmd_build_vocab(input_path: str, output_path: str) -> int:
+def cmd_build_vocab(
+    input_path: str,
+    output_path: str,
+    bpe_vocab_size: int,
+    bpe_min_frequency: int,
+) -> int:
+    if bpe_vocab_size <= 0:
+        raise ValueError("bpe_vocab_size must be > 0")
+    if bpe_min_frequency < 1:
+        raise ValueError("bpe_min_frequency must be >= 1")
     text = _read_text(input_path)
-    tokenizer = BasicCharTokenizer.train(text)
+    tokenizer = BPETokenizer.train_from_iterator(
+        [text],
+        vocab_size=bpe_vocab_size,
+        min_frequency=bpe_min_frequency,
+    )
     tokenizer.save(output_path)
     print(f"saved vocab to {output_path} (vocab_size={tokenizer.vocab_size})")
+    print("tokenizer_type=bpe")
     return 0
 
 
@@ -63,15 +77,13 @@ def cmd_train_tokenizer_global(
     from_shards_path: str | None,
     max_files: int,
     max_chars_per_file: int,
-    tokenizer_type: str,
     bpe_vocab_size: int,
     bpe_min_frequency: int,
 ) -> int:
-    if tokenizer_type == "bpe":
-        if bpe_vocab_size <= 0:
-            raise ValueError("bpe_vocab_size must be > 0")
-        if bpe_min_frequency < 1:
-            raise ValueError("bpe_min_frequency must be >= 1")
+    if bpe_vocab_size <= 0:
+        raise ValueError("bpe_vocab_size must be > 0")
+    if bpe_min_frequency < 1:
+        raise ValueError("bpe_min_frequency must be >= 1")
 
     include_stems: set[str] | None = None
     if from_shards_path is not None:
@@ -87,19 +99,12 @@ def cmd_train_tokenizer_global(
     if not files:
         raise ValueError("no input files matched for global tokenizer training")
 
-    tokenizer: BasicCharTokenizer | BPETokenizer
-    if tokenizer_type == "bpe":
-        tokenizer, stats = BPETokenizer.train_from_files(
-            files,
-            max_chars_per_file=max_chars_per_file,
-            vocab_size=bpe_vocab_size,
-            min_frequency=bpe_min_frequency,
-        )
-    else:
-        tokenizer, stats = BasicCharTokenizer.train_from_files(
-            files,
-            max_chars_per_file=max_chars_per_file,
-        )
+    tokenizer, stats = BPETokenizer.train_from_files(
+        files,
+        max_chars_per_file=max_chars_per_file,
+        vocab_size=bpe_vocab_size,
+        min_frequency=bpe_min_frequency,
+    )
     tokenizer.save(output_path)
 
     metadata_path = Path(output_path).with_suffix(Path(output_path).suffix + ".meta.json")
@@ -108,9 +113,9 @@ def cmd_train_tokenizer_global(
         "pattern": pattern,
         "exclude_patterns": exclude_pattern,
         "from_shards_path": from_shards_path,
-        "tokenizer_type": tokenizer_type,
-        "bpe_vocab_size": bpe_vocab_size if tokenizer_type == "bpe" else None,
-        "bpe_min_frequency": bpe_min_frequency if tokenizer_type == "bpe" else None,
+        "tokenizer_type": "bpe",
+        "bpe_vocab_size": bpe_vocab_size,
+        "bpe_min_frequency": bpe_min_frequency,
         "files": [str(p) for p in files],
         "stats": stats,
         "vocab_size": tokenizer.vocab_size,
@@ -122,7 +127,7 @@ def cmd_train_tokenizer_global(
     print(f"files_used={len(files)}")
     print(f"chars_read={stats['chars_read']}")
     print(f"unique_chars={stats.get('unique_chars', 0)}")
-    print(f"tokenizer_type={tokenizer_type}")
+    print("tokenizer_type=bpe")
     print(f"vocab_size={tokenizer.vocab_size}")
     return 0
 
@@ -582,17 +587,41 @@ def parse_args() -> argparse.Namespace:
     stats_parser = subparsers.add_parser("stats", help="Print quick corpus stats")
     stats_parser.add_argument("--input", required=True, help="Input text file")
 
-    vocab_parser = subparsers.add_parser("build-vocab", help="Build char vocab JSON")
+    vocab_parser = subparsers.add_parser("build-vocab", help="Build BPE tokenizer JSON")
     vocab_parser.add_argument("--input", required=True, help="Input text file")
     vocab_parser.add_argument("--output", required=True, help="Output vocab JSON path")
+    vocab_parser.add_argument(
+        "--bpe-vocab-size",
+        type=int,
+        default=32000,
+        help="BPE vocab size",
+    )
+    vocab_parser.add_argument(
+        "--bpe-min-frequency",
+        type=int,
+        default=2,
+        help="BPE min frequency",
+    )
 
     train_tok_parser = subparsers.add_parser("train-tokenizer", help="Alias for build-vocab")
     train_tok_parser.add_argument("--input", required=True, help="Input text file")
     train_tok_parser.add_argument("--output", required=True, help="Output vocab JSON path")
+    train_tok_parser.add_argument(
+        "--bpe-vocab-size",
+        type=int,
+        default=32000,
+        help="BPE vocab size",
+    )
+    train_tok_parser.add_argument(
+        "--bpe-min-frequency",
+        type=int,
+        default=2,
+        help="BPE min frequency",
+    )
 
     global_tok_parser = subparsers.add_parser(
         "train-tokenizer-global",
-        help="Train one shared tokenizer from many corpus files",
+        help="Train one shared BPE tokenizer from many corpus files",
     )
     global_tok_parser.add_argument("--input-dir", required=True, help="Directory of corpus files")
     global_tok_parser.add_argument("--output", required=True, help="Output global vocab JSON path")
@@ -621,22 +650,16 @@ def parse_args() -> argparse.Namespace:
         help="Optional cap on chars read per file (0 = entire file)",
     )
     global_tok_parser.add_argument(
-        "--tokenizer-type",
-        choices=["char", "bpe"],
-        default="bpe",
-        help="Tokenizer type to train",
-    )
-    global_tok_parser.add_argument(
         "--bpe-vocab-size",
         type=int,
         default=32000,
-        help="BPE vocab size when --tokenizer-type=bpe",
+        help="BPE vocab size",
     )
     global_tok_parser.add_argument(
         "--bpe-min-frequency",
         type=int,
         default=2,
-        help="BPE min frequency when --tokenizer-type=bpe",
+        help="BPE min frequency",
     )
 
     zim_parser = subparsers.add_parser("extract-zim-text", help="Extract text corpus from ZIM")
@@ -1113,9 +1136,19 @@ def main() -> int:
     if args.command == "stats":
         return cmd_stats(args.input)
     if args.command == "build-vocab":
-        return cmd_build_vocab(args.input, args.output)
+        return cmd_build_vocab(
+            args.input,
+            args.output,
+            args.bpe_vocab_size,
+            args.bpe_min_frequency,
+        )
     if args.command == "train-tokenizer":
-        return cmd_build_vocab(args.input, args.output)
+        return cmd_build_vocab(
+            args.input,
+            args.output,
+            args.bpe_vocab_size,
+            args.bpe_min_frequency,
+        )
     if args.command == "train-tokenizer-global":
         return cmd_train_tokenizer_global(
             input_dir=args.input_dir,
@@ -1125,7 +1158,6 @@ def main() -> int:
             from_shards_path=args.from_shards_path,
             max_files=args.max_files,
             max_chars_per_file=args.max_chars_per_file,
-            tokenizer_type=args.tokenizer_type,
             bpe_vocab_size=args.bpe_vocab_size,
             bpe_min_frequency=args.bpe_min_frequency,
         )

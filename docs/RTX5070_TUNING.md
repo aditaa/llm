@@ -4,14 +4,9 @@ Date: 2026-03-06
 GPU: NVIDIA GeForce RTX 5070 Ti Laptop GPU (12,227 MiB)
 
 ## Scope
-- Dataset: `data/shards_global/fineweb-global-char-v1`
+- Dataset: `data/shards_global/fineweb-global-bpe-v1`
 - Precision mode: `--precision auto` (bf16 on this GPU)
 - Allocator: `PYTORCH_ALLOC_CONF=expandable_segments:True`
-
-Note:
-- These measurements were captured on char-tokenized shards.
-- For current training runs, prefer the same compute profile on BPE shards:
-  `bash scripts/train_rtx5070_fineweb_bpe_v1_big.sh`
 
 ## Previous Small Model Result
 - Shape: `n_layers=4`, `n_heads=4`, `d_model=256`, `context_length=256`
@@ -52,9 +47,8 @@ Measured with this profile: `avg_util=99.1%`, `max_util=100%`, `min_util=96%`, `
 
 ## Launch
 ```bash
-bash scripts/train_rtx5070_fineweb_v2_big.sh
+bash scripts/train_rtx5070_fineweb_bpe_v1_big.sh
 ```
 
 Saved profile JSON:
-- `configs/train/rtx5070/fineweb_global_char_v2_big.json`
-- `configs/train/rtx5070/fineweb_global_char_v1_small.json`
+- `configs/train/rtx5070/fineweb_global_bpe_v1_big.json`

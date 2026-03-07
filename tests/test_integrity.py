@@ -113,6 +113,17 @@ class IntegrityTests(unittest.TestCase):
             self.assertTrue(results[0]["ok"])
             self.assertTrue(any("source_zim_missing" in w for w in results[0]["warnings"]))
 
+    def test_detect_manifest_tokenizer_hash_mismatch(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            manifest_path = _build_sample_dataset(Path(tmp))
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest["tokenizer_hash"] = "deadbeef"
+            manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+
+            results = verify_shards(manifest_path)
+            self.assertFalse(results[0]["ok"])
+            self.assertTrue(any("tokenizer_hash_mismatch" in err for err in results[0]["errors"]))
+
 
 if __name__ == "__main__":
     unittest.main()

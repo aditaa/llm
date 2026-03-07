@@ -162,6 +162,9 @@ class BPETokenizer:
         return cls(tok)
 
 
+TOKENIZER_CONTRACT_VERSION = "bytelevel-bpe-v1"
+
+
 def _require_tokenizers() -> Any:
     try:
         import tokenizers
@@ -178,6 +181,58 @@ def tokenizer_fingerprint(path: str | Path) -> str:
     return hashlib.sha256(payload).hexdigest()
 
 
+def _component_signature(component: Any) -> str:
+    if not isinstance(component, dict):
+        return "unknown"
+    comp_type = str(component.get("type", ""))
+    if not comp_type:
+        return "unknown"
+    if comp_type != "Sequence":
+        return comp_type
+    nested = component.get("pretokenizers")
+    if not isinstance(nested, list):
+        nested = component.get("decoders")
+    if not isinstance(nested, list):
+        return comp_type
+    parts = [str(item.get("type", "unknown")) for item in nested if isinstance(item, dict)]
+    return f"{comp_type}({'+'.join(parts)})"
+
+
+def tokenizer_contract(path: str | Path) -> dict[str, Any]:
+    payload = json.loads(Path(path).read_text(encoding="utf-8"))
+    if not isinstance(payload, dict):
+        raise ValueError(f"invalid tokenizer payload: {path}")
+
+    model = payload.get("model")
+    model_type = "unknown"
+    if isinstance(model, dict):
+        model_type = str(model.get("type", "unknown")).upper()
+
+    special_tokens = [SpecialTokens.unk, SpecialTokens.bos, SpecialTokens.eos]
+    added_tokens = payload.get("added_tokens", [])
+    if isinstance(added_tokens, list):
+        available = {
+            str(row.get("content"))
+            for row in added_tokens
+            if isinstance(row, dict) and row.get("content") is not None
+        }
+        special_tokens = [token for token in special_tokens if token in available]
+
+    return {
+        "version": TOKENIZER_CONTRACT_VERSION,
+        "model_type": model_type,
+        "pre_tokenizer": _component_signature(payload.get("pre_tokenizer")),
+        "decoder": _component_signature(payload.get("decoder")),
+        "special_tokens": special_tokens,
+    }
+
+
+def tokenizer_contract_fingerprint(path: str | Path) -> str:
+    contract = tokenizer_contract(path)
+    canonical = json.dumps(contract, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
 def load_tokenizer(path: str | Path) -> TokenizerLike:
     input_path = Path(path)
     payload = json.loads(input_path.read_text(encoding="utf-8"))
@@ -187,7 +242,7 @@ def load_tokenizer(path: str | Path) -> TokenizerLike:
     model = payload.get("model")
     if isinstance(model, dict):
         model_type = str(model.get("type", "")).upper()
-        if model_type in {"BPE", "WORDPIECE", "UNIGRAM"}:
+        if model_type == "BPE":
             return BPETokenizer.load(input_path)
 
     raise ValueError(f"unsupported tokenizer format: {input_path}")

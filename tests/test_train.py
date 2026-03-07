@@ -7,11 +7,13 @@ from pathlib import Path
 try:
     import torch
 
-    from llm.tokenizer import BPETokenizer
+    from llm.tokenizer import BPETokenizer, tokenizer_contract_fingerprint, tokenizer_fingerprint
     from llm.train import ShardBatchSampler, _resolve_amp_mode, collect_shard_training_info
 except ModuleNotFoundError:
     torch = None
     BPETokenizer = None
+    tokenizer_contract_fingerprint = None
+    tokenizer_fingerprint = None
     ShardBatchSampler = None
     _resolve_amp_mode = None
     collect_shard_training_info = None
@@ -45,6 +47,8 @@ def _write_manifest(
     manifest = {
         "input_path": "x.txt",
         "tokenizer_path": str(tokenizer_path),
+        "tokenizer_hash": tokenizer_fingerprint(tokenizer_path),
+        "tokenizer_contract_hash": tokenizer_contract_fingerprint(tokenizer_path),
         "tokenizer_vocab_size": vocab_size,
         "token_dtype": "uint16",
         "shard_size_tokens": 1024,

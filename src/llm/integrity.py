@@ -7,7 +7,7 @@ from array import array
 from pathlib import Path
 from typing import Any
 
-from llm.tokenizer import load_tokenizer
+from llm.tokenizer import load_tokenizer, tokenizer_contract_fingerprint, tokenizer_fingerprint
 
 _TOKEN_ARRAY_TYPES = {"uint16": "H", "uint32": "I"}
 
@@ -105,6 +105,10 @@ def verify_shard_manifest(
     dataset_dir = manifest_path.parent
 
     tokenizer_path = Path(manifest.get("tokenizer_path", ""))
+    if tokenizer_path and not tokenizer_path.is_absolute():
+        tokenizer_path = (dataset_dir / tokenizer_path).resolve()
+    manifest_tokenizer_hash = str(manifest.get("tokenizer_hash", "")).strip()
+    manifest_contract_hash = str(manifest.get("tokenizer_contract_hash", "")).strip()
     if not tokenizer_path.exists():
         errors.append(f"tokenizer_missing:{tokenizer_path}")
         tokenizer = None
@@ -113,6 +117,22 @@ def verify_shard_manifest(
         try:
             tokenizer = load_tokenizer(tokenizer_path)
             vocab_size = tokenizer.vocab_size
+            actual_hash = tokenizer_fingerprint(tokenizer_path)
+            if manifest_tokenizer_hash and actual_hash != manifest_tokenizer_hash:
+                errors.append(
+                    f"tokenizer_hash_mismatch:manifest={manifest_tokenizer_hash}:actual={actual_hash}"
+                )
+            elif not manifest_tokenizer_hash:
+                warnings.append("manifest_missing_tokenizer_hash")
+
+            actual_contract_hash = tokenizer_contract_fingerprint(tokenizer_path)
+            if manifest_contract_hash and actual_contract_hash != manifest_contract_hash:
+                errors.append(
+                    "tokenizer_contract_hash_mismatch:"
+                    f"manifest={manifest_contract_hash}:actual={actual_contract_hash}"
+                )
+            elif not manifest_contract_hash:
+                warnings.append("manifest_missing_tokenizer_contract_hash")
         except Exception as exc:
             errors.append(f"tokenizer_load_error:{tokenizer_path}:{type(exc).__name__}:{exc}")
             tokenizer = None

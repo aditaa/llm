@@ -9,7 +9,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable
 
-from llm.tokenizer import load_tokenizer
+from llm.tokenizer import (
+    load_tokenizer,
+    tokenizer_contract,
+    tokenizer_contract_fingerprint,
+    tokenizer_fingerprint,
+)
 
 
 @dataclass
@@ -93,7 +98,8 @@ def shard_corpus(config: ShardConfig) -> dict[str, Any]:
     if config.max_lines < 0:
         raise ValueError("max_lines must be >= 0")
 
-    tokenizer = load_tokenizer(config.tokenizer_path)
+    tokenizer_path = config.tokenizer_path.resolve()
+    tokenizer = load_tokenizer(tokenizer_path)
     array_type, token_dtype = _array_type_for_vocab(tokenizer.vocab_size)
 
     config.output_dir.mkdir(parents=True, exist_ok=True)
@@ -118,7 +124,10 @@ def shard_corpus(config: ShardConfig) -> dict[str, Any]:
 
     manifest = {
         "input_path": str(config.input_path),
-        "tokenizer_path": str(config.tokenizer_path),
+        "tokenizer_path": str(tokenizer_path),
+        "tokenizer_hash": tokenizer_fingerprint(tokenizer_path),
+        "tokenizer_contract": tokenizer_contract(tokenizer_path),
+        "tokenizer_contract_hash": tokenizer_contract_fingerprint(tokenizer_path),
         "tokenizer_vocab_size": tokenizer.vocab_size,
         "token_dtype": token_dtype,
         "shard_size_tokens": config.shard_size_tokens,

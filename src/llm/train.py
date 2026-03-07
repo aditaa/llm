@@ -13,7 +13,7 @@ import torch
 from torch import Tensor
 
 from llm.model import GPTModel, ModelConfig
-from llm.tokenizer import load_tokenizer, tokenizer_fingerprint
+from llm.tokenizer import load_tokenizer, tokenizer_contract_fingerprint, tokenizer_fingerprint
 
 
 @dataclass
@@ -54,6 +54,7 @@ class ShardTrainingInfo:
     manifest_paths: list[Path]
     tokenizer_path: Path
     tokenizer_hash: str
+    tokenizer_contract_hash: str
     token_dtype: str
     vocab_size: int
     train_shards: list[Path]
@@ -93,6 +94,7 @@ def collect_shard_training_info(path: Path) -> ShardTrainingInfo:
 
     tokenizer_path: Path | None = None
     tokenizer_hash: str | None = None
+    tokenizer_contract_hash: str | None = None
     token_dtype: str | None = None
     vocab_size: int | None = None
 
@@ -101,13 +103,29 @@ def collect_shard_training_info(path: Path) -> ShardTrainingInfo:
         dataset_dir = manifest_path.parent
 
         this_tok_path = Path(str(manifest["tokenizer_path"]))
+        if not this_tok_path.is_absolute():
+            this_tok_path = (dataset_dir / this_tok_path).resolve()
         this_tok_hash = _tokenizer_hash(this_tok_path)
+        manifest_tok_hash = str(manifest.get("tokenizer_hash", "")).strip()
+        if manifest_tok_hash and manifest_tok_hash != this_tok_hash:
+            raise ValueError(
+                f"tokenizer_hash mismatch for manifest {manifest_path}: "
+                f"manifest={manifest_tok_hash} actual={this_tok_hash}"
+            )
+        this_tok_contract_hash = tokenizer_contract_fingerprint(this_tok_path)
+        manifest_contract_hash = str(manifest.get("tokenizer_contract_hash", "")).strip()
+        if manifest_contract_hash and manifest_contract_hash != this_tok_contract_hash:
+            raise ValueError(
+                f"tokenizer_contract_hash mismatch for manifest {manifest_path}: "
+                f"manifest={manifest_contract_hash} actual={this_tok_contract_hash}"
+            )
         this_token_dtype = str(manifest["token_dtype"])
         this_vocab_size = int(manifest["tokenizer_vocab_size"])
 
         if tokenizer_path is None:
             tokenizer_path = this_tok_path
             tokenizer_hash = this_tok_hash
+            tokenizer_contract_hash = this_tok_contract_hash
             token_dtype = this_token_dtype
             vocab_size = this_vocab_size
         else:
@@ -115,6 +133,11 @@ def collect_shard_training_info(path: Path) -> ShardTrainingInfo:
                 raise ValueError(
                     "mismatched tokenizers detected across manifests. "
                     "Train on one tokenizer family at a time."
+                )
+            if tokenizer_contract_hash != this_tok_contract_hash:
+                raise ValueError(
+                    "mismatched tokenizer contracts detected across manifests. "
+                    "Train on one tokenizer contract at a time."
                 )
             if token_dtype != this_token_dtype:
                 raise ValueError("mismatched token_dtype across manifests")
@@ -133,6 +156,7 @@ def collect_shard_training_info(path: Path) -> ShardTrainingInfo:
     if (
         tokenizer_path is None
         or tokenizer_hash is None
+        or tokenizer_contract_hash is None
         or token_dtype is None
         or vocab_size is None
     ):
@@ -146,6 +170,7 @@ def collect_shard_training_info(path: Path) -> ShardTrainingInfo:
         manifest_paths=manifest_paths,
         tokenizer_path=tokenizer_path,
         tokenizer_hash=tokenizer_hash,
+        tokenizer_contract_hash=tokenizer_contract_hash,
         token_dtype=token_dtype,
         vocab_size=vocab_size,
         train_shards=train_shards,
@@ -316,6 +341,7 @@ def _save_checkpoint(
         "model_config": model_config.to_dict(),
         "tokenizer_path": str(info.tokenizer_path),
         "tokenizer_hash": info.tokenizer_hash,
+        "tokenizer_contract_hash": info.tokenizer_contract_hash,
     }
     torch.save(payload, ckpt_path)
     torch.save(payload, output_dir / "last.pt")
@@ -406,6 +432,7 @@ def run_training(config: TrainConfig) -> dict[str, Any]:
                 "model_config": model_config.to_dict(),
                 "tokenizer_path": str(info.tokenizer_path),
                 "tokenizer_hash": info.tokenizer_hash,
+                "tokenizer_contract_hash": info.tokenizer_contract_hash,
                 "manifests": [str(p) for p in info.manifest_paths],
             },
             indent=2,
@@ -416,6 +443,7 @@ def run_training(config: TrainConfig) -> dict[str, Any]:
     tokenizer = load_tokenizer(info.tokenizer_path)
     print(f"device={device}")
     print(f"vocab_size={tokenizer.vocab_size}")
+    print(f"tokenizer_contract_hash={info.tokenizer_contract_hash}")
     print(f"train_tokens={info.train_tokens}")
     print(f"val_tokens={info.val_tokens}")
     print(f"start_step={start_step}")
@@ -478,4 +506,5 @@ def run_training(config: TrainConfig) -> dict[str, Any]:
         "start_step": start_step,
         "tokenizer_path": str(info.tokenizer_path),
         "tokenizer_hash": info.tokenizer_hash,
+        "tokenizer_contract_hash": info.tokenizer_contract_hash,
     }

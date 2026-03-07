@@ -36,6 +36,9 @@ class ShardingTests(unittest.TestCase):
 
             self.assertTrue((output_dir / "manifest.json").exists())
             self.assertIn(manifest["token_dtype"], {"uint16", "uint32"})
+            self.assertIn("tokenizer_hash", manifest)
+            self.assertIn("tokenizer_contract_hash", manifest)
+            self.assertIn("tokenizer_contract", manifest)
             self.assertGreater(manifest["train"]["total_tokens"], 0)
             self.assertGreaterEqual(manifest["val"]["total_tokens"], 0)
 

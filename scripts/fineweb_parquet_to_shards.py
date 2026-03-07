@@ -15,7 +15,14 @@ from array import array
 from pathlib import Path
 from typing import Any, Iterator
 
-from llm.tokenizer import BPETokenizer, TokenizerLike, load_tokenizer
+from llm.tokenizer import (
+    BPETokenizer,
+    TokenizerLike,
+    load_tokenizer,
+    tokenizer_contract,
+    tokenizer_contract_fingerprint,
+    tokenizer_fingerprint,
+)
 
 
 def _normalize_line(text: str) -> str:
@@ -340,6 +347,9 @@ def main() -> int:
         "input_pattern": args.pattern,
         "input_files": [str(path) for path in parquet_files],
         "tokenizer_path": str(tokenizer_path),
+        "tokenizer_hash": tokenizer_fingerprint(tokenizer_path),
+        "tokenizer_contract": tokenizer_contract(tokenizer_path),
+        "tokenizer_contract_hash": tokenizer_contract_fingerprint(tokenizer_path),
         "tokenizer_type": "bpe" if tokenizer_in is None else "reused",
         "tokenizer_vocab_size": tokenizer.vocab_size,
         "token_dtype": token_dtype,

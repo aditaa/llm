@@ -18,7 +18,12 @@ from llm.corpus import (
 )
 from llm.integrity import verify_shards
 from llm.sharding import ShardConfig, iter_corpus_files, shard_corpora_batch, shard_corpus
-from llm.tokenizer import BPETokenizer
+from llm.tokenizer import (
+    BPETokenizer,
+    tokenizer_contract,
+    tokenizer_contract_fingerprint,
+    tokenizer_fingerprint,
+)
 from llm.zim import ZimExtractConfig, extract_text_from_zim
 
 
@@ -64,7 +69,10 @@ def cmd_build_vocab(
         min_frequency=bpe_min_frequency,
     )
     tokenizer.save(output_path)
+    output_tokenizer = Path(output_path)
     print(f"saved vocab to {output_path} (vocab_size={tokenizer.vocab_size})")
+    print(f"tokenizer_hash={tokenizer_fingerprint(output_tokenizer)}")
+    print(f"tokenizer_contract_hash={tokenizer_contract_fingerprint(output_tokenizer)}")
     print("tokenizer_type=bpe")
     return 0
 
@@ -119,6 +127,9 @@ def cmd_train_tokenizer_global(
         "files": [str(p) for p in files],
         "stats": stats,
         "vocab_size": tokenizer.vocab_size,
+        "tokenizer_hash": tokenizer_fingerprint(output_path),
+        "tokenizer_contract": tokenizer_contract(output_path),
+        "tokenizer_contract_hash": tokenizer_contract_fingerprint(output_path),
     }
     metadata_path.write_text(json.dumps(metadata, indent=2), encoding="utf-8")
 
@@ -129,6 +140,8 @@ def cmd_train_tokenizer_global(
     print(f"unique_chars={stats.get('unique_chars', 0)}")
     print("tokenizer_type=bpe")
     print(f"vocab_size={tokenizer.vocab_size}")
+    print(f"tokenizer_hash={metadata['tokenizer_hash']}")
+    print(f"tokenizer_contract_hash={metadata['tokenizer_contract_hash']}")
     return 0
 
 
@@ -543,6 +556,7 @@ def cmd_train(
     print(f"start_step={result['start_step']}")
     print(f"tokenizer_path={result['tokenizer_path']}")
     print(f"tokenizer_hash={result['tokenizer_hash']}")
+    print(f"tokenizer_contract_hash={result['tokenizer_contract_hash']}")
     return 0
 
 

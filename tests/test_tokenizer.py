@@ -2,7 +2,13 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from llm.tokenizer import BPETokenizer, load_tokenizer, tokenizer_fingerprint
+from llm.tokenizer import (
+    BPETokenizer,
+    load_tokenizer,
+    tokenizer_contract,
+    tokenizer_contract_fingerprint,
+    tokenizer_fingerprint,
+)
 
 
 class BPETokenizerTests(unittest.TestCase):
@@ -69,6 +75,38 @@ class BPETokenizerTests(unittest.TestCase):
             BPETokenizer.train_from_iterator(["abc"], vocab_size=280, min_frequency=1).save(p1)
             BPETokenizer.train_from_iterator(["abcd"], vocab_size=320, min_frequency=1).save(p2)
             self.assertNotEqual(tokenizer_fingerprint(p1), tokenizer_fingerprint(p2))
+
+    def test_tokenizer_contract_is_bytelevel_bpe(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "v1.json"
+            BPETokenizer.train_from_iterator(["abc"], vocab_size=256, min_frequency=1).save(path)
+            contract = tokenizer_contract(path)
+            self.assertEqual(contract["version"], "bytelevel-bpe-v1")
+            self.assertEqual(contract["model_type"], "BPE")
+            self.assertIn("ByteLevel", contract["pre_tokenizer"])
+            self.assertIn("ByteLevel", contract["decoder"])
+            self.assertIn("<unk>", contract["special_tokens"])
+            self.assertIn("<bos>", contract["special_tokens"])
+            self.assertIn("<eos>", contract["special_tokens"])
+
+    def test_tokenizer_contract_fingerprint_is_stable_for_same_contract(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            p1 = Path(tmp) / "v1.json"
+            p2 = Path(tmp) / "v2.json"
+            BPETokenizer.train_from_iterator(
+                ["alpha beta gamma"],
+                vocab_size=256,
+                min_frequency=1,
+            ).save(p1)
+            BPETokenizer.train_from_iterator(
+                ["alpha beta gamma"],
+                vocab_size=320,
+                min_frequency=1,
+            ).save(p2)
+            self.assertEqual(
+                tokenizer_contract_fingerprint(p1),
+                tokenizer_contract_fingerprint(p2),
+            )
 
 
 if __name__ == "__main__":

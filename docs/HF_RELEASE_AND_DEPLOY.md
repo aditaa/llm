@@ -12,17 +12,20 @@ export HF_TOKEN=hf_xxx
 # bundle only (local)
 .venv/bin/python scripts/hf_prepare_and_publish_model.py \
   --repo-id aditaa/llm-from-scratch-v1 \
-  --checkpoint artifacts/checkpoints/fineweb-global-bpe-v1-big-run1/last.pt
+  --checkpoint artifacts/checkpoints/fineweb-global-bpe-v1-big-run1/last.pt \
+  --include-safetensors
 
 # bundle + push to HF model repo
 .venv/bin/python scripts/hf_prepare_and_publish_model.py \
   --repo-id aditaa/llm-from-scratch-v1 \
   --checkpoint artifacts/checkpoints/fineweb-global-bpe-v1-big-run1/last.pt \
+  --include-safetensors \
   --push
 ```
 
 Bundle output includes:
 - `checkpoint.pt`
+- `model.safetensors` (optional weights-only export)
 - `tokenizer.json`
 - `release_manifest.json`
 - `README.md` (model card)

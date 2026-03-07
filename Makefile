@@ -90,7 +90,7 @@ verify-shards:
 
 train:
 	@echo "Usage:"
-	@echo "  PYTHONPATH=src $(PYTHON) -m llm.cli train --shards-path data/shards/<dataset> --output-dir artifacts/checkpoints/<run_name>"
+	@echo "  PYTHONPATH=src $(PYTHON) -m llm.cli train --shards-path data/shards/<dataset> --output-dir artifacts/checkpoints/<run_name> --lr-schedule cosine --lr-warmup-steps 200 --grad-accum-steps 1 --fail-on-eval-regression"
 
 generate:
 	@echo "Usage:"
@@ -114,7 +114,7 @@ offload-zim:
 
 hf-prepare-publish:
 	@echo "Prepare release bundle and optionally push to Hugging Face model repo."
-	@echo "Usage: $(PYTHON) scripts/hf_prepare_and_publish_model.py --repo-id <owner/model> --checkpoint artifacts/checkpoints/<run>/last.pt [--push]"
+	@echo "Usage: $(PYTHON) scripts/hf_prepare_and_publish_model.py --repo-id <owner/model> --checkpoint artifacts/checkpoints/<run>/last.pt --include-safetensors [--push]"
 
 hf-download-model:
 	@echo "Download full model snapshot from Hugging Face to local directory."

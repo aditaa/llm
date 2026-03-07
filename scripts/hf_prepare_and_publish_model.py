@@ -59,7 +59,7 @@ Decoder-only LLM checkpoint exported from the `aditaa/llm` training stack.
 ## Files
 - `checkpoint.pt`: training checkpoint payload (`model_state`, optimizer state, configs)
 - `model.safetensors`: optional model weights-only export (when enabled)
-- `tokenizer.json`: tokenizer payload used by checkpoint (char or BPE)
+- `tokenizer.json`: tokenizer payload used by checkpoint (BPE)
 - `release_manifest.json`: metadata for reproducibility
 
 ## Usage (this repository runtime)

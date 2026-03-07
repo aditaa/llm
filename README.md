@@ -288,6 +288,10 @@ PYTHONPATH=src .venv/bin/python -m llm.cli train \
   --max-steps 200 \
   --batch-size 8 \
   --context-length 256 \
+  --lr-schedule cosine \
+  --lr-warmup-steps 50 \
+  --grad-accum-steps 1 \
+  --fail-on-eval-regression \
   --precision auto
 ```
 Note: `train` requires all selected manifests to share the exact same tokenizer mapping.
@@ -295,6 +299,12 @@ Use a global tokenizer + `shard-corpus-batch` output root for multi-dataset runs
 For higher sustained GPU utilization on CUDA, use `--precision auto` and keep
 validation less frequent (`--eval-interval 500 --eval-steps 10`).
 If utilization is still bursty on smaller models, test `--compile-model`.
+Training now supports:
+- warmup + cosine LR schedule (`--lr-schedule`, `--lr-warmup-steps`, `--lr-min-ratio`)
+- gradient accumulation (`--grad-accum-steps`)
+- fixed held-out eval batches (`--no-eval-freeze-batches` to disable)
+- eval regression gate (`--fail-on-eval-regression --eval-regression-tolerance 0.20`)
+- optional weights-only export (`--export-safetensors`)
 
 9. Generate text from a checkpoint:
 ```bash
@@ -339,6 +349,9 @@ PYTHONPATH=src .venv/bin/python -m llm.cli train \
   --max-steps 1000 \
   --batch-size 12 \
   --context-length 256 \
+  --lr-schedule cosine \
+  --lr-warmup-steps 200 \
+  --fail-on-eval-regression \
   --precision auto
 ```
 
@@ -455,7 +468,9 @@ bash scripts/hydrate_from_warm_storage.sh /mnt/ceph/llm/data
 - Batch corpus sharding (`shard-corpus-batch`) with one shared tokenizer.
 - Baseline GPT training (`train`) with checkpoint save/resume.
   - Default architecture: RoPE + RMSNorm + SwiGLU (`gpt_rope_rmsnorm_swiglu_v1`).
+  - Includes AdamW no-decay param groups, warmup/cosine LR, and grad accumulation.
 - Checkpoint-based text generation (`generate`) with temperature/top-k sampling.
+- Optional safetensors export for deployment (`--export-safetensors`).
 - Unit tests for tokenizer round-trips and unknown token behavior.
 
 ## Next Milestones

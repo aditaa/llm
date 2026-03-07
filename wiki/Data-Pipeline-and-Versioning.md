@@ -37,6 +37,10 @@ PYTHONPATH=src .venv/bin/python -m llm.cli train --shards-path data/shards_globa
 Throughput tuning notes:
 - Prefer `--precision auto` on CUDA.
 - Keep eval overhead bounded (`--eval-interval 500+`, `--eval-steps 5-10`).
+- Prefer warmup+cosine LR (`--lr-schedule cosine --lr-warmup-steps <N>`).
+- Use `--grad-accum-steps` to trade throughput for lower peak VRAM.
+- Keep held-out eval batches frozen (default) and optionally gate regressions with
+  `--fail-on-eval-regression --eval-regression-tolerance 0.20`.
 - If utilization is bursty, test `--compile-model --compile-mode reduce-overhead`.
 ```
 

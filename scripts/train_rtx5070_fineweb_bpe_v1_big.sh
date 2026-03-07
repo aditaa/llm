@@ -17,7 +17,12 @@ PYTHONPATH=src \
   --n-heads 12 \
   --d-model 768 \
   --learning-rate 1.5e-4 \
+  --lr-schedule cosine \
+  --lr-warmup-steps 1000 \
+  --lr-min-ratio 0.10 \
   --eval-interval 2000 \
   --eval-steps 5 \
+  --fail-on-eval-regression \
+  --eval-regression-tolerance 0.20 \
   --log-interval 100 \
   --precision auto

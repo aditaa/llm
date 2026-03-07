@@ -41,6 +41,9 @@ Probe artifact source: `artifacts/reports/rtx5070_probe_12x12x768_ctx512.tsv`
 - `learning_rate=1.5e-4`
 - `eval_interval=2000`
 - `eval_steps=5`
+- `lr_schedule=cosine`
+- `lr_warmup_steps=1000`
+- `fail_on_eval_regression=true` (`eval_regression_tolerance=0.20`)
 - `log_interval=100`
 - `precision=auto`
 

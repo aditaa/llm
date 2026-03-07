@@ -110,6 +110,11 @@ Keep PR scope narrow; split refactors and features into separate PRs.
 - For CUDA training throughput, prefer `llm.cli train --precision auto` (disable TF32 only if needed with `--no-tf32`)
 - If GPU utilization stays bursty, try `llm.cli train --compile-model --compile-mode reduce-overhead`
 - Default training architecture is `gpt_rope_rmsnorm_swiglu_v1`; use legacy profile only for old checkpoint compatibility
+- Prefer `llm.cli train --lr-schedule cosine --lr-warmup-steps <N>` for stable first-pass runs
+- Use `--grad-accum-steps` when VRAM is tight and you need higher effective batch
+- Keep held-out eval batches frozen (default) and enable regression gating with `--fail-on-eval-regression`
+- Optimizer uses no-weight-decay groups for norms/biases/embeddings by default
+- For deploy bundles, export weights-only safetensors via `llm.cli train --export-safetensors` or `hf_prepare_and_publish_model.py --include-safetensors`
 - RTX 5070 tuned training profiles live in `configs/train/rtx5070/`; preferred BPE launcher: `bash scripts/train_rtx5070_fineweb_bpe_v1_big.sh`
 - Version extracted/tokenized/sharded outputs with the ZIM date stamp (for example `serverfault_2025-08`)
 - Keep raw ZIM archives in `/mnt/ceph/llm/data/raw_zim/`

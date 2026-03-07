@@ -55,6 +55,9 @@ make offload-zim
 ```bash
 bash scripts/train_rtx5070_fineweb_bpe_v1_big.sh
 ```
+- Training defaults now include warmup+cosine LR and fixed held-out eval batches.
+- For VRAM pressure, increase effective batch with `--grad-accum-steps`.
+- For release bundles, use `--include-safetensors` in HF prepare script.
 
 ## Wiki Publishing
 Wiki pages are source-controlled in `wiki/` and published with:

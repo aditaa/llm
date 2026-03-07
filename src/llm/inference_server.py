@@ -15,7 +15,7 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
 from llm.generate import _resolve_device
-from llm.model import GPTModel, ModelConfig
+from llm.model import GPTModel, model_config_from_dict
 from llm.tokenizer import TokenizerLike, load_tokenizer
 
 
@@ -150,7 +150,7 @@ def _load_state(
     model_cfg_raw = checkpoint.get("model_config")
     if not isinstance(model_cfg_raw, dict):
         raise ValueError("checkpoint missing model_config")
-    model_config = ModelConfig(**model_cfg_raw)
+    model_config = model_config_from_dict(model_cfg_raw)
 
     if tokenizer_path is None:
         tok_from_ckpt = checkpoint.get("tokenizer_path")

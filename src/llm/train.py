@@ -12,7 +12,7 @@ import numpy as np
 import torch
 from torch import Tensor
 
-from llm.model import GPTModel, ModelConfig
+from llm.model import ARCH_MODERN, GPTModel, ModelConfig, model_config_from_dict
 from llm.tokenizer import load_tokenizer, tokenizer_contract_fingerprint, tokenizer_fingerprint
 
 
@@ -35,6 +35,11 @@ class TrainConfig:
     n_heads: int = 4
     d_model: int = 256
     dropout: float = 0.1
+    architecture: str = ARCH_MODERN
+    rope_theta: float = 10_000.0
+    norm_eps: float = 1e-5
+    ffn_hidden_multiplier: float = 8.0 / 3.0
+    use_bias: bool = False
     resume_from: Path | None = None
     precision: str = "auto"
     tf32: bool = True
@@ -381,7 +386,25 @@ def run_training(config: TrainConfig) -> dict[str, Any]:
         n_heads=config.n_heads,
         d_model=config.d_model,
         dropout=config.dropout,
+        architecture=config.architecture,
+        rope_theta=config.rope_theta,
+        norm_eps=config.norm_eps,
+        ffn_hidden_multiplier=config.ffn_hidden_multiplier,
+        use_bias=config.use_bias,
     )
+
+    start_step = 0
+    resume_checkpoint: dict[str, Any] | None = None
+    if config.resume_from is not None:
+        resume_checkpoint = torch.load(config.resume_from, map_location=device)
+        checkpoint_model_config = resume_checkpoint.get("model_config")
+        if isinstance(checkpoint_model_config, dict):
+            model_config = model_config_from_dict(checkpoint_model_config)
+        if model_config.vocab_size != info.vocab_size:
+            raise ValueError(
+                "resume checkpoint vocab_size does not match shard tokenizer vocab_size"
+            )
+
     model = GPTModel(model_config).to(device)
     optimizer = torch.optim.AdamW(
         model.parameters(),
@@ -393,15 +416,13 @@ def run_training(config: TrainConfig) -> dict[str, Any]:
     else:
         scaler = torch.cuda.amp.GradScaler(enabled=use_grad_scaler)
 
-    start_step = 0
-    if config.resume_from is not None:
-        checkpoint = torch.load(config.resume_from, map_location=device)
-        model.load_state_dict(checkpoint["model_state"])
-        optimizer.load_state_dict(checkpoint["optimizer_state"])
-        scaler_state = checkpoint.get("scaler_state")
+    if resume_checkpoint is not None:
+        model.load_state_dict(resume_checkpoint["model_state"])
+        optimizer.load_state_dict(resume_checkpoint["optimizer_state"])
+        scaler_state = resume_checkpoint.get("scaler_state")
         if use_grad_scaler and scaler_state is not None:
             scaler.load_state_dict(scaler_state)
-        start_step = int(checkpoint["step"])
+        start_step = int(resume_checkpoint["step"])
 
     train_model: torch.nn.Module = model
     if config.compile_model:
@@ -442,6 +463,7 @@ def run_training(config: TrainConfig) -> dict[str, Any]:
 
     tokenizer = load_tokenizer(info.tokenizer_path)
     print(f"device={device}")
+    print(f"architecture={model_config.architecture}")
     print(f"vocab_size={tokenizer.vocab_size}")
     print(f"tokenizer_contract_hash={info.tokenizer_contract_hash}")
     print(f"train_tokens={info.train_tokens}")

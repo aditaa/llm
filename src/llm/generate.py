@@ -9,7 +9,7 @@ from typing import Any
 import torch
 from torch import Tensor
 
-from llm.model import GPTModel, ModelConfig
+from llm.model import GPTModel, model_config_from_dict
 from llm.tokenizer import load_tokenizer
 
 
@@ -69,7 +69,7 @@ def run_generation(config: GenerateConfig) -> dict[str, Any]:
     model_cfg_raw = checkpoint.get("model_config")
     if not isinstance(model_cfg_raw, dict):
         raise ValueError("checkpoint missing model_config")
-    model_config = ModelConfig(**model_cfg_raw)
+    model_config = model_config_from_dict(model_cfg_raw)
 
     tokenizer_path = checkpoint.get("tokenizer_path")
     if not isinstance(tokenizer_path, str):

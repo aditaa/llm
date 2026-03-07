@@ -17,6 +17,7 @@ from llm.corpus import (
     save_quality_report,
 )
 from llm.integrity import verify_shards
+from llm.model import ARCH_LEGACY, ARCH_MODERN
 from llm.sharding import ShardConfig, iter_corpus_files, shard_corpora_batch, shard_corpus
 from llm.tokenizer import (
     BPETokenizer,
@@ -518,6 +519,11 @@ def cmd_train(
     n_heads: int,
     d_model: int,
     dropout: float,
+    architecture: str,
+    rope_theta: float,
+    norm_eps: float,
+    ffn_hidden_multiplier: float,
+    use_bias: bool,
     resume_from: str | None,
     precision: str,
     tf32: bool,
@@ -544,6 +550,11 @@ def cmd_train(
         n_heads=n_heads,
         d_model=d_model,
         dropout=dropout,
+        architecture=architecture,
+        rope_theta=rope_theta,
+        norm_eps=norm_eps,
+        ffn_hidden_multiplier=ffn_hidden_multiplier,
+        use_bias=use_bias,
         resume_from=Path(resume_from) if resume_from else None,
         precision=precision,
         tf32=tf32,
@@ -1088,6 +1099,35 @@ def parse_args() -> argparse.Namespace:
     train_parser.add_argument("--d-model", type=int, default=256, help="Model hidden size")
     train_parser.add_argument("--dropout", type=float, default=0.1, help="Dropout")
     train_parser.add_argument(
+        "--architecture",
+        choices=[ARCH_MODERN, ARCH_LEGACY],
+        default=ARCH_MODERN,
+        help="Model architecture profile (modern default; legacy for old checkpoints)",
+    )
+    train_parser.add_argument(
+        "--rope-theta",
+        type=float,
+        default=10_000.0,
+        help="RoPE base theta (used by modern architecture)",
+    )
+    train_parser.add_argument(
+        "--norm-eps",
+        type=float,
+        default=1e-5,
+        help="Epsilon for normalization layers",
+    )
+    train_parser.add_argument(
+        "--ffn-hidden-multiplier",
+        type=float,
+        default=(8.0 / 3.0),
+        help="FFN expansion multiplier for modern SwiGLU blocks",
+    )
+    train_parser.add_argument(
+        "--use-bias",
+        action="store_true",
+        help="Enable linear biases in attention/FFN projections",
+    )
+    train_parser.add_argument(
         "--precision",
         choices=["auto", "fp32", "fp16", "bf16"],
         default="auto",
@@ -1298,6 +1338,11 @@ def main() -> int:
             n_heads=args.n_heads,
             d_model=args.d_model,
             dropout=args.dropout,
+            architecture=args.architecture,
+            rope_theta=args.rope_theta,
+            norm_eps=args.norm_eps,
+            ffn_hidden_multiplier=args.ffn_hidden_multiplier,
+            use_bias=args.use_bias,
             resume_from=args.resume_from,
             precision=args.precision,
             tf32=not args.no_tf32,

@@ -24,6 +24,11 @@ train = [
   "pandas>=2.2.1",
   "pyarrow>=15.0.0",
   "tqdm>=4.66.1",
+  "huggingface_hub>=0.30.0",
+]
+serve = [
+  "fastapi>=0.115.0",
+  "uvicorn[standard]>=0.30.0",
 ]
 notebook = [
   "jupyterlab>=4.0",

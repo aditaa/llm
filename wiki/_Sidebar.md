@@ -5,4 +5,5 @@
 - [Dataset Registry](Dataset-Registry)
 - [Development Workflow](Development-Workflow)
 - [Architecture and Roadmap](Architecture-and-Roadmap)
+- [Release and Deployment](Release-and-Deployment)
 - [References](References)

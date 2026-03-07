@@ -4,13 +4,16 @@ ifneq ("$(wildcard .venv/bin/python)","")
 PYTHON=.venv/bin/python
 endif
 
-.PHONY: setup-dev setup-train doctor install-server-system test lint format typecheck smoke extract-zim train-tokenizer train-tokenizer-global corpus-quality-report clean-corpus-batch dataset-risk-report pull-hf-rows parquet-to-corpus fineweb-parquet-to-shards stage-fineweb-from-warm shard-corpus-batch verify-shards train generate sync-warm hydrate-warm offload-zim publish-wiki
+.PHONY: setup-dev setup-train setup-infer doctor install-server-system test lint format typecheck smoke extract-zim train-tokenizer train-tokenizer-global corpus-quality-report clean-corpus-batch dataset-risk-report pull-hf-rows parquet-to-corpus fineweb-parquet-to-shards stage-fineweb-from-warm shard-corpus-batch verify-shards train generate sync-warm hydrate-warm offload-zim hf-prepare-publish hf-download-model serve-openai publish-wiki
 
 setup-dev:
 	bash scripts/bootstrap_dev.sh
 
 setup-train:
 	bash scripts/bootstrap_train.sh
+
+setup-infer:
+	bash scripts/bootstrap_inference.sh
 
 doctor:
 	bash scripts/doctor.sh
@@ -100,6 +103,18 @@ hydrate-warm:
 offload-zim:
 	@echo "Continuously move raw ZIMs from hot to warm storage."
 	@echo "Usage: bash scripts/zim_offload_worker.sh data/raw_zim /mnt/ceph/llm/data/raw_zim 120"
+
+hf-prepare-publish:
+	@echo "Prepare release bundle and optionally push to Hugging Face model repo."
+	@echo "Usage: $(PYTHON) scripts/hf_prepare_and_publish_model.py --repo-id <owner/model> --checkpoint artifacts/checkpoints/<run>/last.pt [--push]"
+
+hf-download-model:
+	@echo "Download full model snapshot from Hugging Face to local directory."
+	@echo "Usage: bash scripts/hf_download_model.sh <owner/model> <dest-dir>"
+
+serve-openai:
+	@echo "Serve local model as OpenAI-compatible API."
+	@echo "Usage: bash scripts/run_openai_server.sh <model-dir>"
 
 publish-wiki:
 	@echo "Publish wiki pages from ./wiki to GitHub wiki repo."

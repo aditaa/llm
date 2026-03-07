@@ -17,6 +17,7 @@ Operational docs for the `llm` repository, focused on reproducible data prep, to
 - [Data Pipeline and Versioning](Data-Pipeline-and-Versioning)
 - [Development Workflow](Development-Workflow)
 - [Architecture and Roadmap](Architecture-and-Roadmap)
+- [Release and Deployment](Release-and-Deployment)
 - [References](References)
 
 ## Current Status

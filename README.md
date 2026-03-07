@@ -15,6 +15,7 @@ Production-style, decoder-only LLM engineering project focused on reproducible d
 - Wiki: [`wiki/`](wiki)
 - Setup: [`docs/SERVER_SETUP.md`](docs/SERVER_SETUP.md)
 - RTX 5070 tuning: [`docs/RTX5070_TUNING.md`](docs/RTX5070_TUNING.md)
+- HF release + deploy: [`docs/HF_RELEASE_AND_DEPLOY.md`](docs/HF_RELEASE_AND_DEPLOY.md)
 - Contributor guide: [`AGENTS.md`](AGENTS.md)
 
 ## Project Goals
@@ -40,6 +41,7 @@ bash scripts/bootstrap_dev.sh
 
 ## Common Commands
 ```bash
+make setup-infer # install inference/deploy dependencies
 make test        # run unit tests
 make lint        # run Ruff checks
 make format      # run Black formatter
@@ -59,6 +61,9 @@ make shard-corpus-batch # print shared-tokenizer batch sharding usage
 make sync-warm   # sync raw/training data + artifacts to warm storage
 make hydrate-warm # hydrate hot workspace from warm storage
 make offload-zim # continuously move raw ZIMs hot -> warm
+make hf-prepare-publish # print HF bundle/publish usage
+make hf-download-model # print full HF model download usage
+make serve-openai # print local OpenAI-compatible server usage
 make doctor      # verify binaries and Python deps
 ```
 

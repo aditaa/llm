@@ -15,6 +15,7 @@ Keep modules single-purpose and expand by domain (for example: `src/llm/training
 Use the `Makefile` as the source of truth:
 - `make setup-dev`: create `.venv`, install dev deps, init submodules
 - `make setup-train`: install training/notebook extras
+- `make setup-infer`: install inference/deploy extras
 - `make install-server-system`: install Ubuntu/Debian system packages
 - `make doctor`: environment/tooling diagnostics
 - `make test`: run `unittest` test suite
@@ -33,6 +34,9 @@ Use the `Makefile` as the source of truth:
 - `make fineweb-parquet-to-shards`: usage helper for direct FineWeb parquet -> tokenizer -> shard conversion
 - `make stage-fineweb-from-warm`: usage helper for staging FineWeb parquet chunks from warm to hot
 - `make shard-corpus-batch`: usage helper for batch sharding with a shared tokenizer
+- `make hf-prepare-publish`: usage helper for Hugging Face release bundle/publish
+- `make hf-download-model`: usage helper for full Hugging Face model snapshot download
+- `make serve-openai`: usage helper for local OpenAI-compatible serving
 
 Server setup reference:
 `docs/SERVER_SETUP.md`
@@ -102,6 +106,8 @@ Keep PR scope narrow; split refactors and features into separate PRs.
 - RTX 5070 tuned training profiles live in `configs/train/rtx5070/`; default launcher: `bash scripts/train_rtx5070_fineweb_v2_big.sh`
 - Version extracted/tokenized/sharded outputs with the ZIM date stamp (for example `serverfault_2025-08`)
 - Keep raw ZIM archives in `/mnt/ceph/llm/data/raw_zim/`
+- For portable model release + offline server deploy, follow `docs/HF_RELEASE_AND_DEPLOY.md`
+- On restricted-network deploy hosts, download full model snapshots locally with `hf-download-model` before serving
 
 ## Reference Material Workflow
 - Store reusable project references in `information/`

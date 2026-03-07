@@ -50,6 +50,20 @@ PYTHONPATH=src .venv/bin/python scripts/fineweb_parquet_to_shards.py \
   --val-ratio 0.01
 ```
 
+Rolling FineWeb 350BT ingestion on limited hot disk:
+```bash
+bash scripts/fineweb_stage_shard_loop.sh \
+  --stage-max-files 10 \
+  --process-max-files 10 \
+  --sleep-seconds 120
+```
+This loop:
+- stages bounded parquet files from warm (`/mnt/ceph/llm/data`) to hot (`./data`)
+- builds shard batches with a shared tokenizer
+- runs `verify-shards` on each batch
+- syncs shard outputs back to warm storage
+- deletes processed hot parquet files to reclaim local space
+
 ## Versioning Rule
 Use ZIM date stamps as the canonical dataset version.
 

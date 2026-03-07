@@ -4,7 +4,7 @@ ifneq ("$(wildcard .venv/bin/python)","")
 PYTHON=.venv/bin/python
 endif
 
-.PHONY: setup-dev setup-train setup-infer doctor install-server-system test lint format typecheck smoke extract-zim train-tokenizer train-tokenizer-global corpus-quality-report clean-corpus-batch dataset-risk-report pull-hf-rows parquet-to-corpus fineweb-parquet-to-shards stage-fineweb-from-warm shard-corpus-batch verify-shards train generate sync-warm hydrate-warm offload-zim hf-prepare-publish hf-download-model serve-openai publish-wiki
+.PHONY: setup-dev setup-train setup-infer doctor install-server-system test lint format typecheck smoke extract-zim train-tokenizer train-tokenizer-global corpus-quality-report clean-corpus-batch dataset-risk-report pull-hf-rows parquet-to-corpus fineweb-parquet-to-shards stage-fineweb-from-warm fineweb-stage-shard-loop shard-corpus-batch verify-shards train generate sync-warm hydrate-warm offload-zim hf-prepare-publish hf-download-model serve-openai publish-wiki
 
 setup-dev:
 	bash scripts/bootstrap_dev.sh
@@ -75,6 +75,10 @@ fineweb-parquet-to-shards:
 stage-fineweb-from-warm:
 	@echo "Usage:"
 	@echo "  bash scripts/stage_fineweb_from_warm.sh --max-files 4 --max-gib 8"
+
+fineweb-stage-shard-loop:
+	@echo "Usage:"
+	@echo "  bash scripts/fineweb_stage_shard_loop.sh --stage-max-files 10 --process-max-files 10 --sleep-seconds 120"
 
 shard-corpus-batch:
 	@echo "Usage:"

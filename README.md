@@ -57,6 +57,7 @@ make dataset-risk-report # print heuristic dataset risk audit command usage
 make pull-hf-rows # print Hugging Face rows API pull helper usage
 make fineweb-parquet-to-shards # print direct FineWeb parquet->token-shards usage
 make stage-fineweb-from-warm # print warm->hot FineWeb chunk staging usage
+make fineweb-stage-shard-loop # print rolling stage->shard->verify->sync->purge usage
 make shard-corpus-batch # print shared-tokenizer batch sharding usage
 make sync-warm   # sync raw/training data + artifacts to warm storage
 make hydrate-warm # hydrate hot workspace from warm storage
@@ -185,7 +186,18 @@ Notes:
 bash scripts/stage_fineweb_from_warm.sh --max-files 4 --max-gib 8
 ```
 
-3ac. Build tokenizer + token shards directly from FineWeb parquet:
+3ac. Run rolling warm->hot staging + sharding loop (recommended for 350BT on limited hot disk):
+```bash
+bash scripts/fineweb_stage_shard_loop.sh \
+  --stage-max-files 10 \
+  --process-max-files 10 \
+  --sleep-seconds 120
+```
+This loop stages bounded parquet files to hot storage, builds verified shard batches under
+`data/shards_global/fineweb-global-char-v1/`, syncs those batches back to warm storage,
+and purges processed hot parquet files.
+
+3ad. Build tokenizer + token shards directly from FineWeb parquet:
 ```bash
 PYTHONPATH=src .venv/bin/python scripts/fineweb_parquet_to_shards.py \
   --input-dir data/fineweb/sample-10BT \

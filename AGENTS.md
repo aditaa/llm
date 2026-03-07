@@ -33,6 +33,7 @@ Use the `Makefile` as the source of truth:
 - `make pull-hf-rows`: usage helper for bounded Hugging Face rows pulls
 - `make fineweb-parquet-to-shards`: usage helper for direct FineWeb parquet -> tokenizer -> shard conversion
 - `make stage-fineweb-from-warm`: usage helper for staging FineWeb parquet chunks from warm to hot
+- `make fineweb-stage-shard-loop`: usage helper for rolling warm->hot stage + shard + verify + sync + purge
 - `make shard-corpus-batch`: usage helper for batch sharding with a shared tokenizer
 - `make hf-prepare-publish`: usage helper for Hugging Face release bundle/publish
 - `make hf-download-model`: usage helper for full Hugging Face model snapshot download
@@ -97,6 +98,7 @@ Keep PR scope narrow; split refactors and features into separate PRs.
 - Use `bash scripts/hydrate_from_warm_storage.sh /mnt/ceph/llm/data` to restore local artifacts from warm storage
 - For bounded external pulls (for example FineWeb samples), use `python3 scripts/pull_hf_rows.py` and write to warm storage first
 - For parquet-based FineWeb workflows, use `scripts/stage_fineweb_from_warm.sh` to copy bounded warm chunks into hot storage
+- For long-running 350BT ingestion on limited hot disk, use `scripts/fineweb_stage_shard_loop.sh` for staged processing and automatic hot-space reclaim
 - For FineWeb-first training runs, build shards directly with `PYTHONPATH=src .venv/bin/python scripts/fineweb_parquet_to_shards.py --input-dir data/fineweb/sample-10BT --output-dir data/shards_global/fineweb-s10bt-global-char-v1 --tokenizer-out artifacts/tokenizer/fineweb-s10bt-global-char-v1.json --field text`
 - FineWeb-only baseline flow: `fineweb_parquet_to_shards -> verify-shards -> train`
 - For incremental FineWeb adds, freeze tokenizer on phase1 and build later phases with `--tokenizer-in` plus `--files-list`; resume training from `last.pt` with same `--shards-path` root

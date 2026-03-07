@@ -3,8 +3,8 @@ set -euo pipefail
 
 WARM_PARQUET_DIR="/mnt/ceph/llm/data/fineweb/sample-350BT/sample/350BT"
 HOT_PARQUET_DIR="data/fineweb/sample-350BT/sample/350BT"
-SHARDS_ROOT="data/shards_global/fineweb-global-char-v1"
-TOKENIZER_PATH="artifacts/tokenizer/fineweb-global-char-v1.json"
+SHARDS_ROOT="data/shards_global/fineweb-global-bpe-v1"
+TOKENIZER_PATH="artifacts/tokenizer/fineweb-global-bpe-v1.json"
 STATE_DIR="artifacts/reports/fineweb_stage_shard_loop"
 WARM_ROOT="/mnt/ceph/llm/data"
 

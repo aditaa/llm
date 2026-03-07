@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Build token shards directly from FineWeb parquet files.
 
-Default mode trains a char tokenizer from selected parquet rows, then writes shards.
+Default mode trains a tokenizer from selected parquet rows, then writes shards.
 Incremental mode reuses an existing tokenizer via --tokenizer-in.
 """
 
@@ -15,7 +15,7 @@ from array import array
 from pathlib import Path
 from typing import Any, Iterator
 
-from llm.tokenizer import BasicCharTokenizer
+from llm.tokenizer import BPETokenizer, BasicCharTokenizer, TokenizerLike, load_tokenizer
 
 
 def _normalize_line(text: str) -> str:
@@ -157,6 +157,24 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Existing tokenizer JSON path (reuse for incremental shard builds)",
     )
+    parser.add_argument(
+        "--tokenizer-type",
+        choices=["char", "bpe"],
+        default="bpe",
+        help="Tokenizer type for new tokenizer training (ignored when --tokenizer-in is set)",
+    )
+    parser.add_argument(
+        "--bpe-vocab-size",
+        type=int,
+        default=32000,
+        help="BPE vocab size when --tokenizer-type=bpe",
+    )
+    parser.add_argument(
+        "--bpe-min-frequency",
+        type=int,
+        default=2,
+        help="BPE min frequency when --tokenizer-type=bpe",
+    )
     parser.add_argument("--pattern", default="*.parquet", help="Parquet glob pattern")
     parser.add_argument(
         "--files-list",
@@ -199,6 +217,10 @@ def main() -> int:
         raise ValueError("min-chars must be >= 0")
     if args.max_chars < 0:
         raise ValueError("max-chars must be >= 0")
+    if args.bpe_vocab_size <= 0:
+        raise ValueError("bpe-vocab-size must be > 0")
+    if args.bpe_min_frequency < 1:
+        raise ValueError("bpe-min-frequency must be >= 1")
 
     input_dir = Path(args.input_dir)
     output_dir = Path(args.output_dir)
@@ -232,11 +254,12 @@ def main() -> int:
         raise FileExistsError(f"manifest exists: {manifest_path} (use --force to overwrite)")
 
     started_at = time.time()
+    tokenizer: TokenizerLike
 
     if tokenizer_in is not None:
         if not tokenizer_in.exists():
             raise FileNotFoundError(f"tokenizer-in not found: {tokenizer_in}")
-        tokenizer = BasicCharTokenizer.load(tokenizer_in)
+        tokenizer = load_tokenizer(tokenizer_in)
         tokenizer_path = tokenizer_in
         pass1_rows = 0
         print(
@@ -246,24 +269,37 @@ def main() -> int:
     else:
         if tokenizer_out is None:
             raise ValueError("tokenizer-out is required when tokenizer-in is not set")
-        print(f"pass=1 action=scan_chars parquet_files={len(parquet_files)}")
-        chars: set[str] = set()
         pass1_rows = 0
-        for text in _iter_text_rows(
-            parquet_files=parquet_files,
-            field=args.field,
-            batch_size=args.batch_size,
-            min_chars=args.min_chars,
-            max_chars=args.max_chars,
-            max_rows_per_file=args.max_rows_per_file,
-        ):
-            chars.update(text)
-            chars.add("\n")
-            pass1_rows += 1
-            if pass1_rows % 500_000 == 0:
-                print(f"pass=1 rows={pass1_rows} unique_chars={len(chars)}")
+        print(f"pass=1 action=train_tokenizer type={args.tokenizer_type} parquet_files={len(parquet_files)}")
 
-        tokenizer = BasicCharTokenizer.train("".join(sorted(chars)))
+        def _iter_training_rows() -> Iterator[str]:
+            nonlocal pass1_rows
+            for text in _iter_text_rows(
+                parquet_files=parquet_files,
+                field=args.field,
+                batch_size=args.batch_size,
+                min_chars=args.min_chars,
+                max_chars=args.max_chars,
+                max_rows_per_file=args.max_rows_per_file,
+            ):
+                pass1_rows += 1
+                if pass1_rows % 500_000 == 0:
+                    print(f"pass=1 rows={pass1_rows}")
+                yield text
+
+        if args.tokenizer_type == "bpe":
+            tokenizer = BPETokenizer.train_from_iterator(
+                _iter_training_rows(),
+                vocab_size=args.bpe_vocab_size,
+                min_frequency=args.bpe_min_frequency,
+            )
+        else:
+            chars: set[str] = set()
+            for text in _iter_training_rows():
+                chars.update(text)
+                chars.add("\n")
+            tokenizer = BasicCharTokenizer.train("".join(sorted(chars)))
+
         tokenizer_out.parent.mkdir(parents=True, exist_ok=True)
         tokenizer.save(tokenizer_out)
         tokenizer_path = tokenizer_out
@@ -317,6 +353,7 @@ def main() -> int:
         "input_pattern": args.pattern,
         "input_files": [str(path) for path in parquet_files],
         "tokenizer_path": str(tokenizer_path),
+        "tokenizer_type": args.tokenizer_type if tokenizer_in is None else "reused",
         "tokenizer_vocab_size": tokenizer.vocab_size,
         "token_dtype": token_dtype,
         "shard_size_tokens": args.shard_size_tokens,
@@ -345,6 +382,7 @@ def main() -> int:
     report = {
         "manifest": str(manifest_path),
         "tokenizer": str(tokenizer_path),
+        "tokenizer_type": args.tokenizer_type if tokenizer_in is None else "reused",
         "parquet_files": len(parquet_files),
         "rows_seen": pass1_rows,
         "rows_sharded": pass2_rows,

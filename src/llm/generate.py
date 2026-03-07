@@ -10,7 +10,7 @@ import torch
 from torch import Tensor
 
 from llm.model import GPTModel, ModelConfig
-from llm.tokenizer import BasicCharTokenizer
+from llm.tokenizer import load_tokenizer
 
 
 @dataclass
@@ -74,7 +74,7 @@ def run_generation(config: GenerateConfig) -> dict[str, Any]:
     tokenizer_path = checkpoint.get("tokenizer_path")
     if not isinstance(tokenizer_path, str):
         raise ValueError("checkpoint missing tokenizer_path")
-    tokenizer = BasicCharTokenizer.load(tokenizer_path)
+    tokenizer = load_tokenizer(tokenizer_path)
 
     model = GPTModel(model_config).to(device)
     model.load_state_dict(checkpoint["model_state"])
@@ -82,9 +82,10 @@ def run_generation(config: GenerateConfig) -> dict[str, Any]:
 
     token_ids = tokenizer.encode(config.prompt)
     if not token_ids:
-        token_ids = [tokenizer.stoi["<bos>"]]
+        bos_id = tokenizer.bos_id if tokenizer.bos_id is not None else 0
+        token_ids = [bos_id]
 
-    eos_id = tokenizer.stoi.get("<eos>", -1)
+    eos_id = tokenizer.eos_id if tokenizer.eos_id is not None else -1
 
     with torch.no_grad():
         for _ in range(config.max_new_tokens):

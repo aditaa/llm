@@ -195,15 +195,15 @@ bash scripts/fineweb_stage_shard_loop.sh \
   --sleep-seconds 120
 ```
 This loop stages bounded parquet files to hot storage, builds verified shard batches under
-`data/shards_global/fineweb-global-char-v1/`, syncs those batches back to warm storage,
+`data/shards_global/fineweb-global-bpe-v1/`, syncs those batches back to warm storage,
 and purges processed hot parquet files.
 
 3ad. Build tokenizer + token shards directly from FineWeb parquet:
 ```bash
 PYTHONPATH=src .venv/bin/python scripts/fineweb_parquet_to_shards.py \
   --input-dir data/fineweb/sample-10BT \
-  --output-dir data/shards_global/fineweb-s10bt-global-char-v1 \
-  --tokenizer-out artifacts/tokenizer/fineweb-s10bt-global-char-v1.json \
+  --output-dir data/shards_global/fineweb-s10bt-global-bpe-v1 \
+  --tokenizer-out artifacts/tokenizer/fineweb-s10bt-global-bpe-v1.json \
   --field text \
   --min-chars 80 \
   --shard-size-tokens 5000000 \
@@ -244,7 +244,7 @@ PYTHONPATH=src .venv/bin/python -m llm.cli train-tokenizer-global \
   --input-dir data/cleaned \
   --pattern "*.clean.txt" \
   --from-shards-path data/shards \
-  --output artifacts/tokenizer/global-char-v1.json
+  --output artifacts/tokenizer/global-bpe-v1.json
 ```
 
 5c. Re-shard many corpora with that global tokenizer:
@@ -253,8 +253,8 @@ PYTHONPATH=src .venv/bin/python -m llm.cli shard-corpus-batch \
   --input-dir data/cleaned \
   --pattern "*.clean.txt" \
   --from-shards-path data/shards \
-  --tokenizer artifacts/tokenizer/global-char-v1.json \
-  --output-root data/shards_global/global-char-v1
+  --tokenizer artifacts/tokenizer/global-bpe-v1.json \
+  --output-root data/shards_global/global-bpe-v1
 ```
 
 6. Inspect corpus quickly:
@@ -311,8 +311,8 @@ Use this when you want round-1 pretraining only from FineWeb (no ZIM mix yet):
 # 1) build tokenizer + shards directly from parquet
 PYTHONPATH=src .venv/bin/python scripts/fineweb_parquet_to_shards.py \
   --input-dir data/fineweb/sample-10BT \
-  --output-dir data/shards_global/fineweb-s10bt-global-char-v1 \
-  --tokenizer-out artifacts/tokenizer/fineweb-s10bt-global-char-v1.json \
+  --output-dir data/shards_global/fineweb-s10bt-global-bpe-v1 \
+  --tokenizer-out artifacts/tokenizer/fineweb-s10bt-global-bpe-v1.json \
   --field text \
   --min-chars 80 \
   --shard-size-tokens 5000000 \
@@ -320,10 +320,10 @@ PYTHONPATH=src .venv/bin/python scripts/fineweb_parquet_to_shards.py \
 
 # 2) verify and train
 PYTHONPATH=src .venv/bin/python -m llm.cli verify-shards \
-  --path data/shards_global/fineweb-s10bt-global-char-v1
+  --path data/shards_global/fineweb-s10bt-global-bpe-v1
 
 PYTHONPATH=src .venv/bin/python -m llm.cli train \
-  --shards-path data/shards_global/fineweb-s10bt-global-char-v1 \
+  --shards-path data/shards_global/fineweb-s10bt-global-bpe-v1 \
   --output-dir artifacts/checkpoints/fineweb-s10bt-run1 \
   --device cuda \
   --max-steps 1000 \
@@ -335,7 +335,7 @@ PYTHONPATH=src .venv/bin/python -m llm.cli train \
 Resume training from the latest checkpoint:
 ```bash
 PYTHONPATH=src .venv/bin/python -m llm.cli train \
-  --shards-path data/shards_global/fineweb-s10bt-global-char-v1 \
+  --shards-path data/shards_global/fineweb-s10bt-global-bpe-v1 \
   --output-dir artifacts/checkpoints/fineweb-s10bt-run1 \
   --device cuda \
   --resume-from artifacts/checkpoints/fineweb-s10bt-run1/last.pt \
@@ -357,7 +357,7 @@ PYTHONPATH=src .venv/bin/python scripts/fineweb_parquet_to_shards.py \
   --input-dir data/fineweb/sample-10BT \
   --files-list artifacts/reports/fineweb_sample10bt_phase1_files.txt \
   --output-dir data/shards_global/fineweb-s10bt-incremental/phase1 \
-  --tokenizer-out artifacts/tokenizer/fineweb-s10bt-incremental-char-v1.json \
+  --tokenizer-out artifacts/tokenizer/fineweb-s10bt-incremental-bpe-v1.json \
   --field text
 
 # start training on phase 1
@@ -373,7 +373,7 @@ PYTHONPATH=src .venv/bin/python scripts/fineweb_parquet_to_shards.py \
   --input-dir data/fineweb/sample-10BT \
   --files-list artifacts/reports/fineweb_sample10bt_phase2_files.txt \
   --output-dir data/shards_global/fineweb-s10bt-incremental/phase2 \
-  --tokenizer-in artifacts/tokenizer/fineweb-s10bt-incremental-char-v1.json \
+  --tokenizer-in artifacts/tokenizer/fineweb-s10bt-incremental-bpe-v1.json \
   --field text
 
 # resume; train sees both manifests under shards-path
@@ -389,11 +389,12 @@ On this 20-core host, default FineWeb shard splitting should use `15` parallel s
 ## RTX 5070 Tuned Profiles
 - Tuned profile docs: `docs/RTX5070_TUNING.md`
 - Saved JSON profiles:
-  - `configs/train/rtx5070/fineweb_global_char_v2_big.json` (recommended)
+  - `configs/train/rtx5070/fineweb_global_bpe_v1_big.json` (recommended, BPE)
+  - `configs/train/rtx5070/fineweb_global_char_v2_big.json` (legacy char baseline)
   - `configs/train/rtx5070/fineweb_global_char_v1_small.json` (legacy baseline)
 - Launch tuned big profile:
 ```bash
-bash scripts/train_rtx5070_fineweb_v2_big.sh
+bash scripts/train_rtx5070_fineweb_bpe_v1_big.sh
 ```
 
 ## Warm Storage (Ceph Mount)
@@ -438,7 +439,7 @@ bash scripts/hydrate_from_warm_storage.sh /mnt/ceph/llm/data
 - Batch corpus cleanup and dedupe (`clean-corpus-batch`).
 - Heuristic dataset risk auditing (`dataset-risk-report`).
 - Direct FineWeb parquet -> tokenizer -> shard pipeline (`scripts/fineweb_parquet_to_shards.py`).
-- Basic character-level tokenizer with train/save/load.
+- Character and BPE tokenizer support with train/save/load.
 - Token-window data pipeline (`TokenWindowDataset`) for next-token training pairs.
 - ZIM archive text extraction (`extract-zim-text`) for server-hosted `.zim` files.
   - Automatically falls back to suggestion-index paths if fulltext search returns no matches.

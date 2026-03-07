@@ -28,9 +28,9 @@ PYTHONPATH=src .venv/bin/python -m llm.cli dataset-risk-report \
 
 Shared tokenizer workflow for multi-dataset training:
 ```bash
-PYTHONPATH=src .venv/bin/python -m llm.cli train-tokenizer-global --input-dir data/extracted --from-shards-path data/shards --output artifacts/tokenizer/global-char-v1.json
-PYTHONPATH=src .venv/bin/python -m llm.cli shard-corpus-batch --input-dir data/extracted --from-shards-path data/shards --tokenizer artifacts/tokenizer/global-char-v1.json --output-root data/shards_global/global-char-v1
-PYTHONPATH=src .venv/bin/python -m llm.cli train --shards-path data/shards_global/global-char-v1 --output-dir artifacts/checkpoints/global-char-v1
+PYTHONPATH=src .venv/bin/python -m llm.cli train-tokenizer-global --input-dir data/extracted --from-shards-path data/shards --output artifacts/tokenizer/global-bpe-v1.json --tokenizer-type bpe --bpe-vocab-size 32000
+PYTHONPATH=src .venv/bin/python -m llm.cli shard-corpus-batch --input-dir data/extracted --from-shards-path data/shards --tokenizer artifacts/tokenizer/global-bpe-v1.json --output-root data/shards_global/global-bpe-v1
+PYTHONPATH=src .venv/bin/python -m llm.cli train --shards-path data/shards_global/global-bpe-v1 --output-dir artifacts/checkpoints/global-bpe-v1
 
 Throughput tuning notes:
 - Prefer `--precision auto` on CUDA.
@@ -42,8 +42,10 @@ Direct FineWeb parquet to shards:
 ```bash
 PYTHONPATH=src .venv/bin/python scripts/fineweb_parquet_to_shards.py \
   --input-dir data/fineweb/sample-10BT \
-  --output-dir data/shards_global/fineweb-s10bt-global-char-v1 \
-  --tokenizer-out artifacts/tokenizer/fineweb-s10bt-global-char-v1.json \
+  --output-dir data/shards_global/fineweb-s10bt-global-bpe-v1 \
+  --tokenizer-out artifacts/tokenizer/fineweb-s10bt-global-bpe-v1.json \
+  --tokenizer-type bpe \
+  --bpe-vocab-size 32000 \
   --field text \
   --min-chars 80 \
   --shard-size-tokens 5000000 \

@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable
 
-from llm.tokenizer import BasicCharTokenizer
+from llm.tokenizer import load_tokenizer
 
 
 @dataclass
@@ -93,7 +93,7 @@ def shard_corpus(config: ShardConfig) -> dict[str, Any]:
     if config.max_lines < 0:
         raise ValueError("max_lines must be >= 0")
 
-    tokenizer = BasicCharTokenizer.load(config.tokenizer_path)
+    tokenizer = load_tokenizer(config.tokenizer_path)
     array_type, token_dtype = _array_type_for_vocab(tokenizer.vocab_size)
 
     config.output_dir.mkdir(parents=True, exist_ok=True)

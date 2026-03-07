@@ -8,6 +8,11 @@ GPU: NVIDIA GeForce RTX 5070 Ti Laptop GPU (12,227 MiB)
 - Precision mode: `--precision auto` (bf16 on this GPU)
 - Allocator: `PYTORCH_ALLOC_CONF=expandable_segments:True`
 
+Note:
+- These measurements were captured on char-tokenized shards.
+- For current training runs, prefer the same compute profile on BPE shards:
+  `bash scripts/train_rtx5070_fineweb_bpe_v1_big.sh`
+
 ## Previous Small Model Result
 - Shape: `n_layers=4`, `n_heads=4`, `d_model=256`, `context_length=256`
 - Stable batch cap: `164`

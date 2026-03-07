@@ -101,13 +101,13 @@ Keep PR scope narrow; split refactors and features into separate PRs.
 - For parquet-based FineWeb workflows, use `scripts/stage_fineweb_from_warm.sh` to copy bounded warm chunks into hot storage
 - For long-running 350BT ingestion on limited hot disk, use `scripts/fineweb_stage_shard_loop.sh` for staged processing and automatic hot-space reclaim
 - For checkpoint regression tracking, run `scripts/eval_checkpoint_prompts.py` with `configs/eval/standard_prompt_suite_v1.json` and archive reports in `artifacts/reports/evals/`
-- For FineWeb-first training runs, build shards directly with `PYTHONPATH=src .venv/bin/python scripts/fineweb_parquet_to_shards.py --input-dir data/fineweb/sample-10BT --output-dir data/shards_global/fineweb-s10bt-global-char-v1 --tokenizer-out artifacts/tokenizer/fineweb-s10bt-global-char-v1.json --field text`
+- For FineWeb-first training runs, build shards directly with `PYTHONPATH=src .venv/bin/python scripts/fineweb_parquet_to_shards.py --input-dir data/fineweb/sample-10BT --output-dir data/shards_global/fineweb-s10bt-global-bpe-v1 --tokenizer-out artifacts/tokenizer/fineweb-s10bt-global-bpe-v1.json --tokenizer-type bpe --bpe-vocab-size 32000 --field text`
 - FineWeb-only baseline flow: `fineweb_parquet_to_shards -> verify-shards -> train`
 - For incremental FineWeb adds, freeze tokenizer on phase1 and build later phases with `--tokenizer-in` plus `--files-list`; resume training from `last.pt` with same `--shards-path` root
 - On this 20-core server, use 15 parallel streams for split shard-build runs
 - For CUDA training throughput, prefer `llm.cli train --precision auto` (disable TF32 only if needed with `--no-tf32`)
 - If GPU utilization stays bursty, try `llm.cli train --compile-model --compile-mode reduce-overhead`
-- RTX 5070 tuned training profiles live in `configs/train/rtx5070/`; default launcher: `bash scripts/train_rtx5070_fineweb_v2_big.sh`
+- RTX 5070 tuned training profiles live in `configs/train/rtx5070/`; preferred BPE launcher: `bash scripts/train_rtx5070_fineweb_bpe_v1_big.sh`
 - Version extracted/tokenized/sharded outputs with the ZIM date stamp (for example `serverfault_2025-08`)
 - Keep raw ZIM archives in `/mnt/ceph/llm/data/raw_zim/`
 - For portable model release + offline server deploy, follow `docs/HF_RELEASE_AND_DEPLOY.md`

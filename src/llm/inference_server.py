@@ -16,13 +16,13 @@ from pydantic import BaseModel, Field
 
 from llm.generate import _resolve_device
 from llm.model import GPTModel, ModelConfig
-from llm.tokenizer import BasicCharTokenizer
+from llm.tokenizer import TokenizerLike, load_tokenizer
 
 
 @dataclass
 class RuntimeState:
     model: GPTModel
-    tokenizer: BasicCharTokenizer
+    tokenizer: TokenizerLike
     device: torch.device
     model_id: str
     eos_id: int
@@ -95,7 +95,8 @@ def _generate_completion(
 ) -> tuple[str, str, int, int]:
     token_ids = state.tokenizer.encode(prompt)
     if not token_ids:
-        token_ids = [state.tokenizer.stoi["<bos>"]]
+        bos_id = state.tokenizer.bos_id if state.tokenizer.bos_id is not None else 0
+        token_ids = [bos_id]
 
     completion_text = ""
     generated_tokens = 0
@@ -159,12 +160,12 @@ def _load_state(
     if not tokenizer_path.exists():
         raise FileNotFoundError(f"tokenizer not found: {tokenizer_path}")
 
-    tokenizer = BasicCharTokenizer.load(tokenizer_path)
+    tokenizer = load_tokenizer(tokenizer_path)
     model = GPTModel(model_config).to(device)
     model.load_state_dict(checkpoint["model_state"])
     model.eval()
 
-    eos_id = tokenizer.stoi.get("<eos>", -1)
+    eos_id = tokenizer.eos_id if tokenizer.eos_id is not None else -1
     return RuntimeState(
         model=model,
         tokenizer=tokenizer,

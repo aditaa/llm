@@ -15,7 +15,7 @@ import torch
 
 from llm.generate import _resolve_device, _sample_next_token
 from llm.model import GPTModel, ModelConfig
-from llm.tokenizer import BasicCharTokenizer
+from llm.tokenizer import TokenizerLike, load_tokenizer
 
 URL_PATTERN = re.compile(r"(https?://|www\.)", flags=re.IGNORECASE)
 
@@ -26,7 +26,7 @@ class Runtime:
     tokenizer_path: Path
     step: int
     model: GPTModel
-    tokenizer: BasicCharTokenizer
+    tokenizer: TokenizerLike
     device: torch.device
     max_seq_len: int
     eos_id: int
@@ -75,7 +75,7 @@ def _load_runtime(checkpoint_path: Path, device_arg: str) -> Runtime:
     tokenizer_path = Path(tokenizer_path_raw)
     if not tokenizer_path.exists():
         raise FileNotFoundError(f"tokenizer path missing: {tokenizer_path}")
-    tokenizer = BasicCharTokenizer.load(tokenizer_path)
+    tokenizer = load_tokenizer(tokenizer_path)
 
     model = GPTModel(model_cfg).to(device)
     model.load_state_dict(checkpoint["model_state"])
@@ -89,7 +89,7 @@ def _load_runtime(checkpoint_path: Path, device_arg: str) -> Runtime:
         tokenizer=tokenizer,
         device=device,
         max_seq_len=int(model_cfg.max_seq_len),
-        eos_id=int(tokenizer.stoi.get("<eos>", -1)),
+        eos_id=int(tokenizer.eos_id if tokenizer.eos_id is not None else -1),
     )
 
 
@@ -106,7 +106,8 @@ def _generate(
     torch.manual_seed(seed)
     token_ids = runtime.tokenizer.encode(prompt)
     if not token_ids:
-        token_ids = [runtime.tokenizer.stoi["<bos>"]]
+        bos_id = runtime.tokenizer.bos_id if runtime.tokenizer.bos_id is not None else 0
+        token_ids = [bos_id]
 
     with torch.no_grad():
         for _ in range(max_new_tokens):

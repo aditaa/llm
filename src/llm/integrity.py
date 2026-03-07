@@ -7,7 +7,7 @@ from array import array
 from pathlib import Path
 from typing import Any
 
-from llm.tokenizer import BasicCharTokenizer
+from llm.tokenizer import load_tokenizer
 
 _TOKEN_ARRAY_TYPES = {"uint16": "H", "uint32": "I"}
 
@@ -110,8 +110,13 @@ def verify_shard_manifest(
         tokenizer = None
         vocab_size = int(manifest.get("tokenizer_vocab_size", 0))
     else:
-        tokenizer = BasicCharTokenizer.load(tokenizer_path)
-        vocab_size = tokenizer.vocab_size
+        try:
+            tokenizer = load_tokenizer(tokenizer_path)
+            vocab_size = tokenizer.vocab_size
+        except Exception as exc:
+            errors.append(f"tokenizer_load_error:{tokenizer_path}:{type(exc).__name__}:{exc}")
+            tokenizer = None
+            vocab_size = int(manifest.get("tokenizer_vocab_size", 0))
 
     manifest_vocab_size = int(manifest.get("tokenizer_vocab_size", 0))
     if vocab_size and manifest_vocab_size and vocab_size != manifest_vocab_size:

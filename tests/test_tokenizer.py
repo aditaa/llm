@@ -2,7 +2,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from llm.tokenizer import BasicCharTokenizer
+from llm.tokenizer import BasicCharTokenizer, load_tokenizer, tokenizer_fingerprint
 
 
 class BasicCharTokenizerTests(unittest.TestCase):
@@ -23,6 +23,15 @@ class BasicCharTokenizerTests(unittest.TestCase):
             path = Path(tmp) / "vocab.json"
             tokenizer.save(path)
             loaded = BasicCharTokenizer.load(path)
+        self.assertEqual(loaded.vocab_size, tokenizer.vocab_size)
+        self.assertEqual(loaded.decode(loaded.encode("abc")), "abc")
+
+    def test_load_tokenizer_detects_char_payload(self) -> None:
+        tokenizer = BasicCharTokenizer.train("abc")
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "vocab.json"
+            tokenizer.save(path)
+            loaded = load_tokenizer(path)
         self.assertEqual(loaded.vocab_size, tokenizer.vocab_size)
         self.assertEqual(loaded.decode(loaded.encode("abc")), "abc")
 
@@ -52,6 +61,14 @@ class BasicCharTokenizerTests(unittest.TestCase):
         self.assertEqual(stats["chars_read"], 3)
         self.assertEqual(stats["unique_chars"], 3)
         self.assertEqual(tokenizer.encode("d")[0], tokenizer.stoi["<unk>"])
+
+    def test_tokenizer_fingerprint_changes_on_content_change(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            p1 = Path(tmp) / "v1.json"
+            p2 = Path(tmp) / "v2.json"
+            BasicCharTokenizer.train("abc").save(p1)
+            BasicCharTokenizer.train("abcd").save(p2)
+            self.assertNotEqual(tokenizer_fingerprint(p1), tokenizer_fingerprint(p2))
 
 
 if __name__ == "__main__":

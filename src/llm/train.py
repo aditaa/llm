@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 import random
 from dataclasses import asdict, dataclass
-from hashlib import sha256
 from pathlib import Path
 from typing import Any, cast
 
@@ -14,7 +13,7 @@ import torch
 from torch import Tensor
 
 from llm.model import GPTModel, ModelConfig
-from llm.tokenizer import BasicCharTokenizer
+from llm.tokenizer import load_tokenizer, tokenizer_fingerprint
 
 
 @dataclass
@@ -81,10 +80,7 @@ def _iter_manifest_paths(path: Path) -> list[Path]:
 
 
 def _tokenizer_hash(path: Path) -> str:
-    payload = json.loads(path.read_text(encoding="utf-8"))
-    stoi = payload.get("stoi", {})
-    canonical = json.dumps(stoi, sort_keys=True, separators=(",", ":"))
-    return sha256(canonical.encode("utf-8")).hexdigest()
+    return tokenizer_fingerprint(path)
 
 
 def collect_shard_training_info(path: Path) -> ShardTrainingInfo:
@@ -417,7 +413,7 @@ def run_training(config: TrainConfig) -> dict[str, Any]:
         encoding="utf-8",
     )
 
-    tokenizer = BasicCharTokenizer.load(info.tokenizer_path)
+    tokenizer = load_tokenizer(info.tokenizer_path)
     print(f"device={device}")
     print(f"vocab_size={tokenizer.vocab_size}")
     print(f"train_tokens={info.train_tokens}")

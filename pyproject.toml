@@ -26,6 +26,7 @@ train = [
   "pyarrow>=15.0.0",
   "tqdm>=4.66.1",
   "huggingface_hub>=0.30.0",
+  "safetensors>=0.4.5",
   "tokenizers>=0.20.0",
 ]
 serve = [

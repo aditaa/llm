@@ -8,13 +8,19 @@ try:
     import torch
 
     from llm.tokenizer import BPETokenizer, tokenizer_contract_fingerprint, tokenizer_fingerprint
-    from llm.train import ShardBatchSampler, _resolve_amp_mode, collect_shard_training_info
+    from llm.train import (
+        ShardBatchSampler,
+        _lr_for_step,
+        _resolve_amp_mode,
+        collect_shard_training_info,
+    )
 except ModuleNotFoundError:
     torch = None
     BPETokenizer = None
     tokenizer_contract_fingerprint = None
     tokenizer_fingerprint = None
     ShardBatchSampler = None
+    _lr_for_step = None
     _resolve_amp_mode = None
     collect_shard_training_info = None
 
@@ -78,6 +84,38 @@ class TrainDataTests(unittest.TestCase):
     def test_resolve_amp_mode_rejects_half_precision_on_cpu(self) -> None:
         with self.assertRaises(ValueError):
             _resolve_amp_mode(torch.device("cpu"), "fp16")
+
+    def test_lr_schedule_constant(self) -> None:
+        lr = _lr_for_step(
+            step=10,
+            max_steps=100,
+            base_lr=1e-3,
+            schedule="constant",
+            warmup_steps=0,
+            min_ratio=0.1,
+        )
+        self.assertAlmostEqual(lr, 1e-3, places=12)
+
+    def test_lr_schedule_cosine_with_warmup(self) -> None:
+        lr_warm = _lr_for_step(
+            step=5,
+            max_steps=100,
+            base_lr=1e-3,
+            schedule="cosine",
+            warmup_steps=10,
+            min_ratio=0.1,
+        )
+        self.assertAlmostEqual(lr_warm, 5e-4, places=12)
+
+        lr_late = _lr_for_step(
+            step=100,
+            max_steps=100,
+            base_lr=1e-3,
+            schedule="cosine",
+            warmup_steps=10,
+            min_ratio=0.1,
+        )
+        self.assertAlmostEqual(lr_late, 1e-4, places=12)
 
     def test_collect_shard_training_info_rejects_mismatched_tokenizers(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

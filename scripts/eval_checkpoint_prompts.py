@@ -14,7 +14,7 @@ from typing import Any
 import torch
 
 from llm.generate import _resolve_device, _sample_next_token
-from llm.model import GPTModel, ModelConfig
+from llm.model import GPTModel, model_config_from_dict
 from llm.tokenizer import TokenizerLike, load_tokenizer
 
 URL_PATTERN = re.compile(r"(https?://|www\.)", flags=re.IGNORECASE)
@@ -67,7 +67,7 @@ def _load_runtime(checkpoint_path: Path, device_arg: str) -> Runtime:
     model_cfg_raw = checkpoint.get("model_config")
     if not isinstance(model_cfg_raw, dict):
         raise ValueError("checkpoint missing model_config")
-    model_cfg = ModelConfig(**model_cfg_raw)
+    model_cfg = model_config_from_dict(model_cfg_raw)
 
     tokenizer_path_raw = checkpoint.get("tokenizer_path")
     if not isinstance(tokenizer_path_raw, str):

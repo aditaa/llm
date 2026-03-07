@@ -48,6 +48,7 @@ Decoder-only LLM checkpoint exported from the `aditaa/llm` training stack.
 - n_heads: {model_cfg.get("n_heads")}
 - d_model: {model_cfg.get("d_model")}
 - max_seq_len: {model_cfg.get("max_seq_len")}
+- architecture: {model_cfg.get("architecture")}
 
 ## Training Snapshot
 - step: {manifest.get("step")}
@@ -57,6 +58,7 @@ Decoder-only LLM checkpoint exported from the `aditaa/llm` training stack.
 
 ## Files
 - `checkpoint.pt`: training checkpoint payload (`model_state`, optimizer state, configs)
+- `model.safetensors`: optional model weights-only export (when enabled)
 - `tokenizer.json`: tokenizer payload used by checkpoint (char or BPE)
 - `release_manifest.json`: metadata for reproducibility
 
@@ -85,6 +87,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--private", action="store_true", help="Create private HF repo")
     parser.add_argument("--push", action="store_true", help="Upload bundle to HF model repo")
     parser.add_argument("--token", default=None, help="HF token override (or HF_TOKEN env var)")
+    parser.add_argument(
+        "--include-safetensors",
+        action="store_true",
+        help="Also export model_state as model.safetensors (weights only)",
+    )
     return parser.parse_args()
 
 
@@ -107,9 +114,30 @@ def main() -> int:
     bundle_tokenizer = output_dir / "tokenizer.json"
     bundle_manifest = output_dir / "release_manifest.json"
     bundle_card = output_dir / "README.md"
+    bundle_safetensors = output_dir / "model.safetensors"
 
     shutil.copy2(checkpoint_path, bundle_checkpoint)
     shutil.copy2(tokenizer_path, bundle_tokenizer)
+
+    safetensors_written = False
+    if args.include_safetensors:
+        try:
+            from safetensors.torch import save_file
+        except ModuleNotFoundError as exc:
+            raise RuntimeError(
+                "--include-safetensors requires the 'safetensors' package. "
+                "Install with training extras."
+            ) from exc
+        model_state = checkpoint.get("model_state")
+        if not isinstance(model_state, dict):
+            raise ValueError("checkpoint missing model_state for safetensors export")
+        tensor_state = {
+            key: value.detach().cpu().contiguous()
+            for key, value in model_state.items()
+            if hasattr(value, "detach") and hasattr(value, "cpu")
+        }
+        save_file(tensor_state, str(bundle_safetensors))
+        safetensors_written = True
 
     manifest = {
         "repo_id": args.repo_id,
@@ -126,6 +154,8 @@ def main() -> int:
             "model_card": bundle_card.name,
         },
     }
+    if safetensors_written:
+        manifest["files"]["safetensors"] = bundle_safetensors.name
     bundle_manifest.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
     bundle_card.write_text(_default_card(args.repo_id, manifest), encoding="utf-8")
 

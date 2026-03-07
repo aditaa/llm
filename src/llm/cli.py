@@ -521,11 +521,18 @@ def cmd_train(
     max_steps: int,
     batch_size: int,
     context_length: int,
+    grad_accum_steps: int,
     learning_rate: float,
+    lr_schedule: str,
+    lr_warmup_steps: int,
+    lr_min_ratio: float,
     weight_decay: float,
     grad_clip: float,
     eval_interval: int,
     eval_steps: int,
+    eval_freeze_batches: bool,
+    fail_on_eval_regression: bool,
+    eval_regression_tolerance: float,
     log_interval: int,
     seed: int,
     device: str,
@@ -543,6 +550,8 @@ def cmd_train(
     tf32: bool,
     compile_model: bool,
     compile_mode: str,
+    export_safetensors: bool,
+    safetensors_every_checkpoint: bool,
 ) -> int:
     from llm.train import TrainConfig, run_training
 
@@ -552,11 +561,18 @@ def cmd_train(
         max_steps=max_steps,
         batch_size=batch_size,
         context_length=context_length,
+        grad_accum_steps=grad_accum_steps,
         learning_rate=learning_rate,
+        lr_schedule=lr_schedule,
+        lr_warmup_steps=lr_warmup_steps,
+        lr_min_ratio=lr_min_ratio,
         weight_decay=weight_decay,
         grad_clip=grad_clip,
         eval_interval=eval_interval,
         eval_steps=eval_steps,
+        eval_freeze_batches=eval_freeze_batches,
+        fail_on_eval_regression=fail_on_eval_regression,
+        eval_regression_tolerance=eval_regression_tolerance,
         log_interval=log_interval,
         seed=seed,
         device=device,
@@ -574,6 +590,8 @@ def cmd_train(
         tf32=tf32,
         compile_model=compile_model,
         compile_mode=compile_mode,
+        export_safetensors=export_safetensors,
+        safetensors_every_checkpoint=safetensors_every_checkpoint,
     )
     result = run_training(config)
     print(f"output_dir={result['output_dir']}")
@@ -582,6 +600,8 @@ def cmd_train(
     print(f"tokenizer_path={result['tokenizer_path']}")
     print(f"tokenizer_hash={result['tokenizer_hash']}")
     print(f"tokenizer_contract_hash={result['tokenizer_contract_hash']}")
+    print(f"best_val_loss={result['best_val_loss']}")
+    print(f"best_val_ppl={result['best_val_ppl']}")
     return 0
 
 
@@ -1117,7 +1137,31 @@ def parse_args() -> argparse.Namespace:
         "--context-length", type=int, default=256, help="Sequence length for training windows"
     )
     train_parser.add_argument(
+        "--grad-accum-steps",
+        type=int,
+        default=1,
+        help="Micro-batch accumulation steps per optimizer step",
+    )
+    train_parser.add_argument(
         "--learning-rate", type=float, default=3e-4, help="Optimizer learning rate"
+    )
+    train_parser.add_argument(
+        "--lr-schedule",
+        choices=["constant", "cosine"],
+        default="cosine",
+        help="Learning-rate schedule",
+    )
+    train_parser.add_argument(
+        "--lr-warmup-steps",
+        type=int,
+        default=200,
+        help="Warmup steps for cosine schedule",
+    )
+    train_parser.add_argument(
+        "--lr-min-ratio",
+        type=float,
+        default=0.10,
+        help="Minimum LR ratio for cosine schedule tail",
     )
     train_parser.add_argument("--weight-decay", type=float, default=0.1, help="AdamW weight decay")
     train_parser.add_argument(
@@ -1128,6 +1172,22 @@ def parse_args() -> argparse.Namespace:
     )
     train_parser.add_argument(
         "--eval-steps", type=int, default=20, help="Validation batches per eval cycle"
+    )
+    train_parser.add_argument(
+        "--no-eval-freeze-batches",
+        action="store_true",
+        help="Disable fixed held-out eval batches (higher variance)",
+    )
+    train_parser.add_argument(
+        "--fail-on-eval-regression",
+        action="store_true",
+        help="Fail training if held-out eval perplexity regresses beyond tolerance",
+    )
+    train_parser.add_argument(
+        "--eval-regression-tolerance",
+        type=float,
+        default=0.20,
+        help="Allowed held-out perplexity regression ratio before failure",
     )
     train_parser.add_argument(
         "--log-interval", type=int, default=10, help="Log train loss every N steps"
@@ -1197,6 +1257,16 @@ def parse_args() -> argparse.Namespace:
         "--resume-from",
         default=None,
         help="Optional checkpoint path to resume training from",
+    )
+    train_parser.add_argument(
+        "--export-safetensors",
+        action="store_true",
+        help="Export model weights as last.safetensors at checkpoint save time",
+    )
+    train_parser.add_argument(
+        "--safetensors-every-checkpoint",
+        action="store_true",
+        help="Also export step-specific ckpt_step_*.safetensors files",
     )
 
     gen_parser = subparsers.add_parser("generate", help="Generate text from a model checkpoint")
@@ -1375,11 +1445,18 @@ def main() -> int:
             max_steps=args.max_steps,
             batch_size=args.batch_size,
             context_length=args.context_length,
+            grad_accum_steps=args.grad_accum_steps,
             learning_rate=args.learning_rate,
+            lr_schedule=args.lr_schedule,
+            lr_warmup_steps=args.lr_warmup_steps,
+            lr_min_ratio=args.lr_min_ratio,
             weight_decay=args.weight_decay,
             grad_clip=args.grad_clip,
             eval_interval=args.eval_interval,
             eval_steps=args.eval_steps,
+            eval_freeze_batches=not args.no_eval_freeze_batches,
+            fail_on_eval_regression=args.fail_on_eval_regression,
+            eval_regression_tolerance=args.eval_regression_tolerance,
             log_interval=args.log_interval,
             seed=args.seed,
             device=args.device,
@@ -1397,6 +1474,8 @@ def main() -> int:
             tf32=not args.no_tf32,
             compile_model=args.compile_model,
             compile_mode=args.compile_mode,
+            export_safetensors=args.export_safetensors,
+            safetensors_every_checkpoint=args.safetensors_every_checkpoint,
         )
     if args.command == "generate":
         return cmd_generate(

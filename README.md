@@ -64,6 +64,7 @@ make lr-sweep-350bt # print RTX 5070 LR sweep usage for staged 350BT shards
 make train-350bt-v2 # print 350BT long-run launcher usage
 make train-supervisor-350bt # print auto-resume trainer supervisor usage
 make pipeline-eta # print combined download/shard/train ETA reporter usage
+make pipeline-live # print live terminal pipeline dashboard usage
 make shard-corpus-batch # print shared-tokenizer batch sharding usage
 make hf-download-resumable # print self-healing HF resume-download worker usage
 make sync-warm   # sync raw/training data + artifacts to warm storage
@@ -458,6 +459,11 @@ Outputs:
 - `artifacts/reports/pipeline_status.json`
 - `artifacts/reports/pipeline_status.txt`
 Includes embedded snapshots of `top -b -n1`, `free -h`, `nvidia-smi`, and `df -h`.
+
+Live terminal view (single command to watch continuously):
+```bash
+PYTHONPATH=src .venv/bin/python scripts/pipeline_live_view.py --refresh-seconds 5
+```
 
 ## Warm Storage (Ceph Mount)
 Use `./data` and `./artifacts` as the hot working set.

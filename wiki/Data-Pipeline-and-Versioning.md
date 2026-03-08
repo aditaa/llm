@@ -97,6 +97,11 @@ Outputs:
 - `artifacts/reports/pipeline_status.txt`
 Includes system snapshots from `top -b -n1`, `free -h`, `nvidia-smi`, and `df -h`.
 
+Live terminal view:
+```bash
+PYTHONPATH=src .venv/bin/python scripts/pipeline_live_view.py --refresh-seconds 5
+```
+
 ## Versioning Rule
 Use ZIM date stamps as the canonical dataset version.
 

@@ -13,6 +13,7 @@ from typing import Any
 
 import torch
 
+from llm.eval_policy import compare_summaries, evaluate_promotion_policy, summary_from_report
 from llm.generate import _resolve_device, _sample_next_token
 from llm.model import GPTModel, model_config_from_dict
 from llm.tokenizer import TokenizerLike, load_tokenizer
@@ -215,7 +216,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--checkpoint", required=True, help="Checkpoint path (*.pt)")
     parser.add_argument(
         "--suite",
-        default="configs/eval/standard_prompt_suite_v1.json",
+        default="configs/eval/standard_prompt_suite_v2.json",
         help="Prompt suite JSON path",
     )
     parser.add_argument(
@@ -229,6 +230,44 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--top-k", type=int, default=40, help="Top-k cutoff (0 disables top-k)")
     parser.add_argument("--seed", type=int, default=42, help="Base RNG seed")
     parser.add_argument("--seed-stride", type=int, default=97, help="Per-case seed offset")
+    parser.add_argument(
+        "--baseline-report",
+        default=None,
+        help="Optional baseline eval report JSON to compare against",
+    )
+    parser.add_argument(
+        "--promotion-policy",
+        default=None,
+        help="Optional promotion policy JSON path (absolute/regression/improvement checks)",
+    )
+    parser.add_argument(
+        "--fail-on-regression",
+        action="store_true",
+        help="Exit with code 1 if baseline comparison shows metric regressions beyond limits",
+    )
+    parser.add_argument(
+        "--max-pass-rate-drop",
+        type=float,
+        default=0.0,
+        help="Allowed baseline pass_rate drop before regression failure (default: 0.0)",
+    )
+    parser.add_argument(
+        "--max-check-pass-rate-drop",
+        type=float,
+        default=0.0,
+        help="Allowed baseline check_pass_rate drop before regression failure (default: 0.0)",
+    )
+    parser.add_argument(
+        "--max-avg-case-score-drop",
+        type=float,
+        default=0.0,
+        help="Allowed baseline avg_case_score drop before regression failure (default: 0.0)",
+    )
+    parser.add_argument(
+        "--fail-on-no-promotion",
+        action="store_true",
+        help="Exit with code 1 when a promotion policy is provided and promotion fails",
+    )
     parser.add_argument(
         "--fail-below-pass-rate",
         type=float,
@@ -254,6 +293,12 @@ def main() -> int:
         raise ValueError("temperature must be > 0")
     if args.top_k < 0:
         raise ValueError("top-k must be >= 0")
+    if args.max_pass_rate_drop < 0:
+        raise ValueError("max-pass-rate-drop must be >= 0")
+    if args.max_check_pass_rate_drop < 0:
+        raise ValueError("max-check-pass-rate-drop must be >= 0")
+    if args.max_avg_case_score_drop < 0:
+        raise ValueError("max-avg-case-score-drop must be >= 0")
 
     suite = json.loads(suite_path.read_text(encoding="utf-8"))
     suite_name = str(suite.get("name", "prompt_suite"))
@@ -350,6 +395,51 @@ def main() -> int:
         "duration_seconds": (finished_at - started_at).total_seconds(),
         "cases": case_reports,
     }
+    current_summary = summary_from_report(report)
+
+    baseline_report_path = Path(args.baseline_report) if args.baseline_report else None
+    baseline_report_obj: dict[str, Any] | None = None
+    if baseline_report_path is not None:
+        if not baseline_report_path.exists():
+            raise FileNotFoundError(f"baseline report not found: {baseline_report_path}")
+        baseline_report_obj = json.loads(baseline_report_path.read_text(encoding="utf-8"))
+        baseline_summary = summary_from_report(baseline_report_obj)
+        deltas = compare_summaries(current_summary, baseline_summary)
+        regression = {
+            "baseline_report": str(baseline_report_path),
+            "allowed_drop": {
+                "pass_rate": args.max_pass_rate_drop,
+                "check_pass_rate": args.max_check_pass_rate_drop,
+                "avg_case_score": args.max_avg_case_score_drop,
+            },
+            "deltas": deltas,
+            "pass": (
+                deltas["pass_rate_delta"] >= -args.max_pass_rate_drop
+                and deltas["check_pass_rate_delta"] >= -args.max_check_pass_rate_drop
+                and deltas["avg_case_score_delta"] >= -args.max_avg_case_score_drop
+            ),
+        }
+        report["regression"] = regression
+
+    if args.promotion_policy:
+        policy_path = Path(args.promotion_policy)
+        if not policy_path.exists():
+            raise FileNotFoundError(f"promotion policy not found: {policy_path}")
+        policy_obj = json.loads(policy_path.read_text(encoding="utf-8"))
+        if not isinstance(policy_obj, dict):
+            raise ValueError("promotion policy must be a JSON object")
+        baseline_summary_for_policy = (
+            summary_from_report(baseline_report_obj)
+            if baseline_report_obj is not None
+            else None
+        )
+        promotion = evaluate_promotion_policy(
+            current=current_summary,
+            baseline=baseline_summary_for_policy,
+            policy=policy_obj,
+        )
+        promotion["policy_path"] = str(policy_path)
+        report["promotion"] = promotion
 
     if args.output:
         output_path = Path(args.output)
@@ -367,12 +457,45 @@ def main() -> int:
         f"pass_rate={pass_rate:.3f} checks_passed={check_passed}/{check_count} "
         f"check_pass_rate={check_pass_rate:.3f} avg_case_score={avg_case_score:.3f}"
     )
+    if "regression" in report:
+        regression_obj = report["regression"]
+        assert isinstance(regression_obj, dict)
+        deltas = regression_obj["deltas"]
+        assert isinstance(deltas, dict)
+        print(
+            "regression "
+            f"pass={int(bool(regression_obj['pass']))} "
+            f"pass_rate_delta={float(deltas['pass_rate_delta']):+.4f} "
+            f"check_pass_rate_delta={float(deltas['check_pass_rate_delta']):+.4f} "
+            f"avg_case_score_delta={float(deltas['avg_case_score_delta']):+.4f}"
+        )
+    if "promotion" in report:
+        promotion_obj = report["promotion"]
+        assert isinstance(promotion_obj, dict)
+        failed_checks = promotion_obj.get("failed_checks", [])
+        print(
+            "promotion "
+            f"pass={int(bool(promotion_obj.get('promoted', False)))} "
+            f"failed_checks={','.join(str(x) for x in failed_checks) if failed_checks else 'none'}"
+        )
 
     if args.fail_below_pass_rate is not None and pass_rate < args.fail_below_pass_rate:
         print(
             f"status=fail threshold={args.fail_below_pass_rate:.3f} observed_pass_rate={pass_rate:.3f}"
         )
         return 1
+    if args.fail_on_regression and "regression" in report:
+        regression_obj = report["regression"]
+        assert isinstance(regression_obj, dict)
+        if not bool(regression_obj.get("pass", False)):
+            print("status=fail reason=regression_check_failed")
+            return 1
+    if args.fail_on_no_promotion and "promotion" in report:
+        promotion_obj = report["promotion"]
+        assert isinstance(promotion_obj, dict)
+        if not bool(promotion_obj.get("promoted", False)):
+            print("status=fail reason=promotion_policy_failed")
+            return 1
     return 0
 
 

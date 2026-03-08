@@ -1,0 +1,135 @@
+{
+  "name": "standard_prompt_suite_v2",
+  "description": "Expanded deterministic suite for factuality, coherence, instruction-following, and hallucination checks.",
+  "cases": [
+    {
+      "id": "qa_capital_france",
+      "category": "factual_qa",
+      "prompt": "User: What is the capital of France?\nAssistant:",
+      "checks": { "min_completion_chars": 4, "expect_any": ["paris"], "max_url_count": 0 }
+    },
+    {
+      "id": "qa_moon_landing_year",
+      "category": "factual_qa",
+      "prompt": "User: In what year did humans first land on the Moon?\nAssistant:",
+      "checks": { "min_completion_chars": 4, "expect_any": ["1969"], "max_url_count": 0 }
+    },
+    {
+      "id": "qa_water_formula",
+      "category": "factual_qa",
+      "prompt": "User: What is the chemical formula for water?\nAssistant:",
+      "checks": { "min_completion_chars": 3, "expect_any": ["h2o"], "max_url_count": 0 }
+    },
+    {
+      "id": "qa_us_states_count",
+      "category": "factual_qa",
+      "prompt": "User: How many states are in the United States?\nAssistant:",
+      "checks": { "min_completion_chars": 2, "expect_any": ["50", "fifty"], "max_url_count": 0 }
+    },
+    {
+      "id": "reasoning_12_times_8",
+      "category": "reasoning",
+      "prompt": "User: What is 12 * 8?\nAssistant:",
+      "checks": { "min_completion_chars": 2, "expect_any": ["96"], "max_url_count": 0 }
+    },
+    {
+      "id": "reasoning_next_month",
+      "category": "reasoning",
+      "prompt": "User: Which month comes after February?\nAssistant:",
+      "checks": { "min_completion_chars": 5, "expect_any": ["march"], "max_url_count": 0 }
+    },
+    {
+      "id": "translation_hola_mundo",
+      "category": "translation",
+      "prompt": "Translate to English: Hola mundo.\nAnswer:",
+      "checks": { "min_completion_chars": 5, "expect_any": ["hello world"], "max_url_count": 0 }
+    },
+    {
+      "id": "instruction_three_bullets",
+      "category": "instruction_following",
+      "prompt": "Give 3 bullet points about why version control is useful.",
+      "checks": {
+        "min_completion_chars": 70,
+        "expect_any": ["-", "*", "1."],
+        "max_url_count": 0,
+        "max_repeated_char_run": 10
+      }
+    },
+    {
+      "id": "instruction_json_status_code",
+      "category": "instruction_following",
+      "prompt": "Return valid JSON with keys status and code, where status is \"ok\" and code is 200.",
+      "checks": {
+        "min_completion_chars": 20,
+        "expect_any": ["{", "\"status\"", "\"code\"", "200"],
+        "max_url_count": 0
+      }
+    },
+    {
+      "id": "writing_coherent_paragraph",
+      "category": "coherence",
+      "prompt": "Write a short paragraph explaining one practical way to reduce household energy use.",
+      "checks": {
+        "min_completion_chars": 100,
+        "max_url_count": 0,
+        "max_repeated_char_run": 10,
+        "max_non_ascii_ratio": 0.10
+      }
+    },
+    {
+      "id": "coding_python_factorial",
+      "category": "coding",
+      "prompt": "Write a Python function named factorial that returns n! for non-negative integers.",
+      "checks": {
+        "min_completion_chars": 60,
+        "expect_any": ["def factorial", "return"],
+        "max_repeated_char_run": 10
+      }
+    },
+    {
+      "id": "hallucination_trap_51st_state",
+      "category": "hallucination",
+      "prompt": "User: What is the 51st U.S. state?\nAssistant:",
+      "checks": {
+        "min_completion_chars": 20,
+        "expect_any": ["no 51st", "50 states", "there is no"],
+        "reject_any": ["51st state is"],
+        "max_url_count": 0
+      }
+    },
+    {
+      "id": "context_grounded_fact",
+      "category": "grounding",
+      "prompt": "Context: Project Atlas launched in 2024. Question: In what year did Project Atlas launch?",
+      "checks": { "min_completion_chars": 4, "expect_any": ["2024"], "max_url_count": 0 }
+    },
+    {
+      "id": "binary_answer_fire_cold",
+      "category": "instruction_following",
+      "prompt": "Answer with one short sentence: Is fire cold?",
+      "checks": { "min_completion_chars": 2, "expect_any": ["no"], "max_url_count": 0 }
+    },
+    {
+      "id": "summary_two_sentences",
+      "category": "summarization",
+      "prompt": "Summarize in one sentence: \"Plants need sunlight to make food. Without sunlight, many plants cannot grow well.\"",
+      "checks": {
+        "min_completion_chars": 45,
+        "expect_any": ["sunlight", "plants", "grow"],
+        "max_url_count": 0
+      }
+    },
+    {
+      "id": "clean_output_define_llm",
+      "category": "clean_output",
+      "prompt": "In one concise sentence, define a large language model.",
+      "checks": {
+        "min_completion_chars": 50,
+        "max_url_count": 0,
+        "max_repeated_char_run": 10,
+        "max_non_ascii_ratio": 0.10
+      }
+    }
+  ]
+}
+

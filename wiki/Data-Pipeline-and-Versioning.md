@@ -113,6 +113,9 @@ batches are picked up without manual intervention.
 Trend outputs:
 - `artifacts/reports/train_supervisor_350bt/train_trend.tsv`
 - `artifacts/reports/train_supervisor_350bt/eval_trend.tsv`
+The supervisor eval step now auto-selects the latest successful eval report as
+baseline, compares deltas (pass/check/score), and applies
+`configs/eval/promotion_policy_v1.json` when present.
 
 Combined ETA/status reporter:
 ```bash

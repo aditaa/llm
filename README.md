@@ -366,9 +366,13 @@ PYTHONPATH=src .venv/bin/python -m llm.cli generate \
 ```bash
 PYTHONPATH=src .venv/bin/python scripts/eval_checkpoint_prompts.py \
   --checkpoint artifacts/checkpoints/medlineplus_baseline/last.pt \
-  --suite configs/eval/standard_prompt_suite_v1.json
+  --suite configs/eval/standard_prompt_suite_v2.json \
+  --baseline-report artifacts/reports/evals/<previous_report>.json \
+  --promotion-policy configs/eval/promotion_policy_v1.json \
+  --fail-on-regression
 ```
 Writes a JSON report under `artifacts/reports/evals/` so runs can be compared over time.
+The report now includes `regression` deltas and a `promotion` verdict when a policy is provided.
 
 ## FineWeb-Only First-Pass Training
 Use this when you want round-1 pretraining only from FineWeb (no ZIM mix yet):
@@ -485,7 +489,8 @@ bash scripts/train_supervisor_rtx5070_350bt.sh \
 ```
 Supervisor outputs:
 - `artifacts/reports/train_supervisor_350bt/train_trend.tsv` (per-chunk train telemetry)
-- `artifacts/reports/train_supervisor_350bt/eval_trend.tsv` (post-chunk eval trend)
+- `artifacts/reports/train_supervisor_350bt/eval_trend.tsv` (post-chunk eval trend, including regression/promotion columns)
+The supervisor now auto-selects the latest successful eval report as baseline for the next eval cycle.
 
 Combined pipeline ETA/status reporter:
 ```bash

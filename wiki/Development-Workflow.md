@@ -44,10 +44,14 @@ Run a fixed prompt-suite eval after each major training run:
 ```bash
 PYTHONPATH=src .venv/bin/python scripts/eval_checkpoint_prompts.py \
   --checkpoint artifacts/checkpoints/<run>/last.pt \
-  --suite configs/eval/standard_prompt_suite_v1.json
+  --suite configs/eval/standard_prompt_suite_v2.json \
+  --baseline-report artifacts/reports/evals/<previous_report>.json \
+  --promotion-policy configs/eval/promotion_policy_v1.json \
+  --fail-on-regression
 ```
 
-This writes scored JSON reports to `artifacts/reports/evals/` for run-to-run comparison.
+This writes scored JSON reports to `artifacts/reports/evals/` for run-to-run comparison,
+including regression deltas and promotion verdict fields.
 
 ## Wiki Maintenance
 When docs change in repo:

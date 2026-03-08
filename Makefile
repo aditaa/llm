@@ -123,7 +123,7 @@ generate:
 
 eval-checkpoint:
 	@echo "Usage:"
-	@echo "  PYTHONPATH=src $(PYTHON) scripts/eval_checkpoint_prompts.py --checkpoint artifacts/checkpoints/<run_name>/last.pt --suite configs/eval/standard_prompt_suite_v1.json"
+	@echo "  PYTHONPATH=src $(PYTHON) scripts/eval_checkpoint_prompts.py --checkpoint artifacts/checkpoints/<run_name>/last.pt --suite configs/eval/standard_prompt_suite_v2.json --baseline-report artifacts/reports/evals/<baseline>.json --promotion-policy configs/eval/promotion_policy_v1.json --fail-on-regression"
 
 sync-warm:
 	@echo "Sync local raw/training data + artifacts to warm storage."

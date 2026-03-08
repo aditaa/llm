@@ -43,13 +43,19 @@ MEM_HIGH_WATER_MIB=11800
 GPU_SAMPLE_SECONDS=2
 
 EVAL_AFTER_CHUNK=1
-EVAL_SUITE="configs/eval/standard_prompt_suite_v1.json"
+EVAL_SUITE="configs/eval/standard_prompt_suite_v2.json"
 EVAL_MAX_NEW_TOKENS=120
 EVAL_TEMPERATURE="0.2"
 EVAL_TOP_K=0
 EVAL_SEED=42
 EVAL_SEED_STRIDE=97
 EVAL_DEVICE="auto"
+EVAL_PROMOTION_POLICY="configs/eval/promotion_policy_v1.json"
+EVAL_FAIL_ON_REGRESSION=1
+EVAL_MAX_PASS_RATE_DROP="0.01"
+EVAL_MAX_CHECK_PASS_RATE_DROP="0.01"
+EVAL_MAX_AVG_CASE_SCORE_DROP="0.01"
+EVAL_FAIL_ON_NO_PROMOTION=0
 
 usage() {
   cat <<'USAGE'
@@ -101,6 +107,14 @@ Post-chunk eval:
   --eval-seed N                Eval base seed (default: 42)
   --eval-seed-stride N         Eval seed stride (default: 97)
   --eval-device NAME           Eval device (default: auto)
+  --eval-promotion-policy FILE Eval promotion policy JSON (default: configs/eval/promotion_policy_v1.json)
+  --no-eval-fail-on-regression Disable eval-script regression fail flag
+  --eval-max-pass-rate-drop X  Allowed pass_rate drop vs baseline (default: 0.01)
+  --eval-max-check-pass-rate-drop X
+                               Allowed check_pass_rate drop vs baseline (default: 0.01)
+  --eval-max-avg-case-score-drop X
+                               Allowed avg_case_score drop vs baseline (default: 0.01)
+  --eval-fail-on-no-promotion  Fail eval step when promotion policy criteria are not met
   -h, --help                   Show help
 
 Example:
@@ -150,6 +164,12 @@ while [[ $# -gt 0 ]]; do
     --eval-seed) EVAL_SEED="$2"; shift 2 ;;
     --eval-seed-stride) EVAL_SEED_STRIDE="$2"; shift 2 ;;
     --eval-device) EVAL_DEVICE="$2"; shift 2 ;;
+    --eval-promotion-policy) EVAL_PROMOTION_POLICY="$2"; shift 2 ;;
+    --no-eval-fail-on-regression) EVAL_FAIL_ON_REGRESSION=0; shift ;;
+    --eval-max-pass-rate-drop) EVAL_MAX_PASS_RATE_DROP="$2"; shift 2 ;;
+    --eval-max-check-pass-rate-drop) EVAL_MAX_CHECK_PASS_RATE_DROP="$2"; shift 2 ;;
+    --eval-max-avg-case-score-drop) EVAL_MAX_AVG_CASE_SCORE_DROP="$2"; shift 2 ;;
+    --eval-fail-on-no-promotion) EVAL_FAIL_ON_NO_PROMOTION=1; shift ;;
     -h|--help) usage; exit 0 ;;
     *)
       echo "unknown argument: $1" >&2
@@ -199,7 +219,7 @@ if [[ ! -f "$TRAIN_TREND_TSV" ]]; then
   echo -e "run_tag\tstep_start\tstep_target\tstep_end\trc\tmanifests\tbatch_size\tgrad_accum\tbest_val_ppl\tgpu_avg_util\tgpu_max_mem_mib\ttrain_log" > "$TRAIN_TREND_TSV"
 fi
 if [[ ! -f "$EVAL_TREND_TSV" ]]; then
-  echo -e "run_tag\tstep\teval_rc\tpass_rate\tcheck_pass_rate\tavg_case_score\tcases_passed\tcases_total\treport_json" > "$EVAL_TREND_TSV"
+  echo -e "run_tag\tstep\teval_rc\tpass_rate\tcheck_pass_rate\tavg_case_score\tcases_passed\tcases_total\tregression_pass\tpromotion_pass\tfailed_checks\tbaseline_report\treport_json" > "$EVAL_TREND_TSV"
 fi
 
 log() {
@@ -355,7 +375,31 @@ run_post_chunk_eval() {
 
   local eval_report="artifacts/reports/evals/supervisor_350bt_step$(printf '%07d' "$step")_${run_tag}.json"
   local eval_log="$STATE_DIR/eval_${step}_${run_tag}.log"
-  log "eval_start step=$step suite=$EVAL_SUITE report=$eval_report"
+  local baseline_report=""
+  if [[ -f "$EVAL_TREND_TSV" ]]; then
+    baseline_report="$(awk -F'\t' 'NR>1 && $3=="0" {print $NF}' "$EVAL_TREND_TSV" | tail -n 1)"
+  fi
+  if [[ -n "$baseline_report" && ! -f "$baseline_report" ]]; then
+    baseline_report=""
+  fi
+  log "eval_start step=$step suite=$EVAL_SUITE report=$eval_report baseline=${baseline_report:-none}"
+
+  local -a eval_extra_args=()
+  if [[ -n "$baseline_report" ]]; then
+    eval_extra_args+=(--baseline-report "$baseline_report")
+    eval_extra_args+=(--max-pass-rate-drop "$EVAL_MAX_PASS_RATE_DROP")
+    eval_extra_args+=(--max-check-pass-rate-drop "$EVAL_MAX_CHECK_PASS_RATE_DROP")
+    eval_extra_args+=(--max-avg-case-score-drop "$EVAL_MAX_AVG_CASE_SCORE_DROP")
+    if [[ "$EVAL_FAIL_ON_REGRESSION" -eq 1 ]]; then
+      eval_extra_args+=(--fail-on-regression)
+    fi
+  fi
+  if [[ -n "$EVAL_PROMOTION_POLICY" && -f "$EVAL_PROMOTION_POLICY" ]]; then
+    eval_extra_args+=(--promotion-policy "$EVAL_PROMOTION_POLICY")
+    if [[ "$EVAL_FAIL_ON_NO_PROMOTION" -eq 1 ]]; then
+      eval_extra_args+=(--fail-on-no-promotion)
+    fi
+  fi
 
   set +e
   PYTHONPATH=src \
@@ -369,6 +413,7 @@ run_post_chunk_eval() {
     --top-k "$EVAL_TOP_K" \
     --seed "$EVAL_SEED" \
     --seed-stride "$EVAL_SEED_STRIDE" \
+    "${eval_extra_args[@]}" \
     > "$eval_log" 2>&1
   local eval_rc=$?
   set -e
@@ -378,26 +423,35 @@ run_post_chunk_eval() {
   local avg_case_score="NA"
   local cases_passed="NA"
   local cases_total="NA"
+  local regression_pass="NA"
+  local promotion_pass="NA"
+  local failed_checks="NA"
   if [[ -f "$eval_report" ]]; then
-    read -r pass_rate check_pass_rate avg_case_score cases_passed cases_total < <(
+    read -r pass_rate check_pass_rate avg_case_score cases_passed cases_total regression_pass promotion_pass failed_checks < <(
       python3 - <<'PY' "$eval_report"
 import json
 import sys
 obj = json.load(open(sys.argv[1], "r", encoding="utf-8"))
 s = obj.get("summary", {})
+r = obj.get("regression", {})
+p = obj.get("promotion", {})
+failed = p.get("failed_checks", []) if isinstance(p, dict) else []
 print(
     s.get("pass_rate", "NA"),
     s.get("check_pass_rate", "NA"),
     s.get("avg_case_score", "NA"),
     s.get("cases_passed", "NA"),
     s.get("cases_total", "NA"),
+    r.get("pass", "NA") if isinstance(r, dict) else "NA",
+    p.get("promoted", "NA") if isinstance(p, dict) else "NA",
+    ",".join(str(x) for x in failed) if failed else "none",
 )
 PY
     )
   fi
 
-  echo -e "${run_tag}\t${step}\t${eval_rc}\t${pass_rate}\t${check_pass_rate}\t${avg_case_score}\t${cases_passed}\t${cases_total}\t${eval_report}" >> "$EVAL_TREND_TSV"
-  log "eval_done rc=$eval_rc pass_rate=$pass_rate check_pass_rate=$check_pass_rate avg_case_score=$avg_case_score report=$eval_report"
+  echo -e "${run_tag}\t${step}\t${eval_rc}\t${pass_rate}\t${check_pass_rate}\t${avg_case_score}\t${cases_passed}\t${cases_total}\t${regression_pass}\t${promotion_pass}\t${failed_checks}\t${baseline_report:-NA}\t${eval_report}" >> "$EVAL_TREND_TSV"
+  log "eval_done rc=$eval_rc pass_rate=$pass_rate check_pass_rate=$check_pass_rate avg_case_score=$avg_case_score regression_pass=$regression_pass promotion_pass=$promotion_pass baseline=${baseline_report:-none} report=$eval_report"
 }
 
 clamp_batch_size

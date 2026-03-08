@@ -1,0 +1,20 @@
+{
+  "name": "checkpoint_promotion_v1",
+  "description": "Baseline promotion rule for first-pass FineWeb runs.",
+  "absolute": {
+    "min_pass_rate": 0.45,
+    "min_check_pass_rate": 0.75,
+    "min_avg_case_score": 0.70
+  },
+  "regression": {
+    "max_pass_rate_drop": 0.01,
+    "max_check_pass_rate_drop": 0.01,
+    "max_avg_case_score_drop": 0.01
+  },
+  "improvement": {
+    "min_pass_rate_gain": 0.0,
+    "min_check_pass_rate_gain": 0.0,
+    "min_avg_case_score_gain": 0.0
+  }
+}
+

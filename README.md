@@ -63,6 +63,7 @@ make fineweb-hot-queue # print hot parquet queue-oriented stage/shard usage
 make lr-sweep-350bt # print RTX 5070 LR sweep usage for staged 350BT shards
 make train-350bt-v2 # print 350BT long-run launcher usage
 make train-supervisor-350bt # print auto-resume trainer supervisor usage
+make pipeline-eta # print combined download/shard/train ETA reporter usage
 make shard-corpus-batch # print shared-tokenizer batch sharding usage
 make hf-download-resumable # print self-healing HF resume-download worker usage
 make sync-warm   # sync raw/training data + artifacts to warm storage
@@ -179,7 +180,7 @@ bash scripts/hf_download_resumable.sh \
   --repo-type dataset \
   --include "sample/350BT/*.parquet" \
   --local-dir /mnt/ceph/llm/data/fineweb/sample-350BT \
-  --max-workers 4 \
+  --max-workers 6 \
   --enable-hf-transfer \
   --skip-dry-run \
   --attempt-timeout-seconds 5400 \
@@ -207,12 +208,14 @@ bash scripts/fineweb_stage_shard_loop.sh \
   --hot-queue-min-files 8 \
   --stage-max-files 2 \
   --process-max-files 4 \
-  --sleep-seconds 60
+  --sleep-seconds 60 \
+  --shard-min-batch-size 512
 ```
 This loop stages bounded parquet files to hot storage, builds verified shard batches under
 `data/shards_global/fineweb-global-bpe-v1/`, syncs those batches back to warm storage,
 and purges processed hot parquet files.
 `--hot-queue-min-files` keeps a small parquet queue staged locally so shard building is less likely to idle on copy waits.
+If a shard build fails with OOM-like errors, the loop retries automatically with a smaller batch size.
 
 3ad. Build tokenizer + token shards directly from FineWeb parquet:
 ```bash
@@ -446,6 +449,14 @@ bash scripts/train_supervisor_rtx5070_350bt.sh \
 Supervisor outputs:
 - `artifacts/reports/train_supervisor_350bt/train_trend.tsv` (per-chunk train telemetry)
 - `artifacts/reports/train_supervisor_350bt/eval_trend.tsv` (post-chunk eval trend)
+
+Combined pipeline ETA/status reporter:
+```bash
+PYTHONPATH=src .venv/bin/python scripts/pipeline_eta_report.py --loop --interval-seconds 60
+```
+Outputs:
+- `artifacts/reports/pipeline_status.json`
+- `artifacts/reports/pipeline_status.txt`
 
 ## Warm Storage (Ceph Mount)
 Use `./data` and `./artifacts` as the hot working set.

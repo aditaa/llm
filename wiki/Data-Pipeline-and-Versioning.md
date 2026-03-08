@@ -63,7 +63,8 @@ bash scripts/fineweb_stage_shard_loop.sh \
   --hot-queue-min-files 8 \
   --stage-max-files 2 \
   --process-max-files 4 \
-  --sleep-seconds 60
+  --sleep-seconds 60 \
+  --shard-min-batch-size 512
 ```
 This loop:
 - stages bounded parquet files from warm (`/mnt/ceph/llm/data`) to hot (`./data`)
@@ -71,6 +72,7 @@ This loop:
 - runs `verify-shards` on each batch
 - syncs shard outputs back to warm storage
 - deletes processed hot parquet files to reclaim local space
+- retries shard builds automatically on OOM-like failures by reducing batch size
 
 Auto-resume trainer supervisor for growing shard sets:
 ```bash
@@ -85,6 +87,14 @@ batches are picked up without manual intervention.
 Trend outputs:
 - `artifacts/reports/train_supervisor_350bt/train_trend.tsv`
 - `artifacts/reports/train_supervisor_350bt/eval_trend.tsv`
+
+Combined ETA/status reporter:
+```bash
+PYTHONPATH=src .venv/bin/python scripts/pipeline_eta_report.py --loop --interval-seconds 60
+```
+Outputs:
+- `artifacts/reports/pipeline_status.json`
+- `artifacts/reports/pipeline_status.txt`
 
 ## Versioning Rule
 Use ZIM date stamps as the canonical dataset version.

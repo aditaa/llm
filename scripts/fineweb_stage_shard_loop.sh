@@ -10,6 +10,8 @@ WARM_ROOT="/mnt/ceph/llm/data"
 
 FIELD="text"
 BATCH_SIZE=8192
+SHARD_RETRY_ON_OOM=1
+SHARD_MIN_BATCH_SIZE=512
 SHARD_SIZE_TOKENS=5000000
 VAL_RATIO=0.01
 SEED=42
@@ -55,6 +57,8 @@ Options:
 
   --field NAME                Parquet text field (default: text)
   --batch-size N              Parquet read batch size (default: 8192)
+  --no-shard-retry-on-oom     Disable automatic shard build retry on OOM/memory errors
+  --shard-min-batch-size N    Lower bound for batch-size backoff on OOM (default: 512)
   --shard-size-tokens N       Tokens per output shard (default: 5000000)
   --val-ratio X               Validation ratio (default: 0.01)
   --seed N                    RNG seed (default: 42)
@@ -129,6 +133,14 @@ while [[ $# -gt 0 ]]; do
       ;;
     --batch-size)
       BATCH_SIZE="$2"
+      shift 2
+      ;;
+    --no-shard-retry-on-oom)
+      SHARD_RETRY_ON_OOM=0
+      shift
+      ;;
+    --shard-min-batch-size)
+      SHARD_MIN_BATCH_SIZE="$2"
       shift 2
       ;;
     --shard-size-tokens)
@@ -322,20 +334,65 @@ process_batch() {
   if [[ "$DRY_RUN" -eq 1 ]]; then
     log "dry_run_shard_build output_dir=$output_dir files_list=$files_list"
   else
-    PYTHONPATH=src .venv/bin/python scripts/fineweb_parquet_to_shards.py \
-      --input-dir "$HOT_PARQUET_DIR" \
-      --files-list "$files_list" \
-      --output-dir "$output_dir" \
-      "$tok_arg_flag" "$tok_arg_path" \
-      --field "$FIELD" \
-      --batch-size "$BATCH_SIZE" \
-      --shard-size-tokens "$SHARD_SIZE_TOKENS" \
-      --val-ratio "$VAL_RATIO" \
-      --seed "$SEED" \
-      --min-chars "$MIN_CHARS" \
-      --max-chars "$MAX_CHARS" \
-      --max-rows-per-file "$MAX_ROWS_PER_FILE" \
-      --report-output "$report_json" | tee -a "$LOG_FILE"
+    local shard_batch_size
+    shard_batch_size="$BATCH_SIZE"
+    local shard_attempt=1
+    local shard_rc=0
+    while true; do
+      local shard_attempt_log="$STATE_DIR/${batch_id}.shard_attempt_${shard_attempt}.log"
+      log "shard_build_attempt id=$batch_id attempt=$shard_attempt batch_size=$shard_batch_size"
+
+      set +e
+      PYTHONPATH=src .venv/bin/python scripts/fineweb_parquet_to_shards.py \
+        --input-dir "$HOT_PARQUET_DIR" \
+        --files-list "$files_list" \
+        --output-dir "$output_dir" \
+        "$tok_arg_flag" "$tok_arg_path" \
+        --field "$FIELD" \
+        --batch-size "$shard_batch_size" \
+        --shard-size-tokens "$SHARD_SIZE_TOKENS" \
+        --val-ratio "$VAL_RATIO" \
+        --seed "$SEED" \
+        --min-chars "$MIN_CHARS" \
+        --max-chars "$MAX_CHARS" \
+        --max-rows-per-file "$MAX_ROWS_PER_FILE" \
+        --report-output "$report_json" 2>&1 | tee -a "$LOG_FILE" "$shard_attempt_log"
+      shard_rc=${PIPESTATUS[0]}
+      set -e
+
+      if [[ "$shard_rc" -eq 0 ]]; then
+        break
+      fi
+
+      if [[ "$SHARD_RETRY_ON_OOM" -ne 1 ]]; then
+        log "shard_build_failed id=$batch_id attempt=$shard_attempt rc=$shard_rc retry_on_oom=0"
+        return "$shard_rc"
+      fi
+
+      if ! grep -Eqi 'out of memory|memoryerror|arrowmemoryerror|bad_alloc|cannot allocate memory|std::bad_alloc' "$shard_attempt_log"; then
+        log "shard_build_failed id=$batch_id attempt=$shard_attempt rc=$shard_rc reason=non_oom_error"
+        return "$shard_rc"
+      fi
+
+      if [[ "$shard_batch_size" -le "$SHARD_MIN_BATCH_SIZE" ]]; then
+        log "shard_build_failed id=$batch_id attempt=$shard_attempt rc=$shard_rc reason=min_batch_reached batch_size=$shard_batch_size"
+        return "$shard_rc"
+      fi
+
+      local next_batch_size
+      next_batch_size=$((shard_batch_size / 2))
+      if [[ "$next_batch_size" -lt "$SHARD_MIN_BATCH_SIZE" ]]; then
+        next_batch_size="$SHARD_MIN_BATCH_SIZE"
+      fi
+      if [[ "$next_batch_size" -eq "$shard_batch_size" ]]; then
+        log "shard_build_failed id=$batch_id attempt=$shard_attempt rc=$shard_rc reason=no_batch_change_possible batch_size=$shard_batch_size"
+        return "$shard_rc"
+      fi
+
+      log "shard_build_retry id=$batch_id from_batch_size=$shard_batch_size to_batch_size=$next_batch_size reason=oom_detected"
+      shard_batch_size="$next_batch_size"
+      shard_attempt=$((shard_attempt + 1))
+    done
 
     PYTHONPATH=src .venv/bin/python -m llm.cli verify-shards \
       --path "$output_dir" | tee -a "$LOG_FILE"

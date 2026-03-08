@@ -102,7 +102,8 @@ pipeline-eta:
 
 pipeline-live:
 	@echo "Usage:"
-	@echo "  PYTHONPATH=src $(PYTHON) scripts/pipeline_live_view.py --refresh-seconds 5"
+	@echo "  PYTHONPATH=src $(PYTHON) scripts/pipeline_live_view.py --refresh-seconds 5 --view-mode rotate"
+	@echo "  PYTHONPATH=src $(PYTHON) scripts/pipeline_live_view.py --refresh-seconds 5 --view-mode full"
 
 shard-corpus-batch:
 	@echo "Usage:"

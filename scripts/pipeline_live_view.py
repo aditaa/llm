@@ -30,6 +30,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--free-lines", type=int, default=20)
     parser.add_argument("--nvidia-lines", type=int, default=25)
     parser.add_argument("--df-lines", type=int, default=25)
+    parser.add_argument(
+        "--view-mode",
+        choices=("rotate", "fit", "full"),
+        default="rotate",
+        help="rotate: one detailed section per refresh, fit: all sections clipped to screen, full: all sections by fixed limits",
+    )
     parser.add_argument("--no-fit-terminal", action="store_true")
     parser.add_argument("--no-alt-screen", action="store_true")
     return parser.parse_args()
@@ -133,7 +139,7 @@ def _read_status(path: Path) -> dict[str, Any] | None:
         return None
 
 
-def _render(status: dict[str, Any], args: argparse.Namespace) -> str:
+def _render(status: dict[str, Any], args: argparse.Namespace, frame_index: int) -> str:
     ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     metrics = status.get("metrics", {})
     rates = status.get("rates", {})
@@ -147,7 +153,8 @@ def _render(status: dict[str, Any], args: argparse.Namespace) -> str:
     free_cap = args.free_lines
     nvidia_cap = args.nvidia_lines
     df_cap = args.df_lines
-    if not args.no_fit_terminal:
+    fit_mode = args.view_mode == "fit" and not args.no_fit_terminal
+    if fit_mode:
         reserved = 10
         available = max(0, term_height - reserved)
         top_fit, free_fit, nvidia_fit, df_fit = _allocate_section_lines(available)
@@ -155,13 +162,22 @@ def _render(status: dict[str, Any], args: argparse.Namespace) -> str:
         free_cap = min(free_cap, free_fit)
         nvidia_cap = min(nvidia_cap, nvidia_fit)
         df_cap = min(df_cap, df_fit)
+    elif args.view_mode == "rotate":
+        reserved = 9
+        available = max(6, term_height - reserved)
+        sections = ("top", "free_h", "nvidia_smi", "df_h")
+        selected = sections[frame_index % len(sections)]
+        top_cap = available if selected == "top" else 0
+        free_cap = available if selected == "free_h" else 0
+        nvidia_cap = available if selected == "nvidia_smi" else 0
+        df_cap = available if selected == "df_h" else 0
 
-    top_out = _trim_block(_clip_block(sys_cmds.get("top", {}).get("output", ""), top_cap), usable_width)
-    free_out = _trim_block(_clip_block(sys_cmds.get("free_h", {}).get("output", ""), free_cap), usable_width)
+    top_out = _trim_block(_clip_block(sys_cmds.get("top", {}).get("output", ""), top_cap), usable_width) if top_cap > 0 else ""
+    free_out = _trim_block(_clip_block(sys_cmds.get("free_h", {}).get("output", ""), free_cap), usable_width) if free_cap > 0 else ""
     nvidia_out = _trim_block(
         _clip_block(sys_cmds.get("nvidia_smi", {}).get("output", ""), nvidia_cap), usable_width
-    )
-    df_out = _trim_block(_clip_block(sys_cmds.get("df_h", {}).get("output", ""), df_cap), usable_width)
+    ) if nvidia_cap > 0 else ""
+    df_out = _trim_block(_clip_block(sys_cmds.get("df_h", {}).get("output", ""), df_cap), usable_width) if df_cap > 0 else ""
 
     lines = [
         _trim_line(f"Pipeline Live View  |  refreshed={ts}  |  ctrl+c to exit", usable_width),
@@ -194,19 +210,44 @@ def _render(status: dict[str, Any], args: argparse.Namespace) -> str:
             f"trainer={active.get('trainer')} "
             f"eval_runner={active.get('eval_runner')}"
         ),
+        f"view_mode={args.view_mode} refresh={args.refresh_seconds}s",
         "",
-        "[TOP]",
-        top_out,
-        "",
-        "[FREE -H]",
-        free_out,
-        "",
-        "[NVIDIA-SMI]",
-        nvidia_out,
-        "",
-        "[DF -H]",
-        df_out,
     ]
+
+    if args.view_mode == "rotate":
+        rotate_order = ["TOP", "FREE -H", "NVIDIA-SMI", "DF -H"]
+        selected_idx = frame_index % 4
+        selected_name = rotate_order[selected_idx]
+        lines.append(f"[ROTATE] showing={selected_name} next={rotate_order[(selected_idx + 1) % 4]}")
+        lines.append("")
+        if selected_idx == 0:
+            lines.append("[TOP]")
+            lines.append(top_out)
+        elif selected_idx == 1:
+            lines.append("[FREE -H]")
+            lines.append(free_out)
+        elif selected_idx == 2:
+            lines.append("[NVIDIA-SMI]")
+            lines.append(nvidia_out)
+        else:
+            lines.append("[DF -H]")
+            lines.append(df_out)
+    else:
+        lines.extend(
+            [
+                "[TOP]",
+                top_out,
+                "",
+                "[FREE -H]",
+                free_out,
+                "",
+                "[NVIDIA-SMI]",
+                nvidia_out,
+                "",
+                "[DF -H]",
+                df_out,
+            ]
+        )
     return "\n".join(_trim_line(line, usable_width) for line in lines) + "\n"
 
 
@@ -216,6 +257,7 @@ def main() -> int:
 
     ansi = _supports_ansi()
     use_alt_screen = ansi and not args.no_alt_screen and not args.once
+    frame_index = 0
     try:
         if use_alt_screen:
             _enter_fullscreen()
@@ -231,7 +273,8 @@ def main() -> int:
                 )
                 print(msg)
             else:
-                print(_render(status, args), end="")
+                print(_render(status, args, frame_index), end="")
+            frame_index += 1
             sys.stdout.flush()
             if args.once:
                 break

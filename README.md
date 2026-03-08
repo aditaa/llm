@@ -464,8 +464,11 @@ Live terminal view (single command to watch continuously):
 ```bash
 PYTHONPATH=src .venv/bin/python scripts/pipeline_live_view.py --refresh-seconds 5
 ```
-The live view auto-fits to terminal size and refreshes in-place (full-screen mode).
-If your terminal does not handle full-screen escape codes well, add `--no-alt-screen`.
+Defaults to `--view-mode rotate` (cycles full detail through `top`, `free -h`, `nvidia-smi`, `df -h`)
+so smaller terminals still show complete sections.
+Use `--view-mode full` to print all sections each frame.
+The live view refreshes in-place (full-screen mode). If your terminal does not handle full-screen
+escape codes well, add `--no-alt-screen`.
 
 ## Warm Storage (Ceph Mount)
 Use `./data` and `./artifacts` as the hot working set.

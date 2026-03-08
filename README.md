@@ -60,6 +60,7 @@ make fineweb-parquet-to-shards # print direct FineWeb parquet->token-shards usag
 make stage-fineweb-from-warm # print warm->hot FineWeb chunk staging usage
 make fineweb-stage-shard-loop # print rolling stage->shard->verify->sync->purge usage
 make shard-corpus-batch # print shared-tokenizer batch sharding usage
+make hf-download-resumable # print self-healing HF resume-download worker usage
 make sync-warm   # sync raw/training data + artifacts to warm storage
 make hydrate-warm # hydrate hot workspace from warm storage
 make offload-zim # continuously move raw ZIMs hot -> warm
@@ -168,25 +169,34 @@ Use warm storage for these pulls first; full FineWeb variants are much larger th
 # create token in Hugging Face web UI: Settings -> Access Tokens (read scope)
 export HF_TOKEN=hf_xxx
 
-# sample-10BT (~30.6 GB) -> hot storage
-HF_HUB_DISABLE_XET=1 .venv/bin/hf download HuggingFaceFW/fineweb \
+# sample-10BT (~30.6 GB) -> hot storage, auto-resume on transient failures
+bash scripts/hf_download_resumable.sh \
+  --dataset HuggingFaceFW/fineweb \
   --repo-type dataset \
   --include "sample/10BT/*.parquet" \
   --local-dir data/fineweb/sample-10BT \
   --max-workers 2 \
-  --token "$HF_TOKEN"
+  --retry-delay-seconds 30 \
+  --max-retries 0 \
+  --log-file artifacts/reports/fineweb_10bt_download_resumable.log
 
-# sample-350BT (~1.06 TB) -> warm storage
-HF_HUB_DISABLE_XET=1 .venv/bin/hf download HuggingFaceFW/fineweb \
+# sample-350BT (~1.06 TB) -> warm storage, auto-resume + retry forever
+bash scripts/hf_download_resumable.sh \
+  --dataset HuggingFaceFW/fineweb \
   --repo-type dataset \
   --include "sample/350BT/*.parquet" \
   --local-dir /mnt/ceph/llm/data/fineweb/sample-350BT \
   --max-workers 2 \
-  --token "$HF_TOKEN"
+  --skip-dry-run \
+  --retry-delay-seconds 30 \
+  --max-retries 0 \
+  --log-file artifacts/reports/fineweb_350bt_download_resumable.log
 ```
 Notes:
 - `HF_TOKEN` is recommended (higher limits), not strictly required for public datasets.
 - Hugging Face SSH keys are for Git-over-SSH and are not used by `hf download`.
+- `hf_download_resumable.sh` writes a lock file in the local dir to prevent duplicate workers.
+- For very large pulls (like 350BT), `--skip-dry-run` avoids metadata preflight stalls.
 
 3ab. Stage FineWeb chunks from warm to hot as needed:
 ```bash

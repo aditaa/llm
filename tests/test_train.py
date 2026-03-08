@@ -10,6 +10,7 @@ try:
     from llm.tokenizer import BPETokenizer, tokenizer_contract_fingerprint, tokenizer_fingerprint
     from llm.train import (
         ShardBatchSampler,
+        _apply_resume_context_policy,
         _compute_keep_steps,
         _init_ema_state,
         _lr_for_step,
@@ -24,6 +25,7 @@ except ModuleNotFoundError:
     tokenizer_contract_fingerprint = None
     tokenizer_fingerprint = None
     ShardBatchSampler = None
+    _apply_resume_context_policy = None
     _compute_keep_steps = None
     _init_ema_state = None
     _lr_for_step = None
@@ -240,6 +242,25 @@ class TrainDataTests(unittest.TestCase):
             )
             self.assertFalse((root / "ckpt_step_0000100.safetensors").exists())
             self.assertFalse((root / "ckpt_step_0000100_ema.safetensors").exists())
+
+    def test_apply_resume_context_policy(self) -> None:
+        from llm.model import ModelConfig
+
+        cfg = ModelConfig(vocab_size=100, max_seq_len=512, n_layers=1, n_heads=1, d_model=64)
+        extended = _apply_resume_context_policy(
+            model_config=cfg,
+            requested_context_length=1024,
+            allow_extension=True,
+        )
+        self.assertTrue(extended)
+        self.assertEqual(cfg.max_seq_len, 1024)
+
+        with self.assertRaises(ValueError):
+            _apply_resume_context_policy(
+                model_config=cfg,
+                requested_context_length=256,
+                allow_extension=False,
+            )
 
 
 if __name__ == "__main__":

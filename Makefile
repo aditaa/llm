@@ -4,7 +4,7 @@ ifneq ("$(wildcard .venv/bin/python)","")
 PYTHON=.venv/bin/python
 endif
 
-.PHONY: setup-dev setup-train setup-infer doctor install-server-system test lint format typecheck smoke extract-zim train-tokenizer train-tokenizer-global corpus-quality-report clean-corpus-batch dataset-risk-report pull-hf-rows parquet-to-corpus fineweb-parquet-to-shards stage-fineweb-from-warm fineweb-stage-shard-loop fineweb-hot-queue lr-sweep-350bt train-350bt-v2 train-supervisor-350bt pipeline-eta pipeline-live shard-corpus-batch verify-shards train generate average-checkpoints eval-checkpoint sync-warm hydrate-warm offload-zim hf-download-resumable hf-download-watchdog hf-prepare-publish hf-download-model serve-openai publish-wiki
+.PHONY: setup-dev setup-train setup-infer doctor install-server-system install-systemd-services test lint format typecheck smoke extract-zim train-tokenizer train-tokenizer-global corpus-quality-report clean-corpus-batch dataset-risk-report pull-hf-rows parquet-to-corpus fineweb-parquet-to-shards stage-fineweb-from-warm fineweb-prefetch-hot-queue fineweb-stage-shard-loop fineweb-hot-queue lr-sweep-350bt train-350bt-v2 train-350bt-ctx1024 train-supervisor-350bt pipeline-eta pipeline-live shard-corpus-batch verify-shards train generate average-checkpoints eval-checkpoint render-eval-dashboard package-inference-bundle sync-warm hydrate-warm offload-zim hf-download-resumable hf-download-watchdog hf-prepare-publish hf-download-model serve-openai publish-wiki
 
 setup-dev:
 	bash scripts/bootstrap_dev.sh
@@ -20,6 +20,9 @@ doctor:
 
 install-server-system:
 	bash scripts/install_server_system.sh
+
+install-systemd-services:
+	bash scripts/install_systemd_services.sh --install-watchdog
 
 test:
 	PYTHONPATH=$(PYTHONPATH) $(PYTHON) -m unittest discover -s tests -p "test_*.py"
@@ -76,6 +79,10 @@ stage-fineweb-from-warm:
 	@echo "Usage:"
 	@echo "  bash scripts/stage_fineweb_from_warm.sh --max-files 4 --max-gib 8"
 
+fineweb-prefetch-hot-queue:
+	@echo "Usage:"
+	@echo "  bash scripts/fineweb_prefetch_hot_queue.sh --queue-min-files 12 --stage-max-files 8 --sleep-seconds 60"
+
 fineweb-stage-shard-loop:
 	@echo "Usage:"
 	@echo "  bash scripts/fineweb_stage_shard_loop.sh --hot-queue-min-files 8 --stage-max-files 2 --process-max-files 4 --shard-jobs 2 --tokenizer-threads 10 --encode-batch-size 1024 --sleep-seconds 60 --shard-min-batch-size 512"
@@ -92,9 +99,13 @@ train-350bt-v2:
 	@echo "Usage:"
 	@echo "  bash scripts/train_rtx5070_fineweb_350bt_bpe_v2.sh"
 
+train-350bt-ctx1024:
+	@echo "Usage:"
+	@echo "  bash scripts/train_rtx5070_fineweb_350bt_bpe_v2_ctx1024.sh"
+
 train-supervisor-350bt:
 	@echo "Usage:"
-	@echo "  bash scripts/train_supervisor_rtx5070_350bt.sh --step-chunk 2000 --poll-seconds 60 --batch-size 12 --target-effective-batch 24 --min-batch-size 6 --max-batch-size 20 --batch-step 2 --checkpoint-keep-last 6 --checkpoint-keep-every 10000"
+	@echo "  bash scripts/train_supervisor_rtx5070_350bt.sh --step-chunk 2000 --poll-seconds 60 --batch-size 12 --target-effective-batch 24 --min-batch-size 6 --max-batch-size 20 --batch-step 2 --checkpoint-keep-last 6 --checkpoint-keep-every 10000 --ema-decay 0.999 --eval-suite configs/eval/standard_prompt_suite_v3.json --no-train-fail-on-eval-regression"
 
 pipeline-eta:
 	@echo "Usage:"
@@ -127,7 +138,15 @@ average-checkpoints:
 
 eval-checkpoint:
 	@echo "Usage:"
-	@echo "  PYTHONPATH=src $(PYTHON) scripts/eval_checkpoint_prompts.py --checkpoint artifacts/checkpoints/<run_name>/last.pt --suite configs/eval/standard_prompt_suite_v2.json --baseline-report artifacts/reports/evals/<baseline>.json --promotion-policy configs/eval/promotion_policy_v1.json --fail-on-regression"
+	@echo "  PYTHONPATH=src $(PYTHON) scripts/eval_checkpoint_prompts.py --checkpoint artifacts/checkpoints/<run_name>/last.pt --suite configs/eval/standard_prompt_suite_v3.json --baseline-report artifacts/reports/evals/<baseline>.json --promotion-policy configs/eval/promotion_policy_v1.json --fail-on-regression"
+
+render-eval-dashboard:
+	@echo "Usage:"
+	@echo "  PYTHONPATH=src $(PYTHON) scripts/render_eval_trend_dashboard.py --input-tsv artifacts/reports/train_supervisor_350bt/eval_trend.tsv --output-html artifacts/reports/train_supervisor_350bt/eval_dashboard.html --output-json artifacts/reports/train_supervisor_350bt/eval_dashboard_summary.json"
+
+package-inference-bundle:
+	@echo "Usage:"
+	@echo "  PYTHONPATH=src $(PYTHON) scripts/package_inference_bundle.py --checkpoint artifacts/checkpoints/<run_name>/best.pt --model-id local/<model_name> --create-tar"
 
 sync-warm:
 	@echo "Sync local raw/training data + artifacts to warm storage."

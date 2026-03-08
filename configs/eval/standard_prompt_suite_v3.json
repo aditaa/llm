@@ -1,0 +1,195 @@
+{
+  "name": "standard_prompt_suite_v3",
+  "description": "Broader deterministic checkpoint suite: factual QA, reasoning, grounding, instruction-following, coding, and clean output.",
+  "cases": [
+    {
+      "id": "qa_capital_france",
+      "category": "factual_qa",
+      "prompt": "User: What is the capital of France?\nAssistant:",
+      "checks": { "min_completion_chars": 4, "expect_any": ["paris"], "max_url_count": 0 }
+    },
+    {
+      "id": "qa_water_formula",
+      "category": "factual_qa",
+      "prompt": "User: What is the chemical formula for water?\nAssistant:",
+      "checks": { "min_completion_chars": 3, "expect_any": ["h2o"], "max_url_count": 0 }
+    },
+    {
+      "id": "qa_moon_landing_year",
+      "category": "factual_qa",
+      "prompt": "User: In what year did humans first land on the Moon?\nAssistant:",
+      "checks": { "min_completion_chars": 4, "expect_any": ["1969"], "max_url_count": 0 }
+    },
+    {
+      "id": "qa_us_states_count",
+      "category": "factual_qa",
+      "prompt": "User: How many states are in the United States?\nAssistant:",
+      "checks": { "min_completion_chars": 2, "expect_any": ["50", "fifty"], "max_url_count": 0 }
+    },
+    {
+      "id": "qa_pi_prefix",
+      "category": "factual_qa",
+      "prompt": "User: Give the first four digits of pi after the decimal point.\nAssistant:",
+      "checks": { "min_completion_chars": 4, "expect_any": ["1415"], "max_url_count": 0 }
+    },
+    {
+      "id": "reasoning_12_times_8",
+      "category": "reasoning",
+      "prompt": "User: What is 12 * 8?\nAssistant:",
+      "checks": { "min_completion_chars": 2, "expect_any": ["96"], "max_url_count": 0 }
+    },
+    {
+      "id": "reasoning_15_percent_of_200",
+      "category": "reasoning",
+      "prompt": "User: What is 15% of 200?\nAssistant:",
+      "checks": { "min_completion_chars": 2, "expect_any": ["30"], "max_url_count": 0 }
+    },
+    {
+      "id": "reasoning_next_month",
+      "category": "reasoning",
+      "prompt": "User: Which month comes after February?\nAssistant:",
+      "checks": { "min_completion_chars": 5, "expect_any": ["march"], "max_url_count": 0 }
+    },
+    {
+      "id": "reasoning_week_days",
+      "category": "reasoning",
+      "prompt": "User: How many days are in a week?\nAssistant:",
+      "checks": { "min_completion_chars": 1, "expect_any": ["7", "seven"], "max_url_count": 0 }
+    },
+    {
+      "id": "translation_hola_mundo",
+      "category": "translation",
+      "prompt": "Translate to English: Hola mundo.\nAnswer:",
+      "checks": { "min_completion_chars": 5, "expect_any": ["hello world"], "max_url_count": 0 }
+    },
+    {
+      "id": "translation_bonjour",
+      "category": "translation",
+      "prompt": "Translate to English: Bonjour.\nAnswer:",
+      "checks": { "min_completion_chars": 3, "expect_any": ["hello"], "max_url_count": 0 }
+    },
+    {
+      "id": "grounding_project_atlas",
+      "category": "grounding",
+      "prompt": "Context: Project Atlas launched in 2024 and had 12 team members. Question: In what year did Project Atlas launch?",
+      "checks": { "min_completion_chars": 4, "expect_any": ["2024"], "max_url_count": 0 }
+    },
+    {
+      "id": "grounding_internal_id",
+      "category": "grounding",
+      "prompt": "Context: Ticket ID ZX-41 was opened by Sam and closed by Lee. Question: Which ticket ID was opened?",
+      "checks": { "min_completion_chars": 4, "expect_any": ["zx-41", "ZX-41"], "max_url_count": 0 }
+    },
+    {
+      "id": "instruction_three_bullets",
+      "category": "instruction_following",
+      "prompt": "Give 3 bullet points about why version control is useful.",
+      "checks": {
+        "min_completion_chars": 70,
+        "expect_any": ["-", "*", "1."],
+        "max_url_count": 0,
+        "max_repeated_char_run": 10
+      }
+    },
+    {
+      "id": "instruction_json_status_code",
+      "category": "instruction_following",
+      "prompt": "Return valid JSON with keys status and code, where status is \"ok\" and code is 200.",
+      "checks": {
+        "min_completion_chars": 20,
+        "expect_any": ["{", "\"status\"", "\"code\"", "200"],
+        "max_url_count": 0
+      }
+    },
+    {
+      "id": "instruction_single_sentence",
+      "category": "instruction_following",
+      "prompt": "Answer with one short sentence: Is fire cold?",
+      "checks": { "min_completion_chars": 2, "expect_any": ["no"], "max_url_count": 0 }
+    },
+    {
+      "id": "instruction_list_two_items",
+      "category": "instruction_following",
+      "prompt": "List exactly two Linux commands useful for checking disk usage.",
+      "checks": {
+        "min_completion_chars": 20,
+        "expect_any": ["df", "du"],
+        "max_url_count": 0,
+        "max_repeated_char_run": 10
+      }
+    },
+    {
+      "id": "coding_python_factorial",
+      "category": "coding",
+      "prompt": "Write a Python function named factorial that returns n! for non-negative integers.",
+      "checks": {
+        "min_completion_chars": 60,
+        "expect_any": ["def factorial", "return"],
+        "max_repeated_char_run": 10
+      }
+    },
+    {
+      "id": "coding_python_sum_list",
+      "category": "coding",
+      "prompt": "Write a Python function sum_list(nums) that returns the sum of a list of integers.",
+      "checks": {
+        "min_completion_chars": 40,
+        "expect_any": ["def sum_list", "return"],
+        "max_repeated_char_run": 10
+      }
+    },
+    {
+      "id": "summarization_one_sentence",
+      "category": "summarization",
+      "prompt": "Summarize in one sentence: \"Plants need sunlight to make food. Without sunlight, many plants cannot grow well.\"",
+      "checks": {
+        "min_completion_chars": 45,
+        "expect_any": ["sunlight", "plants", "grow"],
+        "max_url_count": 0
+      }
+    },
+    {
+      "id": "coherence_energy_paragraph",
+      "category": "coherence",
+      "prompt": "Write a short paragraph explaining one practical way to reduce household energy use.",
+      "checks": {
+        "min_completion_chars": 100,
+        "max_url_count": 0,
+        "max_repeated_char_run": 10,
+        "max_non_ascii_ratio": 0.10
+      }
+    },
+    {
+      "id": "hallucination_trap_51st_state",
+      "category": "hallucination",
+      "prompt": "User: What is the 51st U.S. state?\nAssistant:",
+      "checks": {
+        "min_completion_chars": 20,
+        "expect_any": ["there is no", "50 states", "no 51st"],
+        "reject_any": ["51st state is"],
+        "max_url_count": 0
+      }
+    },
+    {
+      "id": "hallucination_trap_false_company",
+      "category": "hallucination",
+      "prompt": "User: When did the company Northwind Quantum Engines found Mars City?\nAssistant:",
+      "checks": {
+        "min_completion_chars": 20,
+        "expect_any": ["not aware", "fictional", "no evidence", "cannot find"],
+        "max_url_count": 0
+      }
+    },
+    {
+      "id": "clean_output_define_llm",
+      "category": "clean_output",
+      "prompt": "In one concise sentence, define a large language model.",
+      "checks": {
+        "min_completion_chars": 50,
+        "max_url_count": 0,
+        "max_repeated_char_run": 10,
+        "max_non_ascii_ratio": 0.10
+      }
+    }
+  ]
+}

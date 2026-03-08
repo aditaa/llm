@@ -51,6 +51,7 @@ class TrainConfig:
     ffn_hidden_multiplier: float = 8.0 / 3.0
     use_bias: bool = False
     resume_from: Path | None = None
+    allow_context_extension: bool = False
     precision: str = "auto"
     tf32: bool = True
     compile_model: bool = False
@@ -533,6 +534,26 @@ def _update_ema_state(ema_state: dict[str, Tensor], model: GPTModel, decay: floa
                 ema_tensor.copy_(tensor.detach())
 
 
+def _apply_resume_context_policy(
+    *,
+    model_config: ModelConfig,
+    requested_context_length: int,
+    allow_extension: bool,
+) -> bool:
+    if requested_context_length <= 0:
+        raise ValueError("requested_context_length must be > 0")
+    if requested_context_length == model_config.max_seq_len:
+        return False
+    if requested_context_length > model_config.max_seq_len and allow_extension:
+        model_config.max_seq_len = requested_context_length
+        return True
+    raise ValueError(
+        "resume checkpoint max_seq_len mismatch. "
+        f"checkpoint={model_config.max_seq_len} requested={requested_context_length}. "
+        "Use --allow-context-extension when increasing context length."
+    )
+
+
 def _parse_checkpoint_step(path: Path) -> int | None:
     stem = path.stem
     if not stem.startswith("ckpt_step_"):
@@ -664,11 +685,17 @@ def run_training(config: TrainConfig) -> dict[str, Any]:
     best_val_ppl: float | None = None
     ema_state: dict[str, Tensor] | None = None
     resume_checkpoint: dict[str, Any] | None = None
+    resumed_context_extended = False
     if config.resume_from is not None:
         resume_checkpoint = torch.load(config.resume_from, map_location=device)
         checkpoint_model_config = resume_checkpoint.get("model_config")
         if isinstance(checkpoint_model_config, dict):
             model_config = model_config_from_dict(checkpoint_model_config)
+        resumed_context_extended = _apply_resume_context_policy(
+            model_config=model_config,
+            requested_context_length=config.context_length,
+            allow_extension=config.allow_context_extension,
+        )
         if model_config.vocab_size != info.vocab_size:
             raise ValueError(
                 "resume checkpoint vocab_size does not match shard tokenizer vocab_size"
@@ -784,6 +811,9 @@ def run_training(config: TrainConfig) -> dict[str, Any]:
         print(f"ema_decay={config.ema_decay}")
         print(f"ema_update_every={config.ema_update_every}")
         print(f"ema_start_step={config.ema_start_step}")
+    print(f"allow_context_extension={int(config.allow_context_extension)}")
+    if resumed_context_extended:
+        print("resumed_context_extended=1")
 
     autocast_kwargs: dict[str, Any] = {"device_type": device.type, "enabled": amp_enabled}
     if amp_dtype is not None:

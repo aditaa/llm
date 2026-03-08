@@ -216,7 +216,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--checkpoint", required=True, help="Checkpoint path (*.pt)")
     parser.add_argument(
         "--suite",
-        default="configs/eval/standard_prompt_suite_v2.json",
+        default="configs/eval/standard_prompt_suite_v3.json",
         help="Prompt suite JSON path",
     )
     parser.add_argument(

@@ -564,6 +564,7 @@ def cmd_train(
     ffn_hidden_multiplier: float,
     use_bias: bool,
     resume_from: str | None,
+    allow_context_extension: bool,
     precision: str,
     tf32: bool,
     compile_model: bool,
@@ -609,6 +610,7 @@ def cmd_train(
         ffn_hidden_multiplier=ffn_hidden_multiplier,
         use_bias=use_bias,
         resume_from=Path(resume_from) if resume_from else None,
+        allow_context_extension=allow_context_extension,
         precision=precision,
         tf32=tf32,
         compile_model=compile_model,
@@ -1345,6 +1347,11 @@ def parse_args() -> argparse.Namespace:
         help="Optional checkpoint path to resume training from",
     )
     train_parser.add_argument(
+        "--allow-context-extension",
+        action="store_true",
+        help="When resuming, allow increasing context length above checkpoint max_seq_len",
+    )
+    train_parser.add_argument(
         "--export-safetensors",
         action="store_true",
         help="Export model weights as last.safetensors at checkpoint save time",
@@ -1623,6 +1630,7 @@ def main() -> int:
             ffn_hidden_multiplier=args.ffn_hidden_multiplier,
             use_bias=args.use_bias,
             resume_from=args.resume_from,
+            allow_context_extension=args.allow_context_extension,
             precision=args.precision,
             tf32=not args.no_tf32,
             compile_model=args.compile_model,

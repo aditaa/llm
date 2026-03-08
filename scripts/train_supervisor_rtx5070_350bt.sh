@@ -22,6 +22,7 @@ BATCH_SIZE=34
 GRAD_ACCUM_STEPS=1
 TARGET_EFFECTIVE_BATCH=34
 CONTEXT_LENGTH=512
+ALLOW_CONTEXT_EXTENSION=0
 N_LAYERS=12
 N_HEADS=12
 D_MODEL=768
@@ -49,7 +50,7 @@ MEM_HIGH_WATER_MIB=11800
 GPU_SAMPLE_SECONDS=2
 
 EVAL_AFTER_CHUNK=1
-EVAL_SUITE="configs/eval/standard_prompt_suite_v2.json"
+EVAL_SUITE="configs/eval/standard_prompt_suite_v3.json"
 EVAL_MAX_NEW_TOKENS=120
 EVAL_TEMPERATURE="0.2"
 EVAL_TOP_K=0
@@ -62,6 +63,7 @@ EVAL_MAX_PASS_RATE_DROP="0.01"
 EVAL_MAX_CHECK_PASS_RATE_DROP="0.01"
 EVAL_MAX_AVG_CASE_SCORE_DROP="0.01"
 EVAL_FAIL_ON_NO_PROMOTION=0
+RENDER_EVAL_DASHBOARD=1
 
 usage() {
   cat <<'USAGE'
@@ -83,6 +85,7 @@ Training shape:
   --grad-accum-steps N         Initial grad accumulation steps (default: 1)
   --target-effective-batch N   Auto recompute grad_accum=ceil(target/batch) (default: 34)
   --context-length N           Context length (default: 512)
+  --allow-context-extension    Allow resume from shorter-context checkpoint to larger context
   --n-layers N                 Transformer layer count (default: 12)
   --n-heads N                  Attention head count (default: 12)
   --d-model N                  Hidden size (default: 768)
@@ -113,7 +116,7 @@ Auto-tune options:
 
 Post-chunk eval:
   --no-eval-after-chunk        Disable checkpoint prompt-suite eval after each successful chunk
-  --eval-suite FILE            Eval suite JSON (default: configs/eval/standard_prompt_suite_v2.json)
+  --eval-suite FILE            Eval suite JSON (default: configs/eval/standard_prompt_suite_v3.json)
   --eval-max-new-tokens N      Eval max new tokens per case (default: 120)
   --eval-temperature X         Eval sampling temperature (default: 0.2)
   --eval-top-k N               Eval top-k (default: 0)
@@ -128,6 +131,7 @@ Post-chunk eval:
   --eval-max-avg-case-score-drop X
                                Allowed avg_case_score drop vs baseline (default: 0.01)
   --eval-fail-on-no-promotion  Fail eval step when promotion policy criteria are not met
+  --no-render-eval-dashboard   Disable HTML+JSON eval trend dashboard rendering
   -h, --help                   Show help
 
 Example:
@@ -151,6 +155,7 @@ while [[ $# -gt 0 ]]; do
     --grad-accum-steps) GRAD_ACCUM_STEPS="$2"; shift 2 ;;
     --target-effective-batch) TARGET_EFFECTIVE_BATCH="$2"; shift 2 ;;
     --context-length) CONTEXT_LENGTH="$2"; shift 2 ;;
+    --allow-context-extension) ALLOW_CONTEXT_EXTENSION=1; shift ;;
     --n-layers) N_LAYERS="$2"; shift 2 ;;
     --n-heads) N_HEADS="$2"; shift 2 ;;
     --d-model) D_MODEL="$2"; shift 2 ;;
@@ -189,6 +194,7 @@ while [[ $# -gt 0 ]]; do
     --eval-max-check-pass-rate-drop) EVAL_MAX_CHECK_PASS_RATE_DROP="$2"; shift 2 ;;
     --eval-max-avg-case-score-drop) EVAL_MAX_AVG_CASE_SCORE_DROP="$2"; shift 2 ;;
     --eval-fail-on-no-promotion) EVAL_FAIL_ON_NO_PROMOTION=1; shift ;;
+    --no-render-eval-dashboard) RENDER_EVAL_DASHBOARD=0; shift ;;
     -h|--help) usage; exit 0 ;;
     *)
       echo "unknown argument: $1" >&2
@@ -236,6 +242,7 @@ fi
 SUP_LOG="$STATE_DIR/supervisor_$(date +%Y%m%d_%H%M%S).log"
 TRAIN_TREND_TSV="$STATE_DIR/train_trend.tsv"
 EVAL_TREND_TSV="$STATE_DIR/eval_trend.tsv"
+BEST_META_JSON="$STATE_DIR/best_checkpoint.json"
 touch "$SUP_LOG"
 
 if [[ ! -f "$TRAIN_TREND_TSV" ]]; then
@@ -408,6 +415,95 @@ best_val_ppl_from_log() {
   fi
 }
 
+promote_best_checkpoint_if_needed() {
+  local step="$1"
+  local eval_rc="$2"
+  local eval_report="$3"
+  if [[ "$eval_rc" -ne 0 ]]; then
+    return 0
+  fi
+  if [[ ! -f "$eval_report" || ! -f "$OUTPUT_DIR/last.pt" ]]; then
+    return 0
+  fi
+
+  local promoted=0
+  local metric_value="0.0"
+  local metric_name="pass_rate"
+  if [[ -f "$BEST_META_JSON" ]]; then
+    read -r promoted metric_value metric_name < <(
+      python3 - <<'PY' "$eval_report" "$BEST_META_JSON"
+import json
+import sys
+
+report = json.load(open(sys.argv[1], "r", encoding="utf-8"))
+best = json.load(open(sys.argv[2], "r", encoding="utf-8"))
+summary = report.get("summary", {})
+promotion = report.get("promotion", {})
+is_promoted = bool(promotion.get("promoted")) if isinstance(promotion, dict) else False
+
+if is_promoted:
+    print(1, summary.get("pass_rate", 0.0), "policy")
+    raise SystemExit(0)
+
+current_pass = float(summary.get("pass_rate", 0.0))
+best_pass = float(best.get("pass_rate", 0.0))
+if current_pass >= best_pass:
+    print(1, current_pass, "pass_rate")
+else:
+    print(0, current_pass, "pass_rate")
+PY
+    )
+  else
+    read -r promoted metric_value metric_name < <(
+      python3 - <<'PY' "$eval_report"
+import json
+import sys
+
+report = json.load(open(sys.argv[1], "r", encoding="utf-8"))
+summary = report.get("summary", {})
+promotion = report.get("promotion", {})
+is_promoted = bool(promotion.get("promoted")) if isinstance(promotion, dict) else False
+if is_promoted:
+    print(1, summary.get("pass_rate", 0.0), "policy")
+else:
+    print(1, summary.get("pass_rate", 0.0), "pass_rate")
+PY
+    )
+  fi
+
+  if [[ "$promoted" -ne 1 ]]; then
+    log "best_skip step=$step reason=not_better metric=$metric_name value=$metric_value"
+    return 0
+  fi
+
+  cp -f "$OUTPUT_DIR/last.pt" "$OUTPUT_DIR/best.pt"
+  if [[ -f "$OUTPUT_DIR/last.safetensors" ]]; then
+    cp -f "$OUTPUT_DIR/last.safetensors" "$OUTPUT_DIR/best.safetensors"
+  fi
+  if [[ -f "$OUTPUT_DIR/last_ema.safetensors" ]]; then
+    cp -f "$OUTPUT_DIR/last_ema.safetensors" "$OUTPUT_DIR/best_ema.safetensors"
+  fi
+  cp -f "$eval_report" "$OUTPUT_DIR/best_eval_report.json"
+
+  python3 - <<'PY' "$BEST_META_JSON" "$step" "$eval_report" "$metric_name" "$metric_value"
+import json
+import sys
+from datetime import datetime, timezone
+
+meta_path = sys.argv[1]
+payload = {
+    "best_step": int(sys.argv[2]),
+    "best_eval_report": sys.argv[3],
+    "metric_name": sys.argv[4],
+    "pass_rate": float(sys.argv[5]),
+    "promoted_at_utc": datetime.now(timezone.utc).isoformat(),
+}
+with open(meta_path, "w", encoding="utf-8") as handle:
+    json.dump(payload, handle, indent=2)
+PY
+  log "best_promoted step=$step metric=$metric_name value=$metric_value checkpoint=$OUTPUT_DIR/best.pt"
+}
+
 auto_tune_after_chunk() {
   local rc="$1"
   local run_log="$2"
@@ -538,6 +634,18 @@ PY
 
   echo -e "${run_tag}\t${step}\t${eval_rc}\t${pass_rate}\t${check_pass_rate}\t${avg_case_score}\t${cases_passed}\t${cases_total}\t${regression_pass}\t${promotion_pass}\t${failed_checks}\t${baseline_report:-NA}\t${eval_report}" >> "$EVAL_TREND_TSV"
   log "eval_done rc=$eval_rc pass_rate=$pass_rate check_pass_rate=$check_pass_rate avg_case_score=$avg_case_score regression_pass=$regression_pass promotion_pass=$promotion_pass baseline=${baseline_report:-none} report=$eval_report"
+  if [[ "$RENDER_EVAL_DASHBOARD" -eq 1 ]]; then
+    if PYTHONPATH=src .venv/bin/python scripts/render_eval_trend_dashboard.py \
+      --input-tsv "$EVAL_TREND_TSV" \
+      --output-html "$STATE_DIR/eval_dashboard.html" \
+      --output-json "$STATE_DIR/eval_dashboard_summary.json" \
+      >> "$eval_log" 2>&1; then
+      log "eval_dashboard_updated html=$STATE_DIR/eval_dashboard.html"
+    else
+      log "eval_dashboard_update_failed"
+    fi
+  fi
+  promote_best_checkpoint_if_needed "$step" "$eval_rc" "$eval_report"
 }
 
 clamp_batch_size
@@ -547,7 +655,7 @@ fi
 
 failure_streak=0
 log "supervisor_start shards_path=$SHARDS_PATH output_dir=$OUTPUT_DIR step_chunk=$STEP_CHUNK"
-log "tuning_start batch_size=$BATCH_SIZE grad_accum=$GRAD_ACCUM_STEPS auto_tune=$AUTO_TUNE target_effective_batch=$TARGET_EFFECTIVE_BATCH train_fail_on_eval_regression=$TRAIN_FAIL_ON_EVAL_REGRESSION checkpoint_keep_last=$CHECKPOINT_KEEP_LAST checkpoint_keep_every=$CHECKPOINT_KEEP_EVERY ema_decay=$EMA_DECAY ema_update_every=$EMA_UPDATE_EVERY ema_start_step=$EMA_START_STEP"
+log "tuning_start batch_size=$BATCH_SIZE grad_accum=$GRAD_ACCUM_STEPS auto_tune=$AUTO_TUNE target_effective_batch=$TARGET_EFFECTIVE_BATCH train_fail_on_eval_regression=$TRAIN_FAIL_ON_EVAL_REGRESSION checkpoint_keep_last=$CHECKPOINT_KEEP_LAST checkpoint_keep_every=$CHECKPOINT_KEEP_EVERY allow_context_extension=$ALLOW_CONTEXT_EXTENSION ema_decay=$EMA_DECAY ema_update_every=$EMA_UPDATE_EVERY ema_start_step=$EMA_START_STEP"
 
 while true; do
   mcount="$(manifest_count)"
@@ -578,6 +686,9 @@ while true; do
   if [[ "$TRAIN_FAIL_ON_EVAL_REGRESSION" -eq 1 ]]; then
     train_gate_args+=(--fail-on-eval-regression)
     train_gate_args+=(--eval-regression-tolerance 0.20)
+  fi
+  if [[ "$ALLOW_CONTEXT_EXTENSION" -eq 1 ]]; then
+    train_gate_args+=(--allow-context-extension)
   fi
 
   set +e

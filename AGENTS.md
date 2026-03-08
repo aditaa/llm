@@ -124,6 +124,7 @@ Keep PR scope narrow; split refactors and features into separate PRs.
 - For higher CPU throughput on this 20-core host, prefer `--shard-jobs 2 --tokenizer-threads 10 --encode-batch-size 1024`
 - Keep stage-loop OOM retry enabled (default) so shard builds back off to smaller `--batch-size` automatically
 - For continuously growing shard sets, use `scripts/train_supervisor_rtx5070_350bt.sh` so each resumed chunk re-reads new manifests before training continues
+- Supervisor resume guardrail validates `last.pt`/`ckpt_step_*.pt` and quarantines invalid checkpoint files before retry
 - On 12 GB RTX 5070 profiles, start supervisor with `--batch-size 12 --target-effective-batch 24 --min-batch-size 6 --max-batch-size 20 --batch-step 2` to avoid early OOM churn
 - Supervisor writes chunk trends to `artifacts/reports/train_supervisor_350bt/train_trend.tsv` and post-chunk eval trends to `artifacts/reports/train_supervisor_350bt/eval_trend.tsv`
 - Use `scripts/pipeline_eta_report.py --loop` for combined ETA snapshots in `artifacts/reports/pipeline_status.{json,txt}` (includes `top`, `free -h`, `nvidia-smi`, and `df -h` captures)
@@ -139,6 +140,7 @@ Keep PR scope narrow; split refactors and features into separate PRs.
 - Default training architecture is `gpt_rope_rmsnorm_swiglu_v1`; use legacy profile only for old checkpoint compatibility
 - Prefer `llm.cli train --lr-schedule cosine --lr-warmup-steps <N>` for stable first-pass runs
 - Use `--grad-accum-steps` when VRAM is tight and you need higher effective batch
+- Keep disk use bounded with `llm.cli train --checkpoint-keep-last <N> --checkpoint-keep-every <M>`
 - Use EMA for long runs with `--ema-decay 0.999 --ema-start-step <warmup_end>` and generate with `--use-ema` when present
 - Keep held-out eval batches frozen (default) and enable regression gating with `--fail-on-eval-regression`
 - Optimizer uses no-weight-decay groups for norms/biases/embeddings by default

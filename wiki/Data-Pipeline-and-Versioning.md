@@ -116,12 +116,17 @@ bash scripts/train_supervisor_rtx5070_350bt.sh \
 This runs training in chunks and resumes from `last.pt`; each chunk restart re-reads
 all manifests under `data/shards_global/fineweb-global-bpe-v1` so newly added shard
 batches are picked up without manual intervention.
+Resume guardrail now validates `last.pt`/`ckpt_step_*.pt` for resumability and
+quarantines invalid files before fallback to the newest valid checkpoint.
 Trend outputs:
 - `artifacts/reports/train_supervisor_350bt/train_trend.tsv`
 - `artifacts/reports/train_supervisor_350bt/eval_trend.tsv`
 The supervisor eval step now auto-selects the latest successful eval report as
 baseline, compares deltas (pass/check/score), and applies
 `configs/eval/promotion_policy_v1.json` when present.
+
+For long runs with bounded disk use, pass checkpoint retention options:
+`--checkpoint-keep-last 6 --checkpoint-keep-every 10000`
 
 Checkpoint smoothing after training/eval:
 ```bash

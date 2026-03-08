@@ -63,6 +63,8 @@ PYTHONPATH=src .venv/bin/python -m llm.cli train \
   --ema-decay 0.999 \
   --ema-start-step 1000
 ```
+For bounded checkpoint storage during long runs, add:
+`--checkpoint-keep-last 6 --checkpoint-keep-every 10000`
 
 Merge adjacent checkpoints into one smoother snapshot:
 

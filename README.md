@@ -355,6 +355,7 @@ Training now supports:
 - gradient accumulation (`--grad-accum-steps`)
 - fixed held-out eval batches (`--no-eval-freeze-batches` to disable)
 - eval regression gate (`--fail-on-eval-regression --eval-regression-tolerance 0.20`)
+- checkpoint retention pruning (`--checkpoint-keep-last`, `--checkpoint-keep-every`)
 - optional EMA weights (`--ema-decay`, `--ema-update-every`, `--ema-start-step`)
 - optional weights-only export (`--export-safetensors`)
 
@@ -503,6 +504,8 @@ bash scripts/train_supervisor_rtx5070_350bt.sh \
   --max-batch-size 20 \
   --batch-step 2
 ```
+Supervisor resume guardrails now validate `last.pt`/`ckpt_step_*.pt` before resume and
+quarantine invalid checkpoint files automatically, then continue from the newest valid one.
 Supervisor outputs:
 - `artifacts/reports/train_supervisor_350bt/train_trend.tsv` (per-chunk train telemetry)
 - `artifacts/reports/train_supervisor_350bt/eval_trend.tsv` (post-chunk eval trend, including regression/promotion columns)

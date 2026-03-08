@@ -32,6 +32,7 @@ EVAL_INTERVAL=1000
 EVAL_STEPS=6
 LOG_INTERVAL=100
 PRECISION="auto"
+TRAIN_FAIL_ON_EVAL_REGRESSION=1
 CHECKPOINT_KEEP_LAST=6
 CHECKPOINT_KEEP_EVERY=10000
 EMA_DECAY="0.0"
@@ -91,6 +92,8 @@ Training shape:
   --eval-interval N            Train-loop eval interval (default: 1000)
   --eval-steps N               Train-loop eval steps (default: 6)
   --log-interval N             Train log interval (default: 100)
+  --no-train-fail-on-eval-regression
+                               Disable train-loop held-out eval regression gate
   --precision MODE             Precision mode (default: auto)
   --checkpoint-keep-last N     Keep last N step checkpoints (default: 6)
   --checkpoint-keep-every N    Keep every Nth checkpoint step (default: 10000)
@@ -157,6 +160,7 @@ while [[ $# -gt 0 ]]; do
     --eval-interval) EVAL_INTERVAL="$2"; shift 2 ;;
     --eval-steps) EVAL_STEPS="$2"; shift 2 ;;
     --log-interval) LOG_INTERVAL="$2"; shift 2 ;;
+    --no-train-fail-on-eval-regression) TRAIN_FAIL_ON_EVAL_REGRESSION=0; shift ;;
     --precision) PRECISION="$2"; shift 2 ;;
     --checkpoint-keep-last) CHECKPOINT_KEEP_LAST="$2"; shift 2 ;;
     --checkpoint-keep-every) CHECKPOINT_KEEP_EVERY="$2"; shift 2 ;;
@@ -543,7 +547,7 @@ fi
 
 failure_streak=0
 log "supervisor_start shards_path=$SHARDS_PATH output_dir=$OUTPUT_DIR step_chunk=$STEP_CHUNK"
-log "tuning_start batch_size=$BATCH_SIZE grad_accum=$GRAD_ACCUM_STEPS auto_tune=$AUTO_TUNE target_effective_batch=$TARGET_EFFECTIVE_BATCH checkpoint_keep_last=$CHECKPOINT_KEEP_LAST checkpoint_keep_every=$CHECKPOINT_KEEP_EVERY ema_decay=$EMA_DECAY ema_update_every=$EMA_UPDATE_EVERY ema_start_step=$EMA_START_STEP"
+log "tuning_start batch_size=$BATCH_SIZE grad_accum=$GRAD_ACCUM_STEPS auto_tune=$AUTO_TUNE target_effective_batch=$TARGET_EFFECTIVE_BATCH train_fail_on_eval_regression=$TRAIN_FAIL_ON_EVAL_REGRESSION checkpoint_keep_last=$CHECKPOINT_KEEP_LAST checkpoint_keep_every=$CHECKPOINT_KEEP_EVERY ema_decay=$EMA_DECAY ema_update_every=$EMA_UPDATE_EVERY ema_start_step=$EMA_START_STEP"
 
 while true; do
   mcount="$(manifest_count)"
@@ -570,6 +574,12 @@ while true; do
 
   log "train_launch manifests=$mcount step_now=$step_now target_step=$target_step batch_size=$BATCH_SIZE grad_accum=$GRAD_ACCUM_STEPS resume=${resume_ckpt:-none} run_log=$run_log"
 
+  train_gate_args=()
+  if [[ "$TRAIN_FAIL_ON_EVAL_REGRESSION" -eq 1 ]]; then
+    train_gate_args+=(--fail-on-eval-regression)
+    train_gate_args+=(--eval-regression-tolerance 0.20)
+  fi
+
   set +e
   (
     PYTORCH_ALLOC_CONF=expandable_segments:True \
@@ -591,8 +601,7 @@ while true; do
       --lr-min-ratio "$LR_MIN_RATIO" \
       --eval-interval "$EVAL_INTERVAL" \
       --eval-steps "$EVAL_STEPS" \
-      --fail-on-eval-regression \
-      --eval-regression-tolerance 0.20 \
+      "${train_gate_args[@]}" \
       --log-interval "$LOG_INTERVAL" \
       --precision "$PRECISION" \
       --checkpoint-keep-last "$CHECKPOINT_KEEP_LAST" \

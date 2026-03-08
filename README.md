@@ -504,6 +504,9 @@ bash scripts/train_supervisor_rtx5070_350bt.sh \
   --max-batch-size 20 \
   --batch-step 2
 ```
+Add `--no-train-fail-on-eval-regression` if you want chunk runs to continue even when
+the train-loop held-out perplexity gate is noisy; prompt-suite regression/promotion
+checks still run in the supervisor eval step.
 Supervisor resume guardrails now validate `last.pt`/`ckpt_step_*.pt` before resume and
 quarantine invalid checkpoint files automatically, then continue from the newest valid one.
 Supervisor outputs:

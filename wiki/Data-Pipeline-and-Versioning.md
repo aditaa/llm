@@ -118,6 +118,8 @@ all manifests under `data/shards_global/fineweb-global-bpe-v1` so newly added sh
 batches are picked up without manual intervention.
 Resume guardrail now validates `last.pt`/`ckpt_step_*.pt` for resumability and
 quarantines invalid files before fallback to the newest valid checkpoint.
+Use `--no-train-fail-on-eval-regression` if you want chunk training to continue and
+primarily gate via the post-chunk prompt-suite regression/promotion checks.
 Trend outputs:
 - `artifacts/reports/train_supervisor_350bt/train_trend.tsv`
 - `artifacts/reports/train_supervisor_350bt/eval_trend.tsv`

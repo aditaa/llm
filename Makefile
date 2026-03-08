@@ -94,7 +94,7 @@ train-350bt-v2:
 
 train-supervisor-350bt:
 	@echo "Usage:"
-	@echo "  bash scripts/train_supervisor_rtx5070_350bt.sh --step-chunk 2000 --poll-seconds 120 --target-effective-batch 34"
+	@echo "  bash scripts/train_supervisor_rtx5070_350bt.sh --step-chunk 2000 --poll-seconds 60 --batch-size 12 --target-effective-batch 24 --min-batch-size 6 --max-batch-size 20 --batch-step 2"
 
 pipeline-eta:
 	@echo "Usage:"

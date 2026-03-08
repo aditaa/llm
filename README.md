@@ -449,8 +449,12 @@ bash scripts/train_rtx5070_fineweb_350bt_bpe_v2.sh
 ```bash
 bash scripts/train_supervisor_rtx5070_350bt.sh \
   --step-chunk 2000 \
-  --poll-seconds 120 \
-  --target-effective-batch 34
+  --poll-seconds 60 \
+  --batch-size 12 \
+  --target-effective-batch 24 \
+  --min-batch-size 6 \
+  --max-batch-size 20 \
+  --batch-step 2
 ```
 Supervisor outputs:
 - `artifacts/reports/train_supervisor_350bt/train_trend.tsv` (per-chunk train telemetry)

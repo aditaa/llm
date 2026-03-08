@@ -82,8 +82,12 @@ Auto-resume trainer supervisor for growing shard sets:
 ```bash
 bash scripts/train_supervisor_rtx5070_350bt.sh \
   --step-chunk 2000 \
-  --poll-seconds 120 \
-  --target-effective-batch 34
+  --poll-seconds 60 \
+  --batch-size 12 \
+  --target-effective-batch 24 \
+  --min-batch-size 6 \
+  --max-batch-size 20 \
+  --batch-step 2
 ```
 This runs training in chunks and resumes from `last.pt`; each chunk restart re-reads
 all manifests under `data/shards_global/fineweb-global-bpe-v1` so newly added shard

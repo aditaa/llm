@@ -163,6 +163,7 @@ if [[ ! -x ".venv/bin/python" ]]; then
   echo "error: .venv/bin/python not found; run make setup-train first" >&2
   exit 1
 fi
+PYTHON_BIN=".venv/bin/python"
 if [[ ! -d "$SHARDS_PATH" ]]; then
   echo "error: shards-path not found: $SHARDS_PATH" >&2
   exit 1
@@ -235,7 +236,7 @@ current_step() {
     echo "0"
     return 0
   fi
-  python3 - <<'PY' "$ckpt"
+  "$PYTHON_BIN" - <<'PY' "$ckpt"
 import sys
 import torch
 ckpt = torch.load(sys.argv[1], map_location="cpu")

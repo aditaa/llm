@@ -8,10 +8,14 @@ import unittest
 from array import array
 from pathlib import Path
 
-import pyarrow as pa
-import pyarrow.parquet as pq
-
 from llm.tokenizer import BPETokenizer
+
+try:
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+except ModuleNotFoundError:
+    pa = None
+    pq = None
 
 
 def _repo_root() -> Path:
@@ -19,6 +23,8 @@ def _repo_root() -> Path:
 
 
 def _write_parquet(path: Path, rows: list[str]) -> None:
+    if pa is None or pq is None:
+        raise RuntimeError("pyarrow is required to write parquet fixtures")
     table = pa.table({"text": rows})
     pq.write_table(table, path)
 
@@ -43,6 +49,7 @@ def _read_tokens(manifest: dict[str, object], output_dir: Path, split: str) -> l
     return all_tokens
 
 
+@unittest.skipIf(pa is None or pq is None, "pyarrow is required for parquet fixture tests")
 class FineWebParquetToShardsTests(unittest.TestCase):
     def test_encode_batch_size_does_not_change_tokens(self) -> None:
         repo_root = _repo_root()

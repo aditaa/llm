@@ -76,6 +76,7 @@ make hf-download-model # print full HF model download usage
 make serve-openai # print local OpenAI-compatible server usage
 make doctor      # verify binaries and Python deps
 ```
+`make smoke` is expected to run in CI without installing `torch`; keep non-training CLI import paths torch-optional.
 
 ## CI/CD
 GitHub Actions workflows are defined in `.github/workflows/`:

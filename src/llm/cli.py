@@ -6,6 +6,7 @@ import argparse
 import json
 from pathlib import Path
 
+from llm.architectures import ARCH_LEGACY, ARCH_MODERN
 from llm.audit import DatasetRiskConfig, analyze_dataset_risk, save_dataset_risk_report
 from llm.corpus import (
     CleanCorpusConfig,
@@ -17,7 +18,6 @@ from llm.corpus import (
     save_quality_report,
 )
 from llm.integrity import verify_shards
-from llm.model import ARCH_LEGACY, ARCH_MODERN
 from llm.sharding import ShardConfig, iter_corpus_files, shard_corpora_batch, shard_corpus
 from llm.tokenizer import (
     BPETokenizer,

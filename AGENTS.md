@@ -67,6 +67,7 @@ CI/CD workflows:
 - Mirror source layout when adding tests (example: `src/llm/data.py` -> `tests/test_data.py`)
 - Cover edge cases and failure modes, not only happy paths
 - Run `make test` locally before each commit
+- Keep `make smoke` torch-independent in CI (non-training CLI commands should not require `torch` import at module load)
 
 ## Commit & Pull Request Guidelines
 Follow concise, imperative commit subjects (<= 72 chars), for example:

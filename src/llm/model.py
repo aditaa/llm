@@ -9,9 +9,7 @@ import torch
 import torch.nn.functional as F
 from torch import Tensor, nn
 
-ARCH_LEGACY = "gpt_learnedpos_layernorm_gelu_v0"
-ARCH_MODERN = "gpt_rope_rmsnorm_swiglu_v1"
-SUPPORTED_ARCHITECTURES = {ARCH_LEGACY, ARCH_MODERN}
+from llm.architectures import ARCH_LEGACY, ARCH_MODERN, SUPPORTED_ARCHITECTURES
 
 
 @dataclass

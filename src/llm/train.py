@@ -14,7 +14,8 @@ import numpy as np
 import torch
 from torch import Tensor
 
-from llm.model import ARCH_MODERN, GPTModel, ModelConfig, model_config_from_dict
+from llm.architectures import ARCH_MODERN
+from llm.model import GPTModel, ModelConfig, model_config_from_dict
 from llm.tokenizer import load_tokenizer, tokenizer_contract_fingerprint, tokenizer_fingerprint
 
 

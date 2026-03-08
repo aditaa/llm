@@ -65,6 +65,22 @@ EVAL_MAX_AVG_CASE_SCORE_DROP="0.01"
 EVAL_FAIL_ON_NO_PROMOTION=0
 RENDER_EVAL_DASHBOARD=1
 
+GENERATION_GATE=1
+GENERATION_SUITE="configs/eval/generation_smoke_suite_v1.json"
+GENERATION_MAX_NEW_TOKENS=120
+GENERATION_TEMPERATURE="0.8"
+GENERATION_TOP_K=40
+GENERATION_SEED=314
+GENERATION_SEED_STRIDE=31
+GENERATION_DEVICE="auto"
+GENERATION_FAIL_ON_REGRESSION=1
+GENERATION_MAX_PASS_RATE_DROP="0.02"
+GENERATION_MAX_CHECK_PASS_RATE_DROP="0.02"
+GENERATION_MAX_AVG_CASE_SCORE_DROP="0.02"
+GENERATION_FAIL_BELOW_PASS_RATE=""
+GENERATION_EVERY_CHUNKS=1
+GENERATION_STOP_ON_FAIL=0
+
 usage() {
   cat <<'USAGE'
 Usage:
@@ -132,6 +148,29 @@ Post-chunk eval:
                                Allowed avg_case_score drop vs baseline (default: 0.01)
   --eval-fail-on-no-promotion  Fail eval step when promotion policy criteria are not met
   --no-render-eval-dashboard   Disable HTML+JSON eval trend dashboard rendering
+
+Generation gate (scheduled post-chunk prompt generation checks):
+  --no-generation-gate         Disable post-chunk generation gate
+  --generation-suite FILE      Generation suite JSON (default: configs/eval/generation_smoke_suite_v1.json)
+  --generation-max-new-tokens N
+                               Generation gate max new tokens per case (default: 120)
+  --generation-temperature X   Generation gate sampling temperature (default: 0.8)
+  --generation-top-k N         Generation gate top-k (default: 40)
+  --generation-seed N          Generation gate base seed (default: 314)
+  --generation-seed-stride N   Generation gate seed stride (default: 31)
+  --generation-device NAME     Generation gate device (default: auto)
+  --no-generation-fail-on-regression
+                               Disable generation gate regression fail flag
+  --generation-max-pass-rate-drop X
+                               Allowed generation pass_rate drop vs baseline (default: 0.02)
+  --generation-max-check-pass-rate-drop X
+                               Allowed generation check_pass_rate drop vs baseline (default: 0.02)
+  --generation-max-avg-case-score-drop X
+                               Allowed generation avg_case_score drop vs baseline (default: 0.02)
+  --generation-fail-below-pass-rate X
+                               Fail generation gate if pass_rate drops below X
+  --generation-every-chunks N  Run generation gate every N successful chunks (default: 1)
+  --generation-stop-on-fail    Stop supervisor when generation gate returns non-zero
   -h, --help                   Show help
 
 Example:
@@ -195,6 +234,21 @@ while [[ $# -gt 0 ]]; do
     --eval-max-avg-case-score-drop) EVAL_MAX_AVG_CASE_SCORE_DROP="$2"; shift 2 ;;
     --eval-fail-on-no-promotion) EVAL_FAIL_ON_NO_PROMOTION=1; shift ;;
     --no-render-eval-dashboard) RENDER_EVAL_DASHBOARD=0; shift ;;
+    --no-generation-gate) GENERATION_GATE=0; shift ;;
+    --generation-suite) GENERATION_SUITE="$2"; shift 2 ;;
+    --generation-max-new-tokens) GENERATION_MAX_NEW_TOKENS="$2"; shift 2 ;;
+    --generation-temperature) GENERATION_TEMPERATURE="$2"; shift 2 ;;
+    --generation-top-k) GENERATION_TOP_K="$2"; shift 2 ;;
+    --generation-seed) GENERATION_SEED="$2"; shift 2 ;;
+    --generation-seed-stride) GENERATION_SEED_STRIDE="$2"; shift 2 ;;
+    --generation-device) GENERATION_DEVICE="$2"; shift 2 ;;
+    --no-generation-fail-on-regression) GENERATION_FAIL_ON_REGRESSION=0; shift ;;
+    --generation-max-pass-rate-drop) GENERATION_MAX_PASS_RATE_DROP="$2"; shift 2 ;;
+    --generation-max-check-pass-rate-drop) GENERATION_MAX_CHECK_PASS_RATE_DROP="$2"; shift 2 ;;
+    --generation-max-avg-case-score-drop) GENERATION_MAX_AVG_CASE_SCORE_DROP="$2"; shift 2 ;;
+    --generation-fail-below-pass-rate) GENERATION_FAIL_BELOW_PASS_RATE="$2"; shift 2 ;;
+    --generation-every-chunks) GENERATION_EVERY_CHUNKS="$2"; shift 2 ;;
+    --generation-stop-on-fail) GENERATION_STOP_ON_FAIL=1; shift ;;
     -h|--help) usage; exit 0 ;;
     *)
       echo "unknown argument: $1" >&2
@@ -229,6 +283,10 @@ if [[ "$CHECKPOINT_KEEP_LAST" -lt 0 || "$CHECKPOINT_KEEP_EVERY" -lt 0 ]]; then
   echo "error: checkpoint retention values must be >= 0" >&2
   exit 1
 fi
+if [[ "$GENERATION_EVERY_CHUNKS" -le 0 ]]; then
+  echo "error: generation-every-chunks must be > 0" >&2
+  exit 1
+fi
 
 mkdir -p "$OUTPUT_DIR" "$STATE_DIR" artifacts/reports/evals
 
@@ -242,6 +300,7 @@ fi
 SUP_LOG="$STATE_DIR/supervisor_$(date +%Y%m%d_%H%M%S).log"
 TRAIN_TREND_TSV="$STATE_DIR/train_trend.tsv"
 EVAL_TREND_TSV="$STATE_DIR/eval_trend.tsv"
+GENERATION_TREND_TSV="$STATE_DIR/generation_trend.tsv"
 BEST_META_JSON="$STATE_DIR/best_checkpoint.json"
 touch "$SUP_LOG"
 
@@ -250,6 +309,9 @@ if [[ ! -f "$TRAIN_TREND_TSV" ]]; then
 fi
 if [[ ! -f "$EVAL_TREND_TSV" ]]; then
   echo -e "run_tag\tstep\teval_rc\tpass_rate\tcheck_pass_rate\tavg_case_score\tcases_passed\tcases_total\tregression_pass\tpromotion_pass\tfailed_checks\tbaseline_report\treport_json" > "$EVAL_TREND_TSV"
+fi
+if [[ ! -f "$GENERATION_TREND_TSV" ]]; then
+  echo -e "run_tag\tstep\tgeneration_rc\tpass_rate\tcheck_pass_rate\tavg_case_score\tcases_passed\tcases_total\tregression_pass\tbaseline_report\treport_json" > "$GENERATION_TREND_TSV"
 fi
 
 log() {
@@ -648,14 +710,104 @@ PY
   promote_best_checkpoint_if_needed "$step" "$eval_rc" "$eval_report"
 }
 
+run_generation_gate() {
+  local run_tag="$1"
+  local step="$2"
+  local successful_chunks="$3"
+  if [[ "$GENERATION_GATE" -ne 1 ]]; then
+    return 0
+  fi
+  if (( successful_chunks % GENERATION_EVERY_CHUNKS != 0 )); then
+    log "generation_gate_skip reason=interval step=$step successful_chunks=$successful_chunks interval=$GENERATION_EVERY_CHUNKS"
+    return 0
+  fi
+  if [[ ! -f "$OUTPUT_DIR/last.pt" ]]; then
+    log "generation_gate_skip reason=no_last_checkpoint"
+    return 0
+  fi
+
+  local gen_report="artifacts/reports/evals/gen_gate_step$(printf '%07d' "$step")_${run_tag}.json"
+  local gen_log="$STATE_DIR/generation_gate_${step}_${run_tag}.log"
+  local baseline_report=""
+  if [[ -f "$GENERATION_TREND_TSV" ]]; then
+    baseline_report="$(awk -F'\t' 'NR>1 && $3=="0" {print $NF}' "$GENERATION_TREND_TSV" | tail -n 1)"
+  fi
+  if [[ -n "$baseline_report" && ! -f "$baseline_report" ]]; then
+    baseline_report=""
+  fi
+  log "generation_gate_start step=$step suite=$GENERATION_SUITE report=$gen_report baseline=${baseline_report:-none}"
+
+  local -a gen_extra_args=()
+  if [[ -n "$baseline_report" ]]; then
+    gen_extra_args+=(--baseline-report "$baseline_report")
+    gen_extra_args+=(--max-pass-rate-drop "$GENERATION_MAX_PASS_RATE_DROP")
+    gen_extra_args+=(--max-check-pass-rate-drop "$GENERATION_MAX_CHECK_PASS_RATE_DROP")
+    gen_extra_args+=(--max-avg-case-score-drop "$GENERATION_MAX_AVG_CASE_SCORE_DROP")
+    if [[ "$GENERATION_FAIL_ON_REGRESSION" -eq 1 ]]; then
+      gen_extra_args+=(--fail-on-regression)
+    fi
+  fi
+  if [[ -n "$GENERATION_FAIL_BELOW_PASS_RATE" ]]; then
+    gen_extra_args+=(--fail-below-pass-rate "$GENERATION_FAIL_BELOW_PASS_RATE")
+  fi
+
+  set +e
+  PYTHONPATH=src \
+  .venv/bin/python scripts/eval_checkpoint_prompts.py \
+    --checkpoint "$OUTPUT_DIR/last.pt" \
+    --suite "$GENERATION_SUITE" \
+    --output "$gen_report" \
+    --device "$GENERATION_DEVICE" \
+    --max-new-tokens "$GENERATION_MAX_NEW_TOKENS" \
+    --temperature "$GENERATION_TEMPERATURE" \
+    --top-k "$GENERATION_TOP_K" \
+    --seed "$GENERATION_SEED" \
+    --seed-stride "$GENERATION_SEED_STRIDE" \
+    "${gen_extra_args[@]}" \
+    > "$gen_log" 2>&1
+  local gen_rc=$?
+  set -e
+
+  local pass_rate="NA"
+  local check_pass_rate="NA"
+  local avg_case_score="NA"
+  local cases_passed="NA"
+  local cases_total="NA"
+  local regression_pass="NA"
+  if [[ -f "$gen_report" ]]; then
+    read -r pass_rate check_pass_rate avg_case_score cases_passed cases_total regression_pass < <(
+      python3 - <<'PY' "$gen_report"
+import json
+import sys
+obj = json.load(open(sys.argv[1], "r", encoding="utf-8"))
+s = obj.get("summary", {})
+r = obj.get("regression", {})
+print(
+    s.get("pass_rate", "NA"),
+    s.get("check_pass_rate", "NA"),
+    s.get("avg_case_score", "NA"),
+    s.get("cases_passed", "NA"),
+    s.get("cases_total", "NA"),
+    r.get("pass", "NA") if isinstance(r, dict) else "NA",
+)
+PY
+    )
+  fi
+
+  echo -e "${run_tag}\t${step}\t${gen_rc}\t${pass_rate}\t${check_pass_rate}\t${avg_case_score}\t${cases_passed}\t${cases_total}\t${regression_pass}\t${baseline_report:-NA}\t${gen_report}" >> "$GENERATION_TREND_TSV"
+  log "generation_gate_done rc=$gen_rc pass_rate=$pass_rate check_pass_rate=$check_pass_rate avg_case_score=$avg_case_score regression_pass=$regression_pass baseline=${baseline_report:-none} report=$gen_report"
+  return "$gen_rc"
+}
+
 clamp_batch_size
 if [[ "$TARGET_EFFECTIVE_BATCH" -gt 0 ]]; then
   set_grad_accum_from_target
 fi
 
 failure_streak=0
+successful_chunks=0
 log "supervisor_start shards_path=$SHARDS_PATH output_dir=$OUTPUT_DIR step_chunk=$STEP_CHUNK"
-log "tuning_start batch_size=$BATCH_SIZE grad_accum=$GRAD_ACCUM_STEPS auto_tune=$AUTO_TUNE target_effective_batch=$TARGET_EFFECTIVE_BATCH train_fail_on_eval_regression=$TRAIN_FAIL_ON_EVAL_REGRESSION checkpoint_keep_last=$CHECKPOINT_KEEP_LAST checkpoint_keep_every=$CHECKPOINT_KEEP_EVERY allow_context_extension=$ALLOW_CONTEXT_EXTENSION ema_decay=$EMA_DECAY ema_update_every=$EMA_UPDATE_EVERY ema_start_step=$EMA_START_STEP"
+log "tuning_start batch_size=$BATCH_SIZE grad_accum=$GRAD_ACCUM_STEPS auto_tune=$AUTO_TUNE target_effective_batch=$TARGET_EFFECTIVE_BATCH train_fail_on_eval_regression=$TRAIN_FAIL_ON_EVAL_REGRESSION checkpoint_keep_last=$CHECKPOINT_KEEP_LAST checkpoint_keep_every=$CHECKPOINT_KEEP_EVERY allow_context_extension=$ALLOW_CONTEXT_EXTENSION ema_decay=$EMA_DECAY ema_update_every=$EMA_UPDATE_EVERY ema_start_step=$EMA_START_STEP generation_gate=$GENERATION_GATE generation_every_chunks=$GENERATION_EVERY_CHUNKS generation_stop_on_fail=$GENERATION_STOP_ON_FAIL"
 
 while true; do
   mcount="$(manifest_count)"
@@ -745,8 +897,16 @@ while true; do
 
   if [[ "$rc" -eq 0 ]]; then
     failure_streak=0
+    successful_chunks=$((successful_chunks + 1))
     log "train_done rc=0 step_now=$new_step best_val_ppl=$best_val_ppl gpu_avg_util=$gpu_avg_util gpu_max_mem=$gpu_max_mem"
     run_post_chunk_eval "$run_tag" "$new_step"
+    if ! run_generation_gate "$run_tag" "$new_step" "$successful_chunks"; then
+      log "generation_gate_failed step=$new_step successful_chunks=$successful_chunks"
+      if [[ "$GENERATION_STOP_ON_FAIL" -eq 1 ]]; then
+        log "supervisor_stop reason=generation_gate_failed"
+        exit 11
+      fi
+    fi
   else
     if [[ -n "$resume_ckpt" ]] && log_has_resume_checkpoint_error "$run_log"; then
       quarantine_bad_checkpoint "$resume_ckpt" "resume_failure"

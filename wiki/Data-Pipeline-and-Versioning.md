@@ -87,6 +87,14 @@ This loop:
 - marks files processed only after post-batch guardrails pass (valid report+manifest, non-empty shard files)
 - on 20-core hosts, two shard jobs with tokenizer batch encoding is the current higher-throughput profile
 
+Optional watchdog for stage/shard loop auto-restart:
+```bash
+bash scripts/fineweb_stage_shard_watchdog.sh \
+  --worker-args "--hot-queue-min-files 12 --stage-max-files 10 --process-max-files 10 --shard-jobs 1 --tokenizer-threads 10 --encode-batch-size 1024 --sleep-seconds 60 --shard-min-batch-size 512" \
+  --check-interval-seconds 120 \
+  --stall-seconds 1800
+```
+
 Optional watchdog for large FineWeb downloads:
 ```bash
 bash scripts/hf_download_watchdog.sh \
@@ -119,7 +127,9 @@ bash scripts/train_supervisor_rtx5070_350bt.sh \
   --target-effective-batch 24 \
   --min-batch-size 6 \
   --max-batch-size 20 \
-  --batch-step 2
+  --batch-step 2 \
+  --generation-suite configs/eval/generation_smoke_suite_v1.json \
+  --generation-every-chunks 1
 ```
 This runs training in chunks and resumes from `last.pt`; each chunk restart re-reads
 all manifests under `data/shards_global/fineweb-global-bpe-v1` so newly added shard
@@ -131,6 +141,7 @@ primarily gate via the post-chunk prompt-suite regression/promotion checks.
 Trend outputs:
 - `artifacts/reports/train_supervisor_350bt/train_trend.tsv`
 - `artifacts/reports/train_supervisor_350bt/eval_trend.tsv`
+- `artifacts/reports/train_supervisor_350bt/generation_trend.tsv`
 - `artifacts/reports/train_supervisor_350bt/eval_dashboard.html`
 The supervisor eval step now auto-selects the latest successful eval report as
 baseline, compares deltas (pass/check/score), and applies

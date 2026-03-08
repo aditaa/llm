@@ -4,7 +4,7 @@ ifneq ("$(wildcard .venv/bin/python)","")
 PYTHON=.venv/bin/python
 endif
 
-.PHONY: setup-dev setup-train setup-infer doctor install-server-system install-systemd-services test lint format typecheck smoke extract-zim train-tokenizer train-tokenizer-global corpus-quality-report clean-corpus-batch dataset-risk-report pull-hf-rows parquet-to-corpus fineweb-parquet-to-shards stage-fineweb-from-warm fineweb-prefetch-hot-queue fineweb-stage-shard-loop fineweb-hot-queue lr-sweep-350bt train-350bt-v2 train-350bt-ctx1024 train-supervisor-350bt pipeline-eta pipeline-live shard-corpus-batch verify-shards train generate average-checkpoints eval-checkpoint render-eval-dashboard package-inference-bundle sync-warm hydrate-warm offload-zim hf-download-resumable hf-download-watchdog hf-prepare-publish hf-download-model serve-openai publish-wiki
+.PHONY: setup-dev setup-train setup-infer doctor install-server-system install-systemd-services test lint format typecheck smoke extract-zim train-tokenizer train-tokenizer-global corpus-quality-report clean-corpus-batch dataset-risk-report pull-hf-rows parquet-to-corpus fineweb-parquet-to-shards stage-fineweb-from-warm fineweb-prefetch-hot-queue fineweb-stage-shard-loop fineweb-stage-shard-watchdog fineweb-hot-queue lr-sweep-350bt train-350bt-v2 train-350bt-ctx1024 train-supervisor-350bt pipeline-eta pipeline-live shard-corpus-batch verify-shards train generate average-checkpoints eval-checkpoint render-eval-dashboard package-inference-bundle sync-warm hydrate-warm offload-zim hf-download-resumable hf-download-watchdog hf-prepare-publish hf-download-model serve-openai publish-wiki
 
 setup-dev:
 	bash scripts/bootstrap_dev.sh
@@ -87,6 +87,10 @@ fineweb-stage-shard-loop:
 	@echo "Usage:"
 	@echo "  bash scripts/fineweb_stage_shard_loop.sh --hot-queue-min-files 8 --stage-max-files 2 --process-max-files 4 --shard-jobs 2 --tokenizer-threads 10 --encode-batch-size 1024 --sleep-seconds 60 --shard-min-batch-size 512"
 
+fineweb-stage-shard-watchdog:
+	@echo "Usage:"
+	@echo "  bash scripts/fineweb_stage_shard_watchdog.sh --worker-args \"--hot-queue-min-files 12 --stage-max-files 10 --process-max-files 10 --shard-jobs 1 --tokenizer-threads 10 --encode-batch-size 1024 --sleep-seconds 60 --shard-min-batch-size 512\" --check-interval-seconds 120 --stall-seconds 1800"
+
 fineweb-hot-queue:
 	@echo "Usage:"
 	@echo "  bash scripts/fineweb_stage_shard_loop.sh --hot-queue-min-files 12 --stage-max-files 10 --process-max-files 10 --shard-jobs 2 --tokenizer-threads 10 --encode-batch-size 1024 --sleep-seconds 60"
@@ -105,7 +109,7 @@ train-350bt-ctx1024:
 
 train-supervisor-350bt:
 	@echo "Usage:"
-	@echo "  bash scripts/train_supervisor_rtx5070_350bt.sh --step-chunk 2000 --poll-seconds 60 --batch-size 12 --target-effective-batch 24 --min-batch-size 6 --max-batch-size 20 --batch-step 2 --checkpoint-keep-last 6 --checkpoint-keep-every 10000 --ema-decay 0.999 --eval-suite configs/eval/standard_prompt_suite_v3.json --no-train-fail-on-eval-regression"
+	@echo "  bash scripts/train_supervisor_rtx5070_350bt.sh --step-chunk 2000 --poll-seconds 60 --batch-size 12 --target-effective-batch 24 --min-batch-size 6 --max-batch-size 20 --batch-step 2 --checkpoint-keep-last 6 --checkpoint-keep-every 10000 --ema-decay 0.999 --eval-suite configs/eval/standard_prompt_suite_v3.json --generation-suite configs/eval/generation_smoke_suite_v1.json --generation-every-chunks 1 --no-train-fail-on-eval-regression"
 
 pipeline-eta:
 	@echo "Usage:"

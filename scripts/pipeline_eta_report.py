@@ -136,6 +136,31 @@ def _latest_train_step(supervisor_state_dir: Path) -> int:
     return 0
 
 
+def _latest_generation_summary(supervisor_state_dir: Path) -> dict[str, Any]:
+    trend_path = supervisor_state_dir / "generation_trend.tsv"
+    if not trend_path.exists():
+        return {"step": None, "generation_rc": None, "pass_rate": None, "regression_pass": None}
+    latest: str | None = None
+    with trend_path.open("r", encoding="utf-8", errors="replace") as handle:
+        for line in handle:
+            row = line.strip()
+            if row and not row.startswith("run_tag\t"):
+                latest = row
+    if latest is None:
+        return {"step": None, "generation_rc": None, "pass_rate": None, "regression_pass": None}
+    parts = latest.split("\t")
+    # run_tag,step,generation_rc,pass_rate,check_pass_rate,avg_case_score,cases_passed,cases_total,regression_pass,baseline_report,report_json
+    if len(parts) < 9:
+        return {"step": None, "generation_rc": None, "pass_rate": None, "regression_pass": None}
+    step = int(parts[1]) if parts[1].isdigit() else None
+    return {
+        "step": step,
+        "generation_rc": parts[2],
+        "pass_rate": parts[3],
+        "regression_pass": parts[8],
+    }
+
+
 def _eta_seconds(remaining: float, rate_per_sec: float | None) -> float | None:
     if rate_per_sec is None or rate_per_sec <= 0:
         return None
@@ -205,14 +230,21 @@ def collect_status(args: argparse.Namespace) -> dict[str, Any]:
     manifests = _count_find(shards_root, "manifest.json")
     sharded_parquet = _count_nonempty_lines(stage_state_dir / "processed_parquet_files.txt")
     train_step = _latest_train_step(sup_dir)
+    generation_gate_latest = _latest_generation_summary(sup_dir)
 
     active = {
+        "hf_watchdog": _pgrep_count(r"hf_download_watchdog\.sh"),
         "download_worker": _pgrep_count(r"hf_download_resumable\.sh"),
+        "prefetch_worker": _pgrep_count(r"fineweb_prefetch_hot_queue\.sh"),
+        "stage_watchdog": _pgrep_count(r"fineweb_stage_shard_watchdog\.sh"),
         "stage_loop": _pgrep_count(r"fineweb_stage_shard_loop\.sh"),
         "shard_builder": _pgrep_count(r"scripts/fineweb_parquet_to_shards\.py"),
         "train_supervisor": _pgrep_count(r"train_supervisor_rtx5070_350bt\.sh"),
         "trainer": _pgrep_count(r"llm\.cli train"),
         "eval_runner": _pgrep_count(r"scripts/eval_checkpoint_prompts\.py"),
+        "generation_gate_runner": _pgrep_count(
+            r"scripts/eval_checkpoint_prompts\.py .*generation_smoke_suite_v1\.json"
+        ),
     }
     system_commands = {
         "top": _capture_command(
@@ -319,6 +351,7 @@ def collect_status(args: argparse.Namespace) -> dict[str, Any]:
             "train": _fmt_eta(eta["train_seconds"]),
         },
         "active_processes": active,
+        "generation_gate_latest": generation_gate_latest,
         "system_commands": system_commands,
     }
     return status
@@ -333,6 +366,7 @@ def write_reports(status: dict[str, Any], output_json: Path, output_text: Path) 
     r = status["rates"]
     p = status["active_processes"]
     c = status["system_commands"]
+    g = status.get("generation_gate_latest", {})
     text = "\n".join(
         [
             f"time_utc={status['timestamp_utc']}",
@@ -345,9 +379,11 @@ def write_reports(status: dict[str, Any], output_json: Path, output_text: Path) 
             f"eta: download_bytes={status['eta_human']['download']} download_parquet={status['eta_human']['download_parquet']}"
             f" sharding={status['eta_human']['sharding']} train={status['eta_human']['train']}",
             "active:"
-            f" download_worker={p['download_worker']} stage_loop={p['stage_loop']}"
+            f" hf_watchdog={p['hf_watchdog']} download_worker={p['download_worker']} prefetch_worker={p['prefetch_worker']} stage_watchdog={p['stage_watchdog']} stage_loop={p['stage_loop']}"
             f" shard_builder={p['shard_builder']} train_supervisor={p['train_supervisor']}"
-            f" trainer={p['trainer']} eval_runner={p['eval_runner']}",
+            f" trainer={p['trainer']} eval_runner={p['eval_runner']} generation_gate_runner={p['generation_gate_runner']}",
+            "generation_gate_latest:"
+            f" step={g.get('step')} rc={g.get('generation_rc')} pass_rate={g.get('pass_rate')} regression_pass={g.get('regression_pass')}",
             "",
             "--- top -b -n 1 ---",
             c["top"]["output"],

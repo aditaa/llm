@@ -1,0 +1,67 @@
+{
+  "name": "generation_smoke_v1",
+  "description": "Lightweight post-chunk generation drift gate. Focuses on fluent continuation and anti-gibberish checks.",
+  "cases": [
+    {
+      "id": "chat_greeting",
+      "category": "chat",
+      "prompt": "User: Hi there. How is your day going?\nAssistant:",
+      "checks": {
+        "min_completion_chars": 24,
+        "max_repeated_char_run": 8,
+        "max_non_ascii_ratio": 0.15,
+        "max_url_count": 0
+      }
+    },
+    {
+      "id": "short_explanation",
+      "category": "explain",
+      "prompt": "Explain in simple words what a neural network is.",
+      "checks": {
+        "min_completion_chars": 40,
+        "max_repeated_char_run": 8,
+        "max_non_ascii_ratio": 0.10
+      }
+    },
+    {
+      "id": "story_continuation",
+      "category": "creative",
+      "prompt": "The rain stopped just before sunrise, and the town square was silent until",
+      "checks": {
+        "min_completion_chars": 50,
+        "max_repeated_char_run": 8,
+        "max_non_ascii_ratio": 0.10
+      }
+    },
+    {
+      "id": "qa_reasoning",
+      "category": "reasoning",
+      "prompt": "Question: If a train moves at 60 miles per hour for 2.5 hours, how far does it travel?\nAnswer:",
+      "checks": {
+        "min_completion_chars": 16,
+        "max_repeated_char_run": 8,
+        "max_non_ascii_ratio": 0.10
+      }
+    },
+    {
+      "id": "list_format",
+      "category": "format",
+      "prompt": "Give three practical tips for learning a new language:",
+      "checks": {
+        "min_completion_chars": 35,
+        "max_repeated_char_run": 8,
+        "max_non_ascii_ratio": 0.10
+      }
+    },
+    {
+      "id": "code_adjacent_text",
+      "category": "mixed",
+      "prompt": "Describe what this Python line does in one sentence: total = sum(values)",
+      "checks": {
+        "min_completion_chars": 22,
+        "max_repeated_char_run": 8,
+        "max_non_ascii_ratio": 0.10
+      }
+    }
+  ]
+}

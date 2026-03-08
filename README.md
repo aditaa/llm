@@ -64,6 +64,7 @@ make fineweb-parquet-to-shards # print direct FineWeb parquet->token-shards usag
 make stage-fineweb-from-warm # print warm->hot FineWeb chunk staging usage
 make fineweb-prefetch-hot-queue # print hot-queue prefetch worker usage
 make fineweb-stage-shard-loop # print rolling stage->shard->verify->sync->purge usage
+make fineweb-stage-shard-watchdog # print auto-restart watchdog usage for stage/shard loop
 make fineweb-hot-queue # print hot parquet queue-oriented stage/shard usage
 make lr-sweep-350bt # print RTX 5070 LR sweep usage for staged 350BT shards
 make train-350bt-v2 # print 350BT long-run launcher usage
@@ -259,6 +260,14 @@ processed or purged from hot storage.
 Guardrail checks are implemented in `src/llm/fineweb_guardrails.py` and are unit-tested.
 For 20-core hosts, `--shard-jobs 2 --tokenizer-threads 10 --encode-batch-size 1024` is the
 current high-throughput profile.
+
+3ad. Optional watchdog for stage/shard loop auto-restart on exit/stall:
+```bash
+bash scripts/fineweb_stage_shard_watchdog.sh \
+  --worker-args "--hot-queue-min-files 12 --stage-max-files 10 --process-max-files 10 --shard-jobs 1 --tokenizer-threads 10 --encode-batch-size 1024 --sleep-seconds 60 --shard-min-batch-size 512" \
+  --check-interval-seconds 120 \
+  --stall-seconds 1800
+```
 
 3ad. Build tokenizer + token shards directly from FineWeb parquet:
 ```bash
@@ -513,7 +522,9 @@ bash scripts/train_supervisor_rtx5070_350bt.sh \
   --target-effective-batch 24 \
   --min-batch-size 6 \
   --max-batch-size 20 \
-  --batch-step 2
+  --batch-step 2 \
+  --generation-suite configs/eval/generation_smoke_suite_v1.json \
+  --generation-every-chunks 1
 ```
 Add `--no-train-fail-on-eval-regression` if you want chunk runs to continue even when
 the train-loop held-out perplexity gate is noisy; prompt-suite regression/promotion
@@ -525,9 +536,11 @@ also exports `best.pt`, `best_eval_report.json`, and safetensors best aliases.
 Supervisor outputs:
 - `artifacts/reports/train_supervisor_350bt/train_trend.tsv` (per-chunk train telemetry)
 - `artifacts/reports/train_supervisor_350bt/eval_trend.tsv` (post-chunk eval trend, including regression/promotion columns)
+- `artifacts/reports/train_supervisor_350bt/generation_trend.tsv` (scheduled generation-gate trend, with regression columns)
 - `artifacts/reports/train_supervisor_350bt/eval_dashboard.html` (rendered trend dashboard)
 - `artifacts/reports/train_supervisor_350bt/eval_dashboard_summary.json` (dashboard summary JSON)
 The supervisor now auto-selects the latest successful eval report as baseline for the next eval cycle.
+It also auto-selects the latest successful generation-gate report as baseline for the next generation gate cycle.
 
 Combined pipeline ETA/status reporter:
 ```bash
@@ -560,6 +573,8 @@ make install-systemd-services
 Templates:
 - `deploy/systemd/llm-train-supervisor.service`
 - `deploy/systemd/llm-fineweb-prefetch.service`
+- `deploy/systemd/llm-fineweb-stage-shard-loop.service`
+- `deploy/systemd/llm-fineweb-stage-shard-watchdog.service`
 - `deploy/systemd/llm-hf-download-watchdog.service`
 
 Environment template:

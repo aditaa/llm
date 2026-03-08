@@ -15,7 +15,7 @@ Usage:
   bash scripts/install_systemd_services.sh [options]
 
 Install and optionally enable/start systemd service units for long-running
-LLM pipeline workers.
+LLM pipeline workers (supervisor + prefetch + stage/shard loop, optional HF watchdog).
 
 Options:
   --repo-dir DIR            Repository directory baked into unit files
@@ -110,6 +110,8 @@ install_unit() {
 
 install_unit "llm-train-supervisor.service" "llm-train-supervisor.service"
 install_unit "llm-fineweb-prefetch.service" "llm-fineweb-prefetch.service"
+install_unit "llm-fineweb-stage-shard-loop.service" "llm-fineweb-stage-shard-loop.service"
+install_unit "llm-fineweb-stage-shard-watchdog.service" "llm-fineweb-stage-shard-watchdog.service"
 if [[ "$INSTALL_WATCHDOG" -eq 1 ]]; then
   install_unit "llm-hf-download-watchdog.service" "llm-hf-download-watchdog.service"
 fi
@@ -123,7 +125,11 @@ fi
 
 $SUDO systemctl daemon-reload
 
-units=(llm-train-supervisor.service llm-fineweb-prefetch.service)
+units=(
+  llm-train-supervisor.service
+  llm-fineweb-prefetch.service
+  llm-fineweb-stage-shard-watchdog.service
+)
 if [[ "$INSTALL_WATCHDOG" -eq 1 ]]; then
   units+=(llm-hf-download-watchdog.service)
 fi

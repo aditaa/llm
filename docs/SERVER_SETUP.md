@@ -111,6 +111,8 @@ bash scripts/install_systemd_services.sh --install-watchdog
 Installed units:
 - `llm-train-supervisor.service`
 - `llm-fineweb-prefetch.service`
+- `llm-fineweb-stage-shard-loop.service`
+- `llm-fineweb-stage-shard-watchdog.service`
 - `llm-hf-download-watchdog.service` (optional but recommended for long HF pulls)
 
 Environment file:

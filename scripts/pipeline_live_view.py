@@ -157,6 +157,25 @@ def _latest_train_step(supervisor_state_dir: Path) -> int:
     return 0
 
 
+def _latest_generation_summary(supervisor_state_dir: Path) -> tuple[str, str, str]:
+    trend_path = supervisor_state_dir / "generation_trend.tsv"
+    if not trend_path.exists():
+        return ("NA", "NA", "NA")
+    latest: str | None = None
+    with trend_path.open("r", encoding="utf-8", errors="replace") as handle:
+        for line in handle:
+            row = line.strip()
+            if row and not row.startswith("run_tag\t"):
+                latest = row
+    if latest is None:
+        return ("NA", "NA", "NA")
+    parts = latest.split("\t")
+    # run_tag,step,generation_rc,pass_rate,check_pass_rate,avg_case_score,cases_passed,cases_total,regression_pass,baseline_report,report_json
+    if len(parts) < 9:
+        return ("NA", "NA", "NA")
+    return (parts[2], parts[3], parts[8])
+
+
 def _cpu_snapshot() -> tuple[int, int]:
     with open("/proc/stat", "r", encoding="utf-8") as handle:
         line = handle.readline().strip()
@@ -341,6 +360,7 @@ def _render(
     manifest_count = _count_find(shards_root, "manifest.json")
     processed_parquet = _count_nonempty_lines(stage_state)
     train_step = _latest_train_step(sup_dir)
+    gen_rc, gen_pass_rate, gen_regression_pass = _latest_generation_summary(sup_dir)
 
     dt = (now - state.ts) if state.ts is not None else None
     download_bps = _rate(warm_bytes, state.warm_bytes, dt)
@@ -364,13 +384,17 @@ def _render(
     top_procs = _top_cpu_processes(args.top_procs)
 
     tasks = [
+        ("hf-watchdog", r"hf_download_watchdog\.sh"),
         ("download-worker", r"hf_download_resumable\.sh"),
+        ("prefetch-worker", r"fineweb_prefetch_hot_queue\.sh"),
+        ("stage-watchdog", r"fineweb_stage_shard_watchdog\.sh"),
         ("hf-download", r"\.venv/bin/hf download HuggingFaceFW/fineweb"),
         ("stage-loop", r"fineweb_stage_shard_loop\.sh"),
         ("shard-builder", r"scripts/fineweb_parquet_to_shards\.py"),
         ("train-supervisor", r"train_supervisor_rtx5070_350bt\.sh"),
         ("trainer", r"llm\.cli train"),
         ("eval-runner", r"eval_checkpoint_prompts\.py"),
+        ("generation-gate", r"eval_checkpoint_prompts\.py .*generation_smoke_suite_v1\.json"),
         ("zim-offload", r"zim_offload_worker\.sh"),
     ]
     task_lines: list[str] = []
@@ -424,6 +448,9 @@ def _render(
         f"  Training: step={train_step}/{args.train_target_step} "
         f"rate={f'{train_sps:.3f} step/s' if train_sps is not None else 'n/a'} "
         f"eta={_eta(rem_steps, train_sps)}"
+    )
+    lines.append(
+        f"  GenGate:  latest_rc={gen_rc} latest_pass_rate={gen_pass_rate} latest_regression_pass={gen_regression_pass}"
     )
 
     lines.append("")

@@ -72,6 +72,8 @@ make install-systemd-services
 Units installed from `deploy/systemd/`:
 - `llm-train-supervisor.service`
 - `llm-fineweb-prefetch.service`
+- `llm-fineweb-stage-shard-loop.service`
+- `llm-fineweb-stage-shard-watchdog.service`
 - `llm-hf-download-watchdog.service` (optional)
 
 ## Wiki Publishing

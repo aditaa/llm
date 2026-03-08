@@ -60,9 +60,10 @@ PYTHONPATH=src .venv/bin/python scripts/fineweb_parquet_to_shards.py \
 Rolling FineWeb 350BT ingestion on limited hot disk:
 ```bash
 bash scripts/fineweb_stage_shard_loop.sh \
-  --stage-max-files 10 \
-  --process-max-files 10 \
-  --sleep-seconds 120
+  --hot-queue-min-files 8 \
+  --stage-max-files 2 \
+  --process-max-files 4 \
+  --sleep-seconds 60
 ```
 This loop:
 - stages bounded parquet files from warm (`/mnt/ceph/llm/data`) to hot (`./data`)
@@ -75,11 +76,15 @@ Auto-resume trainer supervisor for growing shard sets:
 ```bash
 bash scripts/train_supervisor_rtx5070_350bt.sh \
   --step-chunk 2000 \
-  --poll-seconds 120
+  --poll-seconds 120 \
+  --target-effective-batch 34
 ```
 This runs training in chunks and resumes from `last.pt`; each chunk restart re-reads
 all manifests under `data/shards_global/fineweb-global-bpe-v1` so newly added shard
 batches are picked up without manual intervention.
+Trend outputs:
+- `artifacts/reports/train_supervisor_350bt/train_trend.tsv`
+- `artifacts/reports/train_supervisor_350bt/eval_trend.tsv`
 
 ## Versioning Rule
 Use ZIM date stamps as the canonical dataset version.

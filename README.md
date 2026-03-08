@@ -59,6 +59,7 @@ make pull-hf-rows # print Hugging Face rows API pull helper usage
 make fineweb-parquet-to-shards # print direct FineWeb parquet->token-shards usage
 make stage-fineweb-from-warm # print warm->hot FineWeb chunk staging usage
 make fineweb-stage-shard-loop # print rolling stage->shard->verify->sync->purge usage
+make fineweb-hot-queue # print hot parquet queue-oriented stage/shard usage
 make lr-sweep-350bt # print RTX 5070 LR sweep usage for staged 350BT shards
 make train-350bt-v2 # print 350BT long-run launcher usage
 make train-supervisor-350bt # print auto-resume trainer supervisor usage
@@ -201,13 +202,15 @@ bash scripts/stage_fineweb_from_warm.sh --max-files 4 --max-gib 8
 3ac. Run rolling warm->hot staging + sharding loop (recommended for 350BT on limited hot disk):
 ```bash
 bash scripts/fineweb_stage_shard_loop.sh \
-  --stage-max-files 10 \
-  --process-max-files 10 \
-  --sleep-seconds 120
+  --hot-queue-min-files 8 \
+  --stage-max-files 2 \
+  --process-max-files 4 \
+  --sleep-seconds 60
 ```
 This loop stages bounded parquet files to hot storage, builds verified shard batches under
 `data/shards_global/fineweb-global-bpe-v1/`, syncs those batches back to warm storage,
 and purges processed hot parquet files.
+`--hot-queue-min-files` keeps a small parquet queue staged locally so shard building is less likely to idle on copy waits.
 
 3ad. Build tokenizer + token shards directly from FineWeb parquet:
 ```bash
@@ -435,8 +438,12 @@ bash scripts/train_rtx5070_fineweb_350bt_bpe_v2.sh
 ```bash
 bash scripts/train_supervisor_rtx5070_350bt.sh \
   --step-chunk 2000 \
-  --poll-seconds 120
+  --poll-seconds 120 \
+  --target-effective-batch 34
 ```
+Supervisor outputs:
+- `artifacts/reports/train_supervisor_350bt/train_trend.tsv` (per-chunk train telemetry)
+- `artifacts/reports/train_supervisor_350bt/eval_trend.tsv` (post-chunk eval trend)
 
 ## Warm Storage (Ceph Mount)
 Use `./data` and `./artifacts` as the hot working set.

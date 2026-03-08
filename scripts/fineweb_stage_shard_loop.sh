@@ -20,6 +20,7 @@ MAX_ROWS_PER_FILE=0
 STAGE_MAX_FILES=10
 STAGE_MAX_GIB=0
 STAGE_MIN_AGE_SECONDS=180
+HOT_QUEUE_MIN_FILES=8
 PROCESS_MAX_FILES=10
 
 SLEEP_SECONDS=120
@@ -48,6 +49,8 @@ Options:
   --stage-max-files N         Max parquet files to stage per cycle (default: 10)
   --stage-max-gib N           Max GiB to stage per cycle (default: 0 unlimited)
   --stage-min-age-seconds N   Skip recently modified source files (default: 180)
+  --hot-queue-min-files N     Try to keep at least N parquet files staged on hot disk
+                              (default: 8)
   --process-max-files N       Max staged files to shard per batch (default: 10)
 
   --field NAME                Parquet text field (default: text)
@@ -110,6 +113,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --stage-min-age-seconds)
       STAGE_MIN_AGE_SECONDS="$2"
+      shift 2
+      ;;
+    --hot-queue-min-files)
+      HOT_QUEUE_MIN_FILES="$2"
       shift 2
       ;;
     --process-max-files)
@@ -211,12 +218,33 @@ warm_tokenizer_dir="$WARM_ROOT/tokenizer"
 warm_reports_dir="$WARM_ROOT/reports/fineweb_stage_shard_loop"
 
 stage_once() {
-  log "stage_start max_files=$STAGE_MAX_FILES max_gib=$STAGE_MAX_GIB"
+  local hot_count
+  hot_count="$(find "$HOT_PARQUET_DIR" -maxdepth 1 -type f -name '*.parquet' | wc -l | tr -d ' ')"
+  local stage_files="$STAGE_MAX_FILES"
+
+  if [[ "$HOT_QUEUE_MIN_FILES" -gt 0 ]]; then
+    if [[ "$hot_count" -ge "$HOT_QUEUE_MIN_FILES" ]]; then
+      log "stage_skip reason=queue_satisfied hot_count=$hot_count queue_min=$HOT_QUEUE_MIN_FILES"
+      return 0
+    fi
+    local needed
+    needed=$((HOT_QUEUE_MIN_FILES - hot_count))
+    if [[ "$stage_files" -le 0 || "$needed" -lt "$stage_files" ]]; then
+      stage_files="$needed"
+    fi
+  fi
+
+  if [[ "$stage_files" -le 0 ]]; then
+    log "stage_skip reason=stage_files_nonpositive hot_count=$hot_count queue_min=$HOT_QUEUE_MIN_FILES"
+    return 0
+  fi
+
+  log "stage_start max_files=$stage_files max_gib=$STAGE_MAX_GIB hot_count=$hot_count queue_min=$HOT_QUEUE_MIN_FILES"
   if [[ "$DRY_RUN" -eq 1 ]]; then
     bash scripts/stage_fineweb_from_warm.sh \
       --src-dir "$WARM_PARQUET_DIR" \
       --dest-dir "$HOT_PARQUET_DIR" \
-      --max-files "$STAGE_MAX_FILES" \
+      --max-files "$stage_files" \
       --max-gib "$STAGE_MAX_GIB" \
       --min-age-seconds "$STAGE_MIN_AGE_SECONDS" \
       --dry-run | tee -a "$LOG_FILE"
@@ -224,7 +252,7 @@ stage_once() {
     bash scripts/stage_fineweb_from_warm.sh \
       --src-dir "$WARM_PARQUET_DIR" \
       --dest-dir "$HOT_PARQUET_DIR" \
-      --max-files "$STAGE_MAX_FILES" \
+      --max-files "$stage_files" \
       --max-gib "$STAGE_MAX_GIB" \
       --min-age-seconds "$STAGE_MIN_AGE_SECONDS" | tee -a "$LOG_FILE"
   fi
@@ -337,14 +365,18 @@ process_batch() {
 }
 
 log "loop_start warm_parquet_dir=$WARM_PARQUET_DIR hot_parquet_dir=$HOT_PARQUET_DIR"
-log "loop_config shards_root=$SHARDS_ROOT tokenizer_path=$TOKENIZER_PATH iterations=$ITERATIONS"
+log "loop_config shards_root=$SHARDS_ROOT tokenizer_path=$TOKENIZER_PATH iterations=$ITERATIONS hot_queue_min_files=$HOT_QUEUE_MIN_FILES"
 
 completed_batches=0
 while true; do
-  stage_once
-
   selected=()
   select_unprocessed_files selected
+
+  if [[ "${#selected[@]}" -eq 0 ]]; then
+    stage_once
+    selected=()
+    select_unprocessed_files selected
+  fi
 
   if [[ "${#selected[@]}" -eq 0 ]]; then
     if [[ "$ITERATIONS" -gt 0 && "$completed_batches" -ge "$ITERATIONS" ]]; then
@@ -358,6 +390,7 @@ while true; do
 
   process_batch "$((completed_batches + 1))" "${selected[@]}"
   completed_batches=$((completed_batches + 1))
+  stage_once
 
   if [[ "$ITERATIONS" -gt 0 && "$completed_batches" -ge "$ITERATIONS" ]]; then
     log "loop_done reason=iterations_reached completed_batches=$completed_batches"

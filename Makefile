@@ -4,7 +4,7 @@ ifneq ("$(wildcard .venv/bin/python)","")
 PYTHON=.venv/bin/python
 endif
 
-.PHONY: setup-dev setup-train setup-infer doctor install-server-system test lint format typecheck smoke extract-zim train-tokenizer train-tokenizer-global corpus-quality-report clean-corpus-batch dataset-risk-report pull-hf-rows parquet-to-corpus fineweb-parquet-to-shards stage-fineweb-from-warm fineweb-stage-shard-loop lr-sweep-350bt train-350bt-v2 train-supervisor-350bt shard-corpus-batch verify-shards train generate eval-checkpoint sync-warm hydrate-warm offload-zim hf-download-resumable hf-prepare-publish hf-download-model serve-openai publish-wiki
+.PHONY: setup-dev setup-train setup-infer doctor install-server-system test lint format typecheck smoke extract-zim train-tokenizer train-tokenizer-global corpus-quality-report clean-corpus-batch dataset-risk-report pull-hf-rows parquet-to-corpus fineweb-parquet-to-shards stage-fineweb-from-warm fineweb-stage-shard-loop fineweb-hot-queue lr-sweep-350bt train-350bt-v2 train-supervisor-350bt shard-corpus-batch verify-shards train generate eval-checkpoint sync-warm hydrate-warm offload-zim hf-download-resumable hf-prepare-publish hf-download-model serve-openai publish-wiki
 
 setup-dev:
 	bash scripts/bootstrap_dev.sh
@@ -70,7 +70,7 @@ parquet-to-corpus:
 
 fineweb-parquet-to-shards:
 	@echo "Usage:"
-	@echo "  PYTHONPATH=src $(PYTHON) scripts/fineweb_parquet_to_shards.py --input-dir data/fineweb/sample-350BT --output-dir data/shards_global/fineweb-350bt-global-bpe-v1 --tokenizer-out artifacts/tokenizer/fineweb-350bt-global-bpe-v1.json --bpe-vocab-size 32000 --field text"
+	@echo "  PYTHONPATH=src $(PYTHON) scripts/fineweb_parquet_to_shards.py --input-dir data/fineweb/sample-350BT --output-dir data/shards_global/fineweb-global-bpe-v1 --tokenizer-out artifacts/tokenizer/fineweb-global-bpe-v1.json --bpe-vocab-size 32000 --field text"
 
 stage-fineweb-from-warm:
 	@echo "Usage:"
@@ -78,7 +78,11 @@ stage-fineweb-from-warm:
 
 fineweb-stage-shard-loop:
 	@echo "Usage:"
-	@echo "  bash scripts/fineweb_stage_shard_loop.sh --stage-max-files 10 --process-max-files 10 --sleep-seconds 120"
+	@echo "  bash scripts/fineweb_stage_shard_loop.sh --hot-queue-min-files 8 --stage-max-files 2 --process-max-files 4 --sleep-seconds 60"
+
+fineweb-hot-queue:
+	@echo "Usage:"
+	@echo "  bash scripts/fineweb_stage_shard_loop.sh --hot-queue-min-files 12 --stage-max-files 3 --process-max-files 4 --sleep-seconds 60"
 
 lr-sweep-350bt:
 	@echo "Usage:"
@@ -90,7 +94,7 @@ train-350bt-v2:
 
 train-supervisor-350bt:
 	@echo "Usage:"
-	@echo "  bash scripts/train_supervisor_rtx5070_350bt.sh --step-chunk 2000 --poll-seconds 120"
+	@echo "  bash scripts/train_supervisor_rtx5070_350bt.sh --step-chunk 2000 --poll-seconds 120 --target-effective-batch 34"
 
 shard-corpus-batch:
 	@echo "Usage:"
@@ -126,7 +130,7 @@ offload-zim:
 
 hf-download-resumable:
 	@echo "Run a self-healing Hugging Face download worker with resume + retries."
-	@echo "Usage: HF_TOKEN=hf_xxx bash scripts/hf_download_resumable.sh --dataset HuggingFaceFW/fineweb --repo-type dataset --include 'sample/350BT/*.parquet' --local-dir /mnt/ceph/llm/data/fineweb/sample-350BT --max-workers 2 --skip-dry-run --attempt-timeout-seconds 5400 --retry-delay-seconds 30 --max-retries 0 --log-file artifacts/reports/fineweb_350bt_download_resumable.log"
+	@echo "Usage: HF_TOKEN=hf_xxx bash scripts/hf_download_resumable.sh --dataset HuggingFaceFW/fineweb --repo-type dataset --include 'sample/350BT/*.parquet' --local-dir /mnt/ceph/llm/data/fineweb/sample-350BT --max-workers 4 --skip-dry-run --attempt-timeout-seconds 5400 --retry-delay-seconds 30 --max-retries 0 --log-file artifacts/reports/fineweb_350bt_download_resumable.log"
 
 hf-prepare-publish:
 	@echo "Prepare release bundle and optionally push to Hugging Face model repo."

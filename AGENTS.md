@@ -35,6 +35,8 @@ Use the `Makefile` as the source of truth:
 - `make fineweb-parquet-to-shards`: usage helper for direct FineWeb parquet -> tokenizer -> shard conversion
 - `make stage-fineweb-from-warm`: usage helper for staging FineWeb parquet chunks from warm to hot
 - `make fineweb-stage-shard-loop`: usage helper for rolling warm->hot stage + shard + verify + sync + purge
+- `make lr-sweep-350bt`: usage helper for RTX 5070 LR sweep on staged 350BT shards (`2e-4..4e-4`, ctx 512)
+- `make train-350bt-v2`: usage helper for the 350BT long-run launcher profile
 - `make shard-corpus-batch`: usage helper for batch sharding with a shared tokenizer
 - `make hf-download-resumable`: usage helper for self-healing Hugging Face resume-download worker
 - `make hf-prepare-publish`: usage helper for Hugging Face release bundle/publish
@@ -105,7 +107,7 @@ Keep PR scope narrow; split refactors and features into separate PRs.
 - For parquet-based FineWeb workflows, use `scripts/stage_fineweb_from_warm.sh` to copy bounded warm chunks into hot storage
 - For long-running 350BT ingestion on limited hot disk, use `scripts/fineweb_stage_shard_loop.sh` for staged processing and automatic hot-space reclaim
 - For checkpoint regression tracking, run `scripts/eval_checkpoint_prompts.py` with `configs/eval/standard_prompt_suite_v1.json` and archive reports in `artifacts/reports/evals/`
-- For FineWeb-first training runs, build shards directly with `PYTHONPATH=src .venv/bin/python scripts/fineweb_parquet_to_shards.py --input-dir data/fineweb/sample-10BT --output-dir data/shards_global/fineweb-s10bt-global-bpe-v1 --tokenizer-out artifacts/tokenizer/fineweb-s10bt-global-bpe-v1.json --bpe-vocab-size 32000 --field text`
+- For FineWeb-first training runs, build shards directly with `PYTHONPATH=src .venv/bin/python scripts/fineweb_parquet_to_shards.py --input-dir data/fineweb/sample-350BT --output-dir data/shards_global/fineweb-global-bpe-v1 --tokenizer-out artifacts/tokenizer/fineweb-global-bpe-v1.json --bpe-vocab-size 32000 --field text`
 - FineWeb-only baseline flow: `fineweb_parquet_to_shards -> verify-shards -> train`
 - For incremental FineWeb adds, freeze tokenizer on phase1 and build later phases with `--tokenizer-in` plus `--files-list`; resume training from `last.pt` with same `--shards-path` root
 - On this 20-core server, use 15 parallel streams for split shard-build runs
@@ -117,7 +119,7 @@ Keep PR scope narrow; split refactors and features into separate PRs.
 - Keep held-out eval batches frozen (default) and enable regression gating with `--fail-on-eval-regression`
 - Optimizer uses no-weight-decay groups for norms/biases/embeddings by default
 - For deploy bundles, export weights-only safetensors via `llm.cli train --export-safetensors` or `hf_prepare_and_publish_model.py --include-safetensors`
-- RTX 5070 tuned training profiles live in `configs/train/rtx5070/`; preferred BPE launcher: `bash scripts/train_rtx5070_fineweb_bpe_v1_big.sh`
+- RTX 5070 tuned training profiles live in `configs/train/rtx5070/`; preferred 350BT launchers: `bash scripts/lr_sweep_rtx5070_fineweb_350bt_ctx512.sh` then `bash scripts/train_rtx5070_fineweb_350bt_bpe_v2.sh`
 - Version extracted/tokenized/sharded outputs with the ZIM date stamp (for example `serverfault_2025-08`)
 - Keep raw ZIM archives in `/mnt/ceph/llm/data/raw_zim/`
 - For portable model release + offline server deploy, follow `docs/HF_RELEASE_AND_DEPLOY.md`

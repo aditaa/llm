@@ -47,9 +47,9 @@ Throughput tuning notes:
 Direct FineWeb parquet to shards:
 ```bash
 PYTHONPATH=src .venv/bin/python scripts/fineweb_parquet_to_shards.py \
-  --input-dir data/fineweb/sample-10BT \
-  --output-dir data/shards_global/fineweb-s10bt-global-bpe-v1 \
-  --tokenizer-out artifacts/tokenizer/fineweb-s10bt-global-bpe-v1.json \
+  --input-dir data/fineweb/sample-350BT \
+  --output-dir data/shards_global/fineweb-global-bpe-v1 \
+  --tokenizer-out artifacts/tokenizer/fineweb-global-bpe-v1.json \
   --bpe-vocab-size 32000 \
   --field text \
   --min-chars 80 \

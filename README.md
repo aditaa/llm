@@ -59,6 +59,8 @@ make pull-hf-rows # print Hugging Face rows API pull helper usage
 make fineweb-parquet-to-shards # print direct FineWeb parquet->token-shards usage
 make stage-fineweb-from-warm # print warm->hot FineWeb chunk staging usage
 make fineweb-stage-shard-loop # print rolling stage->shard->verify->sync->purge usage
+make lr-sweep-350bt # print RTX 5070 LR sweep usage for staged 350BT shards
+make train-350bt-v2 # print 350BT long-run launcher usage
 make shard-corpus-batch # print shared-tokenizer batch sharding usage
 make hf-download-resumable # print self-healing HF resume-download worker usage
 make sync-warm   # sync raw/training data + artifacts to warm storage
@@ -157,9 +159,9 @@ For talking-only passes, keep code filtering enabled (default) or tune with:
 ```bash
 python3 scripts/pull_hf_rows.py \
   --dataset HuggingFaceFW/fineweb \
-  --config sample-10BT \
+  --config sample-350BT \
   --split train \
-  --output /mnt/ceph/llm/data/extracted/fineweb_sample-10BT_rows100k.txt \
+  --output /mnt/ceph/llm/data/extracted/fineweb_sample-350BT_rows100k.txt \
   --max-rows 100000
 ```
 Use warm storage for these pulls first; full FineWeb variants are much larger than typical hot disk.
@@ -169,25 +171,13 @@ Use warm storage for these pulls first; full FineWeb variants are much larger th
 # create token in Hugging Face web UI: Settings -> Access Tokens (read scope)
 export HF_TOKEN=hf_xxx
 
-# sample-10BT (~30.6 GB) -> hot storage, auto-resume on transient failures
-bash scripts/hf_download_resumable.sh \
-  --dataset HuggingFaceFW/fineweb \
-  --repo-type dataset \
-  --include "sample/10BT/*.parquet" \
-  --local-dir data/fineweb/sample-10BT \
-  --max-workers 2 \
-  --attempt-timeout-seconds 5400 \
-  --retry-delay-seconds 30 \
-  --max-retries 0 \
-  --log-file artifacts/reports/fineweb_10bt_download_resumable.log
-
 # sample-350BT (~1.06 TB) -> warm storage, auto-resume + retry forever
 bash scripts/hf_download_resumable.sh \
   --dataset HuggingFaceFW/fineweb \
   --repo-type dataset \
   --include "sample/350BT/*.parquet" \
   --local-dir /mnt/ceph/llm/data/fineweb/sample-350BT \
-  --max-workers 2 \
+  --max-workers 4 \
   --skip-dry-run \
   --attempt-timeout-seconds 5400 \
   --retry-delay-seconds 30 \
@@ -200,6 +190,7 @@ Notes:
 - `hf_download_resumable.sh` writes a lock file in the local dir to prevent duplicate workers.
 - For very large pulls (like 350BT), `--skip-dry-run` avoids metadata preflight stalls.
 - `--attempt-timeout-seconds` prevents one hung transfer from stalling progress forever.
+- Keep 350BT parquet on warm storage and stage bounded chunks to hot storage before sharding.
 
 3ab. Stage FineWeb chunks from warm to hot as needed:
 ```bash
@@ -220,9 +211,9 @@ and purges processed hot parquet files.
 3ad. Build tokenizer + token shards directly from FineWeb parquet:
 ```bash
 PYTHONPATH=src .venv/bin/python scripts/fineweb_parquet_to_shards.py \
-  --input-dir data/fineweb/sample-10BT \
-  --output-dir data/shards_global/fineweb-s10bt-global-bpe-v1 \
-  --tokenizer-out artifacts/tokenizer/fineweb-s10bt-global-bpe-v1.json \
+  --input-dir data/fineweb/sample-350BT \
+  --output-dir data/shards_global/fineweb-global-bpe-v1 \
+  --tokenizer-out artifacts/tokenizer/fineweb-global-bpe-v1.json \
   --field text \
   --min-chars 80 \
   --shard-size-tokens 5000000 \
@@ -343,9 +334,9 @@ Use this when you want round-1 pretraining only from FineWeb (no ZIM mix yet):
 ```bash
 # 1) build tokenizer + shards directly from parquet
 PYTHONPATH=src .venv/bin/python scripts/fineweb_parquet_to_shards.py \
-  --input-dir data/fineweb/sample-10BT \
-  --output-dir data/shards_global/fineweb-s10bt-global-bpe-v1 \
-  --tokenizer-out artifacts/tokenizer/fineweb-s10bt-global-bpe-v1.json \
+  --input-dir data/fineweb/sample-350BT \
+  --output-dir data/shards_global/fineweb-global-bpe-v1 \
+  --tokenizer-out artifacts/tokenizer/fineweb-global-bpe-v1.json \
   --field text \
   --min-chars 80 \
   --shard-size-tokens 5000000 \
@@ -353,11 +344,11 @@ PYTHONPATH=src .venv/bin/python scripts/fineweb_parquet_to_shards.py \
 
 # 2) verify and train
 PYTHONPATH=src .venv/bin/python -m llm.cli verify-shards \
-  --path data/shards_global/fineweb-s10bt-global-bpe-v1
+  --path data/shards_global/fineweb-global-bpe-v1
 
 PYTHONPATH=src .venv/bin/python -m llm.cli train \
-  --shards-path data/shards_global/fineweb-s10bt-global-bpe-v1 \
-  --output-dir artifacts/checkpoints/fineweb-s10bt-run1 \
+  --shards-path data/shards_global/fineweb-global-bpe-v1 \
+  --output-dir artifacts/checkpoints/fineweb-350bt-run1 \
   --device cuda \
   --max-steps 1000 \
   --batch-size 12 \
@@ -371,10 +362,10 @@ PYTHONPATH=src .venv/bin/python -m llm.cli train \
 Resume training from the latest checkpoint:
 ```bash
 PYTHONPATH=src .venv/bin/python -m llm.cli train \
-  --shards-path data/shards_global/fineweb-s10bt-global-bpe-v1 \
-  --output-dir artifacts/checkpoints/fineweb-s10bt-run1 \
+  --shards-path data/shards_global/fineweb-global-bpe-v1 \
+  --output-dir artifacts/checkpoints/fineweb-350bt-run1 \
   --device cuda \
-  --resume-from artifacts/checkpoints/fineweb-s10bt-run1/last.pt \
+  --resume-from artifacts/checkpoints/fineweb-350bt-run1/last.pt \
   --max-steps 3000
 ```
 
@@ -386,38 +377,38 @@ You can start training on a subset, then add new parquet files with the same tok
 
 ```bash
 # phase 1 file snapshot (example: first 10 files)
-find data/fineweb/sample-10BT/sample/10BT -maxdepth 1 -type f -name '*.parquet' | sort | head -n 10 | sed 's#^data/fineweb/sample-10BT/##' > artifacts/reports/fineweb_sample10bt_phase1_files.txt
+find data/fineweb/sample-350BT/sample/350BT -maxdepth 1 -type f -name '*.parquet' | sort | head -n 10 | sed 's#^data/fineweb/sample-350BT/##' > artifacts/reports/fineweb_sample350bt_phase1_files.txt
 
 # build phase 1 tokenizer + shards
 PYTHONPATH=src .venv/bin/python scripts/fineweb_parquet_to_shards.py \
-  --input-dir data/fineweb/sample-10BT \
-  --files-list artifacts/reports/fineweb_sample10bt_phase1_files.txt \
-  --output-dir data/shards_global/fineweb-s10bt-incremental/phase1 \
-  --tokenizer-out artifacts/tokenizer/fineweb-s10bt-incremental-bpe-v1.json \
+  --input-dir data/fineweb/sample-350BT \
+  --files-list artifacts/reports/fineweb_sample350bt_phase1_files.txt \
+  --output-dir data/shards_global/fineweb-350bt-incremental/phase1 \
+  --tokenizer-out artifacts/tokenizer/fineweb-350bt-incremental-bpe-v1.json \
   --field text
 
 # start training on phase 1
 PYTHONPATH=src .venv/bin/python -m llm.cli train \
-  --shards-path data/shards_global/fineweb-s10bt-incremental \
-  --output-dir artifacts/checkpoints/fineweb-s10bt-incremental-run1 \
+  --shards-path data/shards_global/fineweb-350bt-incremental \
+  --output-dir artifacts/checkpoints/fineweb-350bt-incremental-run1 \
   --device cuda
 
 # later: build phase 2 from newly arrived files using same tokenizer
-find data/fineweb/sample-10BT/sample/10BT -maxdepth 1 -type f -name '*.parquet' | sort | sed 's#^data/fineweb/sample-10BT/##' > /tmp/all_parquets.txt
-comm -23 /tmp/all_parquets.txt artifacts/reports/fineweb_sample10bt_phase1_files.txt > artifacts/reports/fineweb_sample10bt_phase2_files.txt
+find data/fineweb/sample-350BT/sample/350BT -maxdepth 1 -type f -name '*.parquet' | sort | sed 's#^data/fineweb/sample-350BT/##' > /tmp/all_parquets.txt
+comm -23 /tmp/all_parquets.txt artifacts/reports/fineweb_sample350bt_phase1_files.txt > artifacts/reports/fineweb_sample350bt_phase2_files.txt
 PYTHONPATH=src .venv/bin/python scripts/fineweb_parquet_to_shards.py \
-  --input-dir data/fineweb/sample-10BT \
-  --files-list artifacts/reports/fineweb_sample10bt_phase2_files.txt \
-  --output-dir data/shards_global/fineweb-s10bt-incremental/phase2 \
-  --tokenizer-in artifacts/tokenizer/fineweb-s10bt-incremental-bpe-v1.json \
+  --input-dir data/fineweb/sample-350BT \
+  --files-list artifacts/reports/fineweb_sample350bt_phase2_files.txt \
+  --output-dir data/shards_global/fineweb-350bt-incremental/phase2 \
+  --tokenizer-in artifacts/tokenizer/fineweb-350bt-incremental-bpe-v1.json \
   --field text
 
 # resume; train sees both manifests under shards-path
 PYTHONPATH=src .venv/bin/python -m llm.cli train \
-  --shards-path data/shards_global/fineweb-s10bt-incremental \
-  --output-dir artifacts/checkpoints/fineweb-s10bt-incremental-run1 \
+  --shards-path data/shards_global/fineweb-350bt-incremental \
+  --output-dir artifacts/checkpoints/fineweb-350bt-incremental-run1 \
   --device cuda \
-  --resume-from artifacts/checkpoints/fineweb-s10bt-incremental-run1/last.pt
+  --resume-from artifacts/checkpoints/fineweb-350bt-incremental-run1/last.pt
 ```
 
 On this 20-core host, default FineWeb shard splitting should use `15` parallel streams.
@@ -426,9 +417,18 @@ On this 20-core host, default FineWeb shard splitting should use `15` parallel s
 - Tuned profile docs: `docs/RTX5070_TUNING.md`
 - Saved JSON profiles:
   - `configs/train/rtx5070/fineweb_global_bpe_v1_big.json` (recommended, BPE)
+  - `configs/train/rtx5070/fineweb_350bt_bpe_v2_longrun.json` (350BT long-run preset)
 - Launch tuned big profile:
 ```bash
 bash scripts/train_rtx5070_fineweb_bpe_v1_big.sh
+```
+- 350BT-first LR sweep (ctx 512, LR `2e-4..4e-4`):
+```bash
+bash scripts/lr_sweep_rtx5070_fineweb_350bt_ctx512.sh
+```
+- 350BT-first long run launcher:
+```bash
+bash scripts/train_rtx5070_fineweb_350bt_bpe_v2.sh
 ```
 
 ## Warm Storage (Ceph Mount)

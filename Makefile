@@ -4,7 +4,7 @@ ifneq ("$(wildcard .venv/bin/python)","")
 PYTHON=.venv/bin/python
 endif
 
-.PHONY: setup-dev setup-train setup-infer doctor install-server-system test lint format typecheck smoke extract-zim train-tokenizer train-tokenizer-global corpus-quality-report clean-corpus-batch dataset-risk-report pull-hf-rows parquet-to-corpus fineweb-parquet-to-shards stage-fineweb-from-warm fineweb-stage-shard-loop shard-corpus-batch verify-shards train generate eval-checkpoint sync-warm hydrate-warm offload-zim hf-download-resumable hf-prepare-publish hf-download-model serve-openai publish-wiki
+.PHONY: setup-dev setup-train setup-infer doctor install-server-system test lint format typecheck smoke extract-zim train-tokenizer train-tokenizer-global corpus-quality-report clean-corpus-batch dataset-risk-report pull-hf-rows parquet-to-corpus fineweb-parquet-to-shards stage-fineweb-from-warm fineweb-stage-shard-loop lr-sweep-350bt train-350bt-v2 shard-corpus-batch verify-shards train generate eval-checkpoint sync-warm hydrate-warm offload-zim hf-download-resumable hf-prepare-publish hf-download-model serve-openai publish-wiki
 
 setup-dev:
 	bash scripts/bootstrap_dev.sh
@@ -62,15 +62,15 @@ dataset-risk-report:
 
 pull-hf-rows:
 	@echo "Usage:"
-	@echo "  python3 scripts/pull_hf_rows.py --dataset HuggingFaceFW/fineweb --config sample-10BT --split train --output /mnt/ceph/llm/data/extracted/fineweb_sample-10BT_rows100k.txt --max-rows 100000"
+	@echo "  python3 scripts/pull_hf_rows.py --dataset HuggingFaceFW/fineweb --config sample-350BT --split train --output /mnt/ceph/llm/data/extracted/fineweb_sample-350BT_rows100k.txt --max-rows 100000"
 
 parquet-to-corpus:
 	@echo "Usage:"
-	@echo "  python3 scripts/parquet_to_corpus.py --input-dir data/fineweb/sample-10BT --output-dir data/extracted/fineweb/sample-10BT --field text"
+	@echo "  python3 scripts/parquet_to_corpus.py --input-dir data/fineweb/sample-350BT --output-dir data/extracted/fineweb/sample-350BT --field text"
 
 fineweb-parquet-to-shards:
 	@echo "Usage:"
-	@echo "  PYTHONPATH=src $(PYTHON) scripts/fineweb_parquet_to_shards.py --input-dir data/fineweb/sample-10BT --output-dir data/shards_global/fineweb-s10bt-global-bpe-v1 --tokenizer-out artifacts/tokenizer/fineweb-s10bt-global-bpe-v1.json --bpe-vocab-size 32000 --field text"
+	@echo "  PYTHONPATH=src $(PYTHON) scripts/fineweb_parquet_to_shards.py --input-dir data/fineweb/sample-350BT --output-dir data/shards_global/fineweb-350bt-global-bpe-v1 --tokenizer-out artifacts/tokenizer/fineweb-350bt-global-bpe-v1.json --bpe-vocab-size 32000 --field text"
 
 stage-fineweb-from-warm:
 	@echo "Usage:"
@@ -79,6 +79,14 @@ stage-fineweb-from-warm:
 fineweb-stage-shard-loop:
 	@echo "Usage:"
 	@echo "  bash scripts/fineweb_stage_shard_loop.sh --stage-max-files 10 --process-max-files 10 --sleep-seconds 120"
+
+lr-sweep-350bt:
+	@echo "Usage:"
+	@echo "  bash scripts/lr_sweep_rtx5070_fineweb_350bt_ctx512.sh"
+
+train-350bt-v2:
+	@echo "Usage:"
+	@echo "  bash scripts/train_rtx5070_fineweb_350bt_bpe_v2.sh"
 
 shard-corpus-batch:
 	@echo "Usage:"

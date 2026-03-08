@@ -38,6 +38,7 @@ bash scripts/hf_download_resumable.sh \
   --include "sample/350BT/*.parquet" \
   --local-dir /mnt/ceph/llm/data/fineweb/sample-350BT \
   --max-workers 4 \
+  --enable-hf-transfer \
   --skip-dry-run \
   --attempt-timeout-seconds 5400 \
   --retry-delay-seconds 30 \

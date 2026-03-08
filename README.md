@@ -180,6 +180,7 @@ bash scripts/hf_download_resumable.sh \
   --include "sample/350BT/*.parquet" \
   --local-dir /mnt/ceph/llm/data/fineweb/sample-350BT \
   --max-workers 4 \
+  --enable-hf-transfer \
   --skip-dry-run \
   --attempt-timeout-seconds 5400 \
   --retry-delay-seconds 30 \
@@ -190,6 +191,7 @@ Notes:
 - `HF_TOKEN` is recommended (higher limits), not strictly required for public datasets.
 - Hugging Face SSH keys are for Git-over-SSH and are not used by `hf download`.
 - `hf_download_resumable.sh` writes a lock file in the local dir to prevent duplicate workers.
+- `hf_download_resumable.sh` auto-detects `hf_transfer` and can be forced with `--enable-hf-transfer`.
 - For very large pulls (like 350BT), `--skip-dry-run` avoids metadata preflight stalls.
 - `--attempt-timeout-seconds` prevents one hung transfer from stalling progress forever.
 - Keep 350BT parquet on warm storage and stage bounded chunks to hot storage before sharding.

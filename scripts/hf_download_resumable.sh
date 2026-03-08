@@ -10,6 +10,7 @@ Usage:
     --include "sample/350BT/*.parquet" \
     --local-dir /mnt/ceph/llm/data/fineweb/sample-350BT \
     [--max-workers 2] \
+    [--enable-hf-transfer | --disable-hf-transfer] \
     [--skip-dry-run] \
     [--dry-run-timeout-seconds 180] \
     [--attempt-timeout-seconds 5400] \
@@ -21,6 +22,7 @@ Notes:
   - Uses `hf download` and retries automatically on failures.
   - Resumes from partially downloaded files in `--local-dir`.
   - `--max-retries 0` means retry forever.
+  - Auto-enables hf_transfer when installed (override with enable/disable flags).
   - Set `--skip-dry-run` if dry-run metadata is slow/unreliable.
   - `--attempt-timeout-seconds` bounds a single `hf download` call before retry.
   - If `HF_TOKEN` is set, `hf download` uses it from environment.
@@ -40,6 +42,7 @@ REPO_TYPE="dataset"
 INCLUDE_PATTERN=""
 LOCAL_DIR=""
 MAX_WORKERS=2
+ENABLE_HF_TRANSFER="auto"
 SKIP_DRY_RUN=0
 DRY_RUN_TIMEOUT_SECONDS=180
 ATTEMPT_TIMEOUT_SECONDS=5400
@@ -68,6 +71,14 @@ while [[ $# -gt 0 ]]; do
     --max-workers)
       MAX_WORKERS="${2:-}"
       shift 2
+      ;;
+    --enable-hf-transfer)
+      ENABLE_HF_TRANSFER="1"
+      shift
+      ;;
+    --disable-hf-transfer)
+      ENABLE_HF_TRANSFER="0"
+      shift
       ;;
     --skip-dry-run)
       SKIP_DRY_RUN=1
@@ -125,7 +136,26 @@ if [[ ! -x "$HF_BIN" ]]; then
 fi
 require_cmd "$HF_BIN"
 
+PY_CMD=".venv/bin/python"
+if [[ ! -x "$PY_CMD" ]]; then
+  PY_CMD="python3"
+fi
+require_cmd "$PY_CMD"
+
 mkdir -p "$(dirname "$LOG_FILE")" "$LOCAL_DIR"
+
+HF_TRANSFER_ON=0
+if [[ "$ENABLE_HF_TRANSFER" == "1" ]]; then
+  HF_TRANSFER_ON=1
+elif [[ "$ENABLE_HF_TRANSFER" == "auto" ]]; then
+  if "$PY_CMD" - <<'PY' >/dev/null 2>&1
+import importlib.util
+raise SystemExit(0 if importlib.util.find_spec("hf_transfer") else 1)
+PY
+  then
+    HF_TRANSFER_ON=1
+  fi
+fi
 
 LOCK_FILE="${LOCAL_DIR}/.hf_download_resumable.lock"
 if [[ -f "$LOCK_FILE" ]]; then
@@ -144,6 +174,7 @@ log() {
   ts="$(date '+%Y-%m-%d %H:%M:%S')"
   printf '[%s] %s\n' "$ts" "$msg" | tee -a "$LOG_FILE"
 }
+log "hf_transfer_enabled=$HF_TRANSFER_ON mode=$ENABLE_HF_TRANSFER"
 
 expected_parquet_count=0
 if [[ "$SKIP_DRY_RUN" -eq 0 ]]; then
@@ -207,10 +238,10 @@ while true; do
   )
   set +e
   if command -v timeout >/dev/null 2>&1; then
-    HF_HUB_DISABLE_XET=1 timeout "$ATTEMPT_TIMEOUT_SECONDS" "${run_cmd[@]}" >> "$LOG_FILE" 2>&1
+    HF_HUB_DISABLE_XET=1 HF_HUB_ENABLE_HF_TRANSFER="$HF_TRANSFER_ON" timeout "$ATTEMPT_TIMEOUT_SECONDS" "${run_cmd[@]}" >> "$LOG_FILE" 2>&1
     rc=$?
   else
-    HF_HUB_DISABLE_XET=1 "${run_cmd[@]}" >> "$LOG_FILE" 2>&1
+    HF_HUB_DISABLE_XET=1 HF_HUB_ENABLE_HF_TRANSFER="$HF_TRANSFER_ON" "${run_cmd[@]}" >> "$LOG_FILE" 2>&1
     rc=$?
   fi
   set -e

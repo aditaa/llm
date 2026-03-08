@@ -23,7 +23,7 @@ Notes:
   - `--max-retries 0` means retry forever.
   - Set `--skip-dry-run` if dry-run metadata is slow/unreliable.
   - `--attempt-timeout-seconds` bounds a single `hf download` call before retry.
-  - If `HF_TOKEN` is set, it is passed to `hf download`.
+  - If `HF_TOKEN` is set, `hf download` uses it from environment.
 EOF
 }
 
@@ -155,10 +155,6 @@ if [[ "$SKIP_DRY_RUN" -eq 0 ]]; then
     --max-workers "$MAX_WORKERS"
     --dry-run
   )
-  if [[ -n "${HF_TOKEN:-}" ]]; then
-    dry_run_cmd+=(--token "$HF_TOKEN")
-  fi
-
   log "starting dry-run to estimate expected file count (timeout=${DRY_RUN_TIMEOUT_SECONDS}s)"
   if command -v timeout >/dev/null 2>&1; then
     set +e
@@ -209,10 +205,6 @@ while true; do
     --local-dir "$LOCAL_DIR"
     --max-workers "$MAX_WORKERS"
   )
-  if [[ -n "${HF_TOKEN:-}" ]]; then
-    run_cmd+=(--token "$HF_TOKEN")
-  fi
-
   set +e
   if command -v timeout >/dev/null 2>&1; then
     HF_HUB_DISABLE_XET=1 timeout "$ATTEMPT_TIMEOUT_SECONDS" "${run_cmd[@]}" >> "$LOG_FILE" 2>&1

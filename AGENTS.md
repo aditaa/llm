@@ -115,7 +115,7 @@ Keep PR scope narrow; split refactors and features into separate PRs.
 - For continuously growing shard sets, use `scripts/train_supervisor_rtx5070_350bt.sh` so each resumed chunk re-reads new manifests before training continues
 - Supervisor writes chunk trends to `artifacts/reports/train_supervisor_350bt/train_trend.tsv` and post-chunk eval trends to `artifacts/reports/train_supervisor_350bt/eval_trend.tsv`
 - Use `scripts/pipeline_eta_report.py --loop` for combined ETA snapshots in `artifacts/reports/pipeline_status.{json,txt}` (includes `top`, `free -h`, `nvidia-smi`, and `df -h` captures)
-- Use `scripts/pipeline_live_view.py --refresh-seconds 5` for a continuously refreshing single-pane terminal view
+- Use `scripts/pipeline_live_view.py --refresh-seconds 5` for a continuously refreshing single-pane terminal view (auto-fit + in-place refresh; add `--no-alt-screen` if needed)
 - For checkpoint regression tracking, run `scripts/eval_checkpoint_prompts.py` with `configs/eval/standard_prompt_suite_v1.json` and archive reports in `artifacts/reports/evals/`
 - For FineWeb-first training runs, build shards directly with `PYTHONPATH=src .venv/bin/python scripts/fineweb_parquet_to_shards.py --input-dir data/fineweb/sample-350BT --output-dir data/shards_global/fineweb-global-bpe-v1 --tokenizer-out artifacts/tokenizer/fineweb-global-bpe-v1.json --bpe-vocab-size 32000 --field text`
 - FineWeb-only baseline flow: `fineweb_parquet_to_shards -> verify-shards -> train`

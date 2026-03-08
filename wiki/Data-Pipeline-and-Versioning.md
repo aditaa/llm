@@ -101,6 +101,7 @@ Live terminal view:
 ```bash
 PYTHONPATH=src .venv/bin/python scripts/pipeline_live_view.py --refresh-seconds 5
 ```
+Auto-fits terminal height/width and refreshes in-place; use `--no-alt-screen` if your terminal does not render full-screen updates correctly.
 
 ## Versioning Rule
 Use ZIM date stamps as the canonical dataset version.

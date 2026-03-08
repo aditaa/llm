@@ -5,6 +5,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+import shutil
 import subprocess
 import sys
 import time
@@ -28,6 +30,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--free-lines", type=int, default=20)
     parser.add_argument("--nvidia-lines", type=int, default=25)
     parser.add_argument("--df-lines", type=int, default=25)
+    parser.add_argument("--no-fit-terminal", action="store_true")
+    parser.add_argument("--no-alt-screen", action="store_true")
     return parser.parse_args()
 
 
@@ -60,6 +64,66 @@ def _clip_block(text: str, max_lines: int) -> str:
     return "\n".join(clipped)
 
 
+def _trim_line(line: str, width: int) -> str:
+    if width <= 4:
+        return line[:width]
+    if len(line) <= width:
+        return line
+    return line[: width - 3] + "..."
+
+
+def _trim_block(text: str, width: int) -> str:
+    return "\n".join(_trim_line(line, width) for line in text.splitlines())
+
+
+def _supports_ansi() -> bool:
+    if not sys.stdout.isatty():
+        return False
+    term = os.environ.get("TERM", "")
+    return term not in ("", "dumb")
+
+
+def _enter_fullscreen() -> None:
+    sys.stdout.write("\x1b[?1049h\x1b[?25l")
+    sys.stdout.flush()
+
+
+def _exit_fullscreen() -> None:
+    sys.stdout.write("\x1b[?25h\x1b[?1049l")
+    sys.stdout.flush()
+
+
+def _clear_home() -> None:
+    sys.stdout.write("\x1b[H\x1b[2J")
+    sys.stdout.flush()
+
+
+def _terminal_size() -> tuple[int, int]:
+    size = shutil.get_terminal_size(fallback=(120, 40))
+    return max(40, size.columns), max(20, size.lines)
+
+
+def _allocate_section_lines(total: int) -> tuple[int, int, int, int]:
+    if total <= 0:
+        return 0, 0, 0, 0
+    top = max(3, int(total * 0.45))
+    nvidia = max(3, int(total * 0.25))
+    df = max(2, int(total * 0.20))
+    free = total - top - nvidia - df
+    while free < 2 and top > 3:
+        top -= 1
+        free += 1
+    while free < 2 and nvidia > 3:
+        nvidia -= 1
+        free += 1
+    while free < 2 and df > 2:
+        df -= 1
+        free += 1
+    if free < 2:
+        free = max(1, free)
+    return top, free, nvidia, df
+
+
 def _read_status(path: Path) -> dict[str, Any] | None:
     if not path.exists():
         return None
@@ -76,15 +140,32 @@ def _render(status: dict[str, Any], args: argparse.Namespace) -> str:
     eta = status.get("eta_human", {})
     active = status.get("active_processes", {})
     sys_cmds = status.get("system_commands", {})
+    term_width, term_height = _terminal_size()
+    usable_width = term_width if args.no_fit_terminal else max(40, term_width - 1)
 
-    top_out = _clip_block(sys_cmds.get("top", {}).get("output", ""), args.top_lines)
-    free_out = _clip_block(sys_cmds.get("free_h", {}).get("output", ""), args.free_lines)
-    nvidia_out = _clip_block(sys_cmds.get("nvidia_smi", {}).get("output", ""), args.nvidia_lines)
-    df_out = _clip_block(sys_cmds.get("df_h", {}).get("output", ""), args.df_lines)
+    top_cap = args.top_lines
+    free_cap = args.free_lines
+    nvidia_cap = args.nvidia_lines
+    df_cap = args.df_lines
+    if not args.no_fit_terminal:
+        reserved = 10
+        available = max(0, term_height - reserved)
+        top_fit, free_fit, nvidia_fit, df_fit = _allocate_section_lines(available)
+        top_cap = min(top_cap, top_fit)
+        free_cap = min(free_cap, free_fit)
+        nvidia_cap = min(nvidia_cap, nvidia_fit)
+        df_cap = min(df_cap, df_fit)
+
+    top_out = _trim_block(_clip_block(sys_cmds.get("top", {}).get("output", ""), top_cap), usable_width)
+    free_out = _trim_block(_clip_block(sys_cmds.get("free_h", {}).get("output", ""), free_cap), usable_width)
+    nvidia_out = _trim_block(
+        _clip_block(sys_cmds.get("nvidia_smi", {}).get("output", ""), nvidia_cap), usable_width
+    )
+    df_out = _trim_block(_clip_block(sys_cmds.get("df_h", {}).get("output", ""), df_cap), usable_width)
 
     lines = [
-        f"Pipeline Live View  |  refreshed={ts}  |  ctrl+c to exit",
-        "=" * 78,
+        _trim_line(f"Pipeline Live View  |  refreshed={ts}  |  ctrl+c to exit", usable_width),
+        _trim_line("=" * usable_width, usable_width),
         (
             f"metrics: warm_parquet={metrics.get('warm_parquet_count')} "
             f"warm_incomplete={metrics.get('warm_incomplete_count')} "
@@ -114,42 +195,52 @@ def _render(status: dict[str, Any], args: argparse.Namespace) -> str:
             f"eval_runner={active.get('eval_runner')}"
         ),
         "",
-        "--- top -b -n 1 ---",
+        "[TOP]",
         top_out,
         "",
-        "--- free -h ---",
+        "[FREE -H]",
         free_out,
         "",
-        "--- nvidia-smi ---",
+        "[NVIDIA-SMI]",
         nvidia_out,
         "",
-        "--- df -h ---",
+        "[DF -H]",
         df_out,
     ]
-    return "\n".join(lines) + "\n"
+    return "\n".join(_trim_line(line, usable_width) for line in lines) + "\n"
 
 
 def main() -> int:
     args = parse_args()
     status_path = Path(args.status_json)
 
+    ansi = _supports_ansi()
+    use_alt_screen = ansi and not args.no_alt_screen and not args.once
     try:
+        if use_alt_screen:
+            _enter_fullscreen()
         while True:
             _run_reporter(args)
             status = _read_status(status_path)
-            print("\033[2J\033[H", end="")
+            if ansi:
+                _clear_home()
             if status is None:
-                print(
+                msg = (
                     f"waiting for valid status json at {status_path} "
                     f"(refresh={args.refresh_seconds}s)"
                 )
+                print(msg)
             else:
                 print(_render(status, args), end="")
+            sys.stdout.flush()
             if args.once:
                 break
             time.sleep(max(1, args.refresh_seconds))
     except KeyboardInterrupt:
         return 0
+    finally:
+        if use_alt_screen:
+            _exit_fullscreen()
     return 0
 
 

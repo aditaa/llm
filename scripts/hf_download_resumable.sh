@@ -12,6 +12,7 @@ Usage:
     [--max-workers 2] \
     [--skip-dry-run] \
     [--dry-run-timeout-seconds 180] \
+    [--attempt-timeout-seconds 5400] \
     [--retry-delay-seconds 30] \
     [--max-retries 0] \
     [--log-file artifacts/reports/hf_download_resumable.log]
@@ -21,6 +22,7 @@ Notes:
   - Resumes from partially downloaded files in `--local-dir`.
   - `--max-retries 0` means retry forever.
   - Set `--skip-dry-run` if dry-run metadata is slow/unreliable.
+  - `--attempt-timeout-seconds` bounds a single `hf download` call before retry.
   - If `HF_TOKEN` is set, it is passed to `hf download`.
 EOF
 }
@@ -40,6 +42,7 @@ LOCAL_DIR=""
 MAX_WORKERS=2
 SKIP_DRY_RUN=0
 DRY_RUN_TIMEOUT_SECONDS=180
+ATTEMPT_TIMEOUT_SECONDS=5400
 RETRY_DELAY_SECONDS=30
 MAX_RETRIES=0
 LOG_FILE="artifacts/reports/hf_download_resumable.log"
@@ -72,6 +75,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --dry-run-timeout-seconds)
       DRY_RUN_TIMEOUT_SECONDS="${2:-}"
+      shift 2
+      ;;
+    --attempt-timeout-seconds)
+      ATTEMPT_TIMEOUT_SECONDS="${2:-}"
       shift 2
       ;;
     --retry-delay-seconds)
@@ -207,8 +214,13 @@ while true; do
   fi
 
   set +e
-  HF_HUB_DISABLE_XET=1 "${run_cmd[@]}" >> "$LOG_FILE" 2>&1
-  rc=$?
+  if command -v timeout >/dev/null 2>&1; then
+    HF_HUB_DISABLE_XET=1 timeout "$ATTEMPT_TIMEOUT_SECONDS" "${run_cmd[@]}" >> "$LOG_FILE" 2>&1
+    rc=$?
+  else
+    HF_HUB_DISABLE_XET=1 "${run_cmd[@]}" >> "$LOG_FILE" 2>&1
+    rc=$?
+  fi
   set -e
 
   current_count="$(find "$LOCAL_DIR" -type f -name '*.parquet' | wc -l | tr -d ' ')"
@@ -230,7 +242,11 @@ while true; do
       log "command succeeded but completion check failed: parquet_files=$current_count expected=$expected_parquet_count incomplete_files=$incomplete_count"
     fi
   else
-    log "download failed with exit_code=$rc parquet_files=$current_count incomplete_files=$incomplete_count"
+    if [[ "$rc" -eq 124 ]]; then
+      log "download attempt timed out after ${ATTEMPT_TIMEOUT_SECONDS}s parquet_files=$current_count incomplete_files=$incomplete_count"
+    else
+      log "download failed with exit_code=$rc parquet_files=$current_count incomplete_files=$incomplete_count"
+    fi
   fi
 
   delay=$(( RETRY_DELAY_SECONDS * attempt ))

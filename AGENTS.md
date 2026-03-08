@@ -101,7 +101,7 @@ Keep PR scope narrow; split refactors and features into separate PRs.
 - Use `bash scripts/zim_offload_worker.sh data/raw_zim /mnt/ceph/llm/data/raw_zim 120` for continuous hot->warm raw ZIM offload
 - Use `bash scripts/hydrate_from_warm_storage.sh /mnt/ceph/llm/data` to restore local artifacts from warm storage
 - For bounded external pulls (for example FineWeb samples), use `python3 scripts/pull_hf_rows.py` and write to warm storage first
-- For long-running Hugging Face parquet pulls, use `scripts/hf_download_resumable.sh` instead of one-shot `hf download` (prefer `--skip-dry-run` for 350BT-scale pulls)
+- For long-running Hugging Face parquet pulls, use `scripts/hf_download_resumable.sh` instead of one-shot `hf download` (prefer `--skip-dry-run` + `--attempt-timeout-seconds` for 350BT-scale pulls)
 - For parquet-based FineWeb workflows, use `scripts/stage_fineweb_from_warm.sh` to copy bounded warm chunks into hot storage
 - For long-running 350BT ingestion on limited hot disk, use `scripts/fineweb_stage_shard_loop.sh` for staged processing and automatic hot-space reclaim
 - For checkpoint regression tracking, run `scripts/eval_checkpoint_prompts.py` with `configs/eval/standard_prompt_suite_v1.json` and archive reports in `artifacts/reports/evals/`

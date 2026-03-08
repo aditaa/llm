@@ -176,6 +176,7 @@ bash scripts/hf_download_resumable.sh \
   --include "sample/10BT/*.parquet" \
   --local-dir data/fineweb/sample-10BT \
   --max-workers 2 \
+  --attempt-timeout-seconds 5400 \
   --retry-delay-seconds 30 \
   --max-retries 0 \
   --log-file artifacts/reports/fineweb_10bt_download_resumable.log
@@ -188,6 +189,7 @@ bash scripts/hf_download_resumable.sh \
   --local-dir /mnt/ceph/llm/data/fineweb/sample-350BT \
   --max-workers 2 \
   --skip-dry-run \
+  --attempt-timeout-seconds 5400 \
   --retry-delay-seconds 30 \
   --max-retries 0 \
   --log-file artifacts/reports/fineweb_350bt_download_resumable.log
@@ -197,6 +199,7 @@ Notes:
 - Hugging Face SSH keys are for Git-over-SSH and are not used by `hf download`.
 - `hf_download_resumable.sh` writes a lock file in the local dir to prevent duplicate workers.
 - For very large pulls (like 350BT), `--skip-dry-run` avoids metadata preflight stalls.
+- `--attempt-timeout-seconds` prevents one hung transfer from stalling progress forever.
 
 3ab. Stage FineWeb chunks from warm to hot as needed:
 ```bash

@@ -71,6 +71,16 @@ This loop:
 - syncs shard outputs back to warm storage
 - deletes processed hot parquet files to reclaim local space
 
+Auto-resume trainer supervisor for growing shard sets:
+```bash
+bash scripts/train_supervisor_rtx5070_350bt.sh \
+  --step-chunk 2000 \
+  --poll-seconds 120
+```
+This runs training in chunks and resumes from `last.pt`; each chunk restart re-reads
+all manifests under `data/shards_global/fineweb-global-bpe-v1` so newly added shard
+batches are picked up without manual intervention.
+
 ## Versioning Rule
 Use ZIM date stamps as the canonical dataset version.
 

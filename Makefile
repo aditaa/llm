@@ -4,7 +4,7 @@ ifneq ("$(wildcard .venv/bin/python)","")
 PYTHON=.venv/bin/python
 endif
 
-.PHONY: setup-dev setup-train setup-infer doctor install-server-system test lint format typecheck smoke extract-zim train-tokenizer train-tokenizer-global corpus-quality-report clean-corpus-batch dataset-risk-report pull-hf-rows parquet-to-corpus fineweb-parquet-to-shards stage-fineweb-from-warm fineweb-stage-shard-loop lr-sweep-350bt train-350bt-v2 shard-corpus-batch verify-shards train generate eval-checkpoint sync-warm hydrate-warm offload-zim hf-download-resumable hf-prepare-publish hf-download-model serve-openai publish-wiki
+.PHONY: setup-dev setup-train setup-infer doctor install-server-system test lint format typecheck smoke extract-zim train-tokenizer train-tokenizer-global corpus-quality-report clean-corpus-batch dataset-risk-report pull-hf-rows parquet-to-corpus fineweb-parquet-to-shards stage-fineweb-from-warm fineweb-stage-shard-loop lr-sweep-350bt train-350bt-v2 train-supervisor-350bt shard-corpus-batch verify-shards train generate eval-checkpoint sync-warm hydrate-warm offload-zim hf-download-resumable hf-prepare-publish hf-download-model serve-openai publish-wiki
 
 setup-dev:
 	bash scripts/bootstrap_dev.sh
@@ -87,6 +87,10 @@ lr-sweep-350bt:
 train-350bt-v2:
 	@echo "Usage:"
 	@echo "  bash scripts/train_rtx5070_fineweb_350bt_bpe_v2.sh"
+
+train-supervisor-350bt:
+	@echo "Usage:"
+	@echo "  bash scripts/train_supervisor_rtx5070_350bt.sh --step-chunk 2000 --poll-seconds 120"
 
 shard-corpus-batch:
 	@echo "Usage:"

@@ -37,6 +37,7 @@ Use the `Makefile` as the source of truth:
 - `make fineweb-stage-shard-loop`: usage helper for rolling warm->hot stage + shard + verify + sync + purge
 - `make lr-sweep-350bt`: usage helper for RTX 5070 LR sweep on staged 350BT shards (`2e-4..4e-4`, ctx 512)
 - `make train-350bt-v2`: usage helper for the 350BT long-run launcher profile
+- `make train-supervisor-350bt`: usage helper for auto-resume chunked training that refreshes manifest set between cycles
 - `make shard-corpus-batch`: usage helper for batch sharding with a shared tokenizer
 - `make hf-download-resumable`: usage helper for self-healing Hugging Face resume-download worker
 - `make hf-prepare-publish`: usage helper for Hugging Face release bundle/publish
@@ -106,6 +107,7 @@ Keep PR scope narrow; split refactors and features into separate PRs.
 - For long-running Hugging Face parquet pulls, use `scripts/hf_download_resumable.sh` instead of one-shot `hf download` (prefer `--skip-dry-run` + `--attempt-timeout-seconds` for 350BT-scale pulls)
 - For parquet-based FineWeb workflows, use `scripts/stage_fineweb_from_warm.sh` to copy bounded warm chunks into hot storage
 - For long-running 350BT ingestion on limited hot disk, use `scripts/fineweb_stage_shard_loop.sh` for staged processing and automatic hot-space reclaim
+- For continuously growing shard sets, use `scripts/train_supervisor_rtx5070_350bt.sh` so each resumed chunk re-reads new manifests before training continues
 - For checkpoint regression tracking, run `scripts/eval_checkpoint_prompts.py` with `configs/eval/standard_prompt_suite_v1.json` and archive reports in `artifacts/reports/evals/`
 - For FineWeb-first training runs, build shards directly with `PYTHONPATH=src .venv/bin/python scripts/fineweb_parquet_to_shards.py --input-dir data/fineweb/sample-350BT --output-dir data/shards_global/fineweb-global-bpe-v1 --tokenizer-out artifacts/tokenizer/fineweb-global-bpe-v1.json --bpe-vocab-size 32000 --field text`
 - FineWeb-only baseline flow: `fineweb_parquet_to_shards -> verify-shards -> train`

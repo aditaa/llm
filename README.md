@@ -61,6 +61,7 @@ make stage-fineweb-from-warm # print warm->hot FineWeb chunk staging usage
 make fineweb-stage-shard-loop # print rolling stage->shard->verify->sync->purge usage
 make lr-sweep-350bt # print RTX 5070 LR sweep usage for staged 350BT shards
 make train-350bt-v2 # print 350BT long-run launcher usage
+make train-supervisor-350bt # print auto-resume trainer supervisor usage
 make shard-corpus-batch # print shared-tokenizer batch sharding usage
 make hf-download-resumable # print self-healing HF resume-download worker usage
 make sync-warm   # sync raw/training data + artifacts to warm storage
@@ -429,6 +430,12 @@ bash scripts/lr_sweep_rtx5070_fineweb_350bt_ctx512.sh
 - 350BT-first long run launcher:
 ```bash
 bash scripts/train_rtx5070_fineweb_350bt_bpe_v2.sh
+```
+- Auto-resume supervisor (refreshes manifest set between step chunks):
+```bash
+bash scripts/train_supervisor_rtx5070_350bt.sh \
+  --step-chunk 2000 \
+  --poll-seconds 120
 ```
 
 ## Warm Storage (Ceph Mount)

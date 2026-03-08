@@ -360,71 +360,11 @@ validate_job_artifacts() {
     return 1
   fi
 
-  PYTHONPATH=src .venv/bin/python - "$job_id" "$report_json" "$output_dir" "$files_list" <<'PY'
-import json
-import sys
-from pathlib import Path
-
-job_id, report_path_raw, output_dir_raw, files_list_raw = sys.argv[1:5]
-report_path = Path(report_path_raw)
-output_dir = Path(output_dir_raw)
-files_list = Path(files_list_raw)
-
-report = json.loads(report_path.read_text(encoding="utf-8"))
-manifest_field = report.get("manifest")
-if not manifest_field:
-    raise RuntimeError(f"{job_id}: report missing manifest path")
-manifest_path = Path(manifest_field)
-if not manifest_path.is_absolute():
-    manifest_path = (output_dir / manifest_path).resolve()
-if not manifest_path.exists():
-    raise RuntimeError(f"{job_id}: manifest not found: {manifest_path}")
-manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-
-rows_sharded = int(report.get("rows_sharded", 0))
-if rows_sharded <= 0:
-    raise RuntimeError(f"{job_id}: rows_sharded <= 0")
-
-train = manifest.get("train", {})
-val = manifest.get("val", {})
-train_tokens = int(train.get("total_tokens", 0))
-val_tokens = int(val.get("total_tokens", 0))
-if train_tokens + val_tokens <= 0:
-    raise RuntimeError(f"{job_id}: total token count <= 0")
-
-train_shards = list(train.get("shards", []))
-val_shards = list(val.get("shards", []))
-if not train_shards and not val_shards:
-    raise RuntimeError(f"{job_id}: no shard entries in manifest")
-
-for shard in train_shards + val_shards:
-    shard_name = shard.get("path")
-    if not shard_name:
-        raise RuntimeError(f"{job_id}: shard entry missing path")
-    shard_path = output_dir / shard_name
-    if not shard_path.exists():
-        raise RuntimeError(f"{job_id}: missing shard file: {shard_path}")
-    if shard_path.stat().st_size <= 0:
-        raise RuntimeError(f"{job_id}: empty shard file: {shard_path}")
-
-expected_files = [
-    line.strip()
-    for line in files_list.read_text(encoding="utf-8").splitlines()
-    if line.strip() and not line.strip().startswith("#")
-]
-manifest_inputs = {
-    Path(raw).name
-    for raw in manifest.get("input_files", [])
-}
-missing = [name for name in expected_files if name not in manifest_inputs]
-if missing:
-    raise RuntimeError(f"{job_id}: manifest missing expected input files: {missing[:5]}")
-
-print(
-    f"guardrail_ok id={job_id} rows={rows_sharded} "
-    f"tokens={train_tokens + val_tokens} shards={len(train_shards) + len(val_shards)}"
-)
-PY
+  PYTHONPATH=src .venv/bin/python -m llm.fineweb_guardrails \
+    --job-id "$job_id" \
+    --report-json "$report_json" \
+    --output-dir "$output_dir" \
+    --files-list "$files_list"
 }
 
 validate_batch_guardrails() {

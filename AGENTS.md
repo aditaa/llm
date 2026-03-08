@@ -118,6 +118,7 @@ Keep PR scope narrow; split refactors and features into separate PRs.
 - `fineweb_stage_shard_loop.sh` now preflights selected parquet files and quarantines failures into `artifacts/reports/fineweb_stage_shard_loop/quarantine_bad_parquet/`
 - Known-bad parquet basenames are tracked in `artifacts/reports/fineweb_stage_shard_loop/bad_parquet_files.txt` and skipped in future stage cycles
 - Stage-loop batch guardrails now require valid report + manifest + non-empty shard files before marking files as processed/purging hot copies
+- Guardrail validation logic is centralized in `src/llm/fineweb_guardrails.py`; keep it covered by unit tests
 - For higher CPU throughput on this 20-core host, prefer `--shard-jobs 2 --tokenizer-threads 10 --encode-batch-size 1024`
 - Keep stage-loop OOM retry enabled (default) so shard builds back off to smaller `--batch-size` automatically
 - For continuously growing shard sets, use `scripts/train_supervisor_rtx5070_350bt.sh` so each resumed chunk re-reads new manifests before training continues

@@ -43,6 +43,7 @@ Use the `Makefile` as the source of truth:
 - `make pipeline-live`: usage helper for a live terminal pipeline dashboard
 - `make shard-corpus-batch`: usage helper for batch sharding with a shared tokenizer
 - `make hf-download-resumable`: usage helper for self-healing Hugging Face resume-download worker
+- `make hf-download-watchdog`: usage helper for watchdog auto-restart around stalled/exited HF download workers
 - `make hf-prepare-publish`: usage helper for Hugging Face release bundle/publish
 - `make hf-download-model`: usage helper for full Hugging Face model snapshot download
 - `make serve-openai`: usage helper for local OpenAI-compatible serving
@@ -108,9 +109,14 @@ Keep PR scope narrow; split refactors and features into separate PRs.
 - Use `bash scripts/hydrate_from_warm_storage.sh /mnt/ceph/llm/data` to restore local artifacts from warm storage
 - For bounded external pulls (for example FineWeb samples), use `python3 scripts/pull_hf_rows.py` and write to warm storage first
 - For long-running Hugging Face parquet pulls, use `scripts/hf_download_resumable.sh` instead of one-shot `hf download` (prefer `--enable-hf-transfer`, `--max-workers 6`, `--skip-dry-run`, and `--attempt-timeout-seconds` for 350BT-scale pulls)
+- For unattended long pulls, prefer `scripts/hf_download_watchdog.sh` to restart stalled/exited resumable workers based on progress checks (`--stall-seconds`, `--check-interval-seconds`)
 - For parquet-based FineWeb workflows, use `scripts/stage_fineweb_from_warm.sh` to copy bounded warm chunks into hot storage
+- Use `stage_fineweb_from_warm.sh --skip-list <bad_file_list>` to avoid re-staging known-bad parquet basenames
 - For long-running 350BT ingestion on limited hot disk, use `scripts/fineweb_stage_shard_loop.sh` for staged processing and automatic hot-space reclaim
 - Use `fineweb_stage_shard_loop.sh --hot-queue-min-files <N>` to keep a bounded hot parquet queue and reduce sharder copy stalls
+- `fineweb_stage_shard_loop.sh` now preflights selected parquet files and quarantines failures into `artifacts/reports/fineweb_stage_shard_loop/quarantine_bad_parquet/`
+- Known-bad parquet basenames are tracked in `artifacts/reports/fineweb_stage_shard_loop/bad_parquet_files.txt` and skipped in future stage cycles
+- Stage-loop batch guardrails now require valid report + manifest + non-empty shard files before marking files as processed/purging hot copies
 - For higher CPU throughput on this 20-core host, prefer `--shard-jobs 2 --tokenizer-threads 10 --encode-batch-size 1024`
 - Keep stage-loop OOM retry enabled (default) so shard builds back off to smaller `--batch-size` automatically
 - For continuously growing shard sets, use `scripts/train_supervisor_rtx5070_350bt.sh` so each resumed chunk re-reads new manifests before training continues

@@ -7,6 +7,8 @@ SHARDS_ROOT="data/shards_global/fineweb-global-bpe-v1"
 TOKENIZER_PATH="artifacts/tokenizer/fineweb-global-bpe-v1.json"
 STATE_DIR="artifacts/reports/fineweb_stage_shard_loop"
 WARM_ROOT="/mnt/ceph/llm/data"
+BAD_PARQUET_FILE=""
+QUARANTINE_DIR=""
 
 FIELD="text"
 BATCH_SIZE=8192
@@ -50,6 +52,10 @@ Options:
   --tokenizer-path FILE       Shared tokenizer path (train once, then reuse)
   --state-dir DIR             State/log directory
   --warm-root DIR             Warm storage root (for shard/tokenizer sync)
+  --bad-parquet-file FILE     State file of known-bad parquet basenames
+                              (default: <state-dir>/bad_parquet_files.txt)
+  --quarantine-dir DIR        Move preflight-failed hot parquet files here
+                              (default: <state-dir>/quarantine_bad_parquet)
 
   --stage-max-files N         Max parquet files to stage per cycle (default: 10)
   --stage-max-gib N           Max GiB to stage per cycle (default: 0 unlimited)
@@ -111,6 +117,14 @@ while [[ $# -gt 0 ]]; do
       ;;
     --warm-root)
       WARM_ROOT="$2"
+      shift 2
+      ;;
+    --bad-parquet-file)
+      BAD_PARQUET_FILE="$2"
+      shift 2
+      ;;
+    --quarantine-dir)
+      QUARANTINE_DIR="$2"
       shift 2
       ;;
     --stage-max-files)
@@ -226,10 +240,26 @@ if [[ ! -x ".venv/bin/python" ]]; then
   echo "error: .venv/bin/python not found; run make setup-train first" >&2
   exit 1
 fi
+if ! PYTHONPATH=src .venv/bin/python - <<'PY' >/dev/null 2>&1
+import pyarrow.parquet  # noqa: F401
+PY
+then
+  echo "error: pyarrow is required for parquet preflight; run make setup-train first" >&2
+  exit 1
+fi
 
 mkdir -p "$HOT_PARQUET_DIR" "$SHARDS_ROOT" "$STATE_DIR"
 PROCESSED_FILE="$STATE_DIR/processed_parquet_files.txt"
 touch "$PROCESSED_FILE"
+
+if [[ -z "$BAD_PARQUET_FILE" ]]; then
+  BAD_PARQUET_FILE="$STATE_DIR/bad_parquet_files.txt"
+fi
+if [[ -z "$QUARANTINE_DIR" ]]; then
+  QUARANTINE_DIR="$STATE_DIR/quarantine_bad_parquet"
+fi
+touch "$BAD_PARQUET_FILE"
+mkdir -p "$QUARANTINE_DIR"
 
 LOCK_FILE="$STATE_DIR/loop.lock"
 exec 9>"$LOCK_FILE"
@@ -246,6 +276,174 @@ log() {
 warm_shards_root="$WARM_ROOT/shards_global/$(basename "$SHARDS_ROOT")"
 warm_tokenizer_dir="$WARM_ROOT/tokenizer"
 warm_reports_dir="$WARM_ROOT/reports/fineweb_stage_shard_loop"
+
+is_bad_parquet_name() {
+  local name="$1"
+  grep -Fqx "$name" "$BAD_PARQUET_FILE"
+}
+
+mark_bad_parquet() {
+  local parquet_path="$1"
+  local reason="$2"
+  local name
+  name="$(basename "$parquet_path")"
+  printf '%s\n' "$name" >> "$BAD_PARQUET_FILE"
+  sort -u "$BAD_PARQUET_FILE" -o "$BAD_PARQUET_FILE"
+
+  if [[ -f "$parquet_path" ]]; then
+    local ts
+    ts="$(date +%Y%m%d_%H%M%S)"
+    local quarantine_path="$QUARANTINE_DIR/${name}.bad_${ts}"
+    mv -f "$parquet_path" "$quarantine_path"
+    log "parquet_quarantined file=$name reason=$reason quarantine_path=$quarantine_path"
+  else
+    log "parquet_marked_bad file=$name reason=$reason action=record_only"
+  fi
+}
+
+validate_parquet_file() {
+  local parquet_path="$1"
+  local field_name="$2"
+  PYTHONPATH=src .venv/bin/python - "$parquet_path" "$field_name" <<'PY'
+import sys
+from pyarrow import parquet as pq
+
+path = sys.argv[1]
+field = sys.argv[2]
+
+table = pq.ParquetFile(path)
+meta = table.metadata
+if meta is None or meta.num_row_groups <= 0:
+    raise RuntimeError("missing row groups")
+if meta.num_rows <= 0:
+    raise RuntimeError("no rows")
+if field not in table.schema.names:
+    raise RuntimeError(f"missing field '{field}'")
+PY
+}
+
+preflight_selected_files() {
+  local -n in_ref="$1"
+  local -n out_ref="$2"
+  out_ref=()
+
+  for name in "${in_ref[@]}"; do
+    if is_bad_parquet_name "$name"; then
+      log "preflight_skip_known_bad file=$name"
+      continue
+    fi
+    local hot_path="$HOT_PARQUET_DIR/$name"
+    if [[ ! -f "$hot_path" ]]; then
+      log "preflight_skip_missing file=$name"
+      continue
+    fi
+    if validate_parquet_file "$hot_path" "$FIELD" >> "$LOG_FILE" 2>&1; then
+      out_ref+=("$name")
+    else
+      mark_bad_parquet "$hot_path" "preflight_validation_failed"
+    fi
+  done
+}
+
+validate_job_artifacts() {
+  local job_id="$1"
+  local files_list="$2"
+  local report_json="$STATE_DIR/${job_id}.report.json"
+  local output_dir="$SHARDS_ROOT/$job_id"
+
+  if [[ ! -f "$report_json" ]]; then
+    log "guardrail_fail id=$job_id reason=missing_report report=$report_json"
+    return 1
+  fi
+  if [[ ! -f "$output_dir/manifest.json" ]]; then
+    log "guardrail_fail id=$job_id reason=missing_manifest manifest=$output_dir/manifest.json"
+    return 1
+  fi
+
+  PYTHONPATH=src .venv/bin/python - "$job_id" "$report_json" "$output_dir" "$files_list" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+job_id, report_path_raw, output_dir_raw, files_list_raw = sys.argv[1:5]
+report_path = Path(report_path_raw)
+output_dir = Path(output_dir_raw)
+files_list = Path(files_list_raw)
+
+report = json.loads(report_path.read_text(encoding="utf-8"))
+manifest_field = report.get("manifest")
+if not manifest_field:
+    raise RuntimeError(f"{job_id}: report missing manifest path")
+manifest_path = Path(manifest_field)
+if not manifest_path.is_absolute():
+    manifest_path = (output_dir / manifest_path).resolve()
+if not manifest_path.exists():
+    raise RuntimeError(f"{job_id}: manifest not found: {manifest_path}")
+manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+
+rows_sharded = int(report.get("rows_sharded", 0))
+if rows_sharded <= 0:
+    raise RuntimeError(f"{job_id}: rows_sharded <= 0")
+
+train = manifest.get("train", {})
+val = manifest.get("val", {})
+train_tokens = int(train.get("total_tokens", 0))
+val_tokens = int(val.get("total_tokens", 0))
+if train_tokens + val_tokens <= 0:
+    raise RuntimeError(f"{job_id}: total token count <= 0")
+
+train_shards = list(train.get("shards", []))
+val_shards = list(val.get("shards", []))
+if not train_shards and not val_shards:
+    raise RuntimeError(f"{job_id}: no shard entries in manifest")
+
+for shard in train_shards + val_shards:
+    shard_name = shard.get("path")
+    if not shard_name:
+        raise RuntimeError(f"{job_id}: shard entry missing path")
+    shard_path = output_dir / shard_name
+    if not shard_path.exists():
+        raise RuntimeError(f"{job_id}: missing shard file: {shard_path}")
+    if shard_path.stat().st_size <= 0:
+        raise RuntimeError(f"{job_id}: empty shard file: {shard_path}")
+
+expected_files = [
+    line.strip()
+    for line in files_list.read_text(encoding="utf-8").splitlines()
+    if line.strip() and not line.strip().startswith("#")
+]
+manifest_inputs = {
+    Path(raw).name
+    for raw in manifest.get("input_files", [])
+}
+missing = [name for name in expected_files if name not in manifest_inputs]
+if missing:
+    raise RuntimeError(f"{job_id}: manifest missing expected input files: {missing[:5]}")
+
+print(
+    f"guardrail_ok id={job_id} rows={rows_sharded} "
+    f"tokens={train_tokens + val_tokens} shards={len(train_shards) + len(val_shards)}"
+)
+PY
+}
+
+validate_batch_guardrails() {
+  local batch_id="$1"
+  local -n ids_ref="$2"
+  local -n lists_ref="$3"
+  local failed=0
+  local idx
+  for ((idx = 0; idx < ${#ids_ref[@]}; idx++)); do
+    if ! validate_job_artifacts "${ids_ref[$idx]}" "${lists_ref[$idx]}" | tee -a "$LOG_FILE"; then
+      failed=1
+    fi
+  done
+  if [[ "$failed" -ne 0 ]]; then
+    log "batch_guardrails_failed id=$batch_id"
+    return 1
+  fi
+  log "batch_guardrails_ok id=$batch_id jobs=${#ids_ref[@]}"
+}
 
 stage_once() {
   local hot_count
@@ -277,6 +475,7 @@ stage_once() {
       --max-files "$stage_files" \
       --max-gib "$STAGE_MAX_GIB" \
       --min-age-seconds "$STAGE_MIN_AGE_SECONDS" \
+      --skip-list "$BAD_PARQUET_FILE" \
       --dry-run | tee -a "$LOG_FILE"
   else
     bash scripts/stage_fineweb_from_warm.sh \
@@ -284,7 +483,8 @@ stage_once() {
       --dest-dir "$HOT_PARQUET_DIR" \
       --max-files "$stage_files" \
       --max-gib "$STAGE_MAX_GIB" \
-      --min-age-seconds "$STAGE_MIN_AGE_SECONDS" | tee -a "$LOG_FILE"
+      --min-age-seconds "$STAGE_MIN_AGE_SECONDS" \
+      --skip-list "$BAD_PARQUET_FILE" | tee -a "$LOG_FILE"
   fi
   log "stage_done"
 }
@@ -295,6 +495,9 @@ select_unprocessed_files() {
   mapfile -t all_files < <(find "$HOT_PARQUET_DIR" -maxdepth 1 -type f -name '*.parquet' -printf '%f\n' | sort)
   for name in "${all_files[@]}"; do
     if grep -Fqx "$name" "$PROCESSED_FILE"; then
+      continue
+    fi
+    if is_bad_parquet_name "$name"; then
       continue
     fi
     out_ref+=("$name")
@@ -424,6 +627,8 @@ process_batch() {
   log "batch_start id=$batch_id files=${#files[@]} tokenizer_arg=$tok_arg_flag shard_jobs=$SHARD_JOBS"
 
   local job_count="$SHARD_JOBS"
+  local -a guard_job_ids=()
+  local -a guard_job_lists=()
   if [[ "$tok_arg_flag" == "--tokenizer-out" && "$job_count" -gt 1 ]]; then
     log "batch_warn id=$batch_id reason=tokenizer_train_requires_single_job requested_jobs=$job_count forcing_jobs=1"
     job_count=1
@@ -439,11 +644,14 @@ process_batch() {
       printf '%s\n' "$name" >> "$files_list"
     done
     run_shard_job "$batch_id" "$files_list" "$tok_arg_flag" "$tok_arg_path"
+    guard_job_ids+=("$batch_id")
+    guard_job_lists+=("$files_list")
   else
     local -a job_lists=()
     local -a job_ids=()
     local -a pids=()
     local -a active_job_ids=()
+    local -a active_job_lists=()
     local idx=0
     local j
     for ((j = 0; j < job_count; j++)); do
@@ -466,6 +674,7 @@ process_batch() {
       run_shard_job "${job_ids[$j]}" "${job_lists[$j]}" "$tok_arg_flag" "$tok_arg_path" &
       pids+=("$!")
       active_job_ids+=("${job_ids[$j]}")
+      active_job_lists+=("${job_lists[$j]}")
     done
 
     local failed=0
@@ -479,7 +688,15 @@ process_batch() {
       log "batch_failed id=$batch_id reason=one_or_more_parallel_jobs_failed"
       return 1
     fi
+    guard_job_ids=("${active_job_ids[@]}")
+    guard_job_lists=("${active_job_lists[@]}")
   fi
+
+  if [[ "$DRY_RUN" -eq 1 ]]; then
+    log "batch_done_dry_run id=$batch_id"
+    return 0
+  fi
+  validate_batch_guardrails "$batch_id" guard_job_ids guard_job_lists
 
   for name in "${files[@]}"; do
     printf '%s\n' "$name" >> "$PROCESSED_FILE"
@@ -500,7 +717,7 @@ process_batch() {
 }
 
 log "loop_start warm_parquet_dir=$WARM_PARQUET_DIR hot_parquet_dir=$HOT_PARQUET_DIR"
-log "loop_config shards_root=$SHARDS_ROOT tokenizer_path=$TOKENIZER_PATH iterations=$ITERATIONS hot_queue_min_files=$HOT_QUEUE_MIN_FILES"
+log "loop_config shards_root=$SHARDS_ROOT tokenizer_path=$TOKENIZER_PATH iterations=$ITERATIONS hot_queue_min_files=$HOT_QUEUE_MIN_FILES bad_parquet_file=$BAD_PARQUET_FILE quarantine_dir=$QUARANTINE_DIR"
 
 completed_batches=0
 while true; do
@@ -523,7 +740,19 @@ while true; do
     continue
   fi
 
-  process_batch "$((completed_batches + 1))" "${selected[@]}"
+  valid_selected=()
+  preflight_selected_files selected valid_selected
+  if [[ "${#valid_selected[@]}" -eq 0 ]]; then
+    log "batch_skip reason=no_valid_parquet_after_preflight selected=${#selected[@]}"
+    stage_once
+    sleep 2
+    continue
+  fi
+  if [[ "${#valid_selected[@]}" -lt "${#selected[@]}" ]]; then
+    log "preflight_filtered selected=${#selected[@]} valid=${#valid_selected[@]}"
+  fi
+
+  process_batch "$((completed_batches + 1))" "${valid_selected[@]}"
   completed_batches=$((completed_batches + 1))
   stage_once
 

@@ -6,6 +6,7 @@ DEST_DIR="data/fineweb/sample-350BT/sample/350BT"
 MAX_FILES=10
 MAX_GIB=0
 MIN_AGE_SECONDS=180
+SKIP_LIST=""
 DRY_RUN=0
 
 usage() {
@@ -26,6 +27,7 @@ Options:
   --max-gib N              Max total GiB to copy this run (default: 0 = unlimited)
   --min-age-seconds N      Ignore source files modified more recently than this
                            (default: 180)
+  --skip-list FILE         Optional newline-separated parquet basenames to skip
   --dry-run                Print what would be copied without copying
   -h, --help               Show this help
 
@@ -56,6 +58,10 @@ while [[ $# -gt 0 ]]; do
       MIN_AGE_SECONDS="$2"
       shift 2
       ;;
+    --skip-list)
+      SKIP_LIST="$2"
+      shift 2
+      ;;
     --dry-run)
       DRY_RUN=1
       shift
@@ -82,13 +88,19 @@ log="artifacts/reports/stage_fineweb_from_warm_$(date +%Y%m%d_%H%M%S).log"
 
 echo "[$(date -Iseconds)] source=$SRC_DIR" | tee -a "$log"
 echo "[$(date -Iseconds)] dest=$DEST_DIR" | tee -a "$log"
-echo "[$(date -Iseconds)] max_files=$MAX_FILES max_gib=$MAX_GIB min_age_seconds=$MIN_AGE_SECONDS dry_run=$DRY_RUN" | tee -a "$log"
+echo "[$(date -Iseconds)] max_files=$MAX_FILES max_gib=$MAX_GIB min_age_seconds=$MIN_AGE_SECONDS dry_run=$DRY_RUN skip_list=${SKIP_LIST:-none}" | tee -a "$log"
+
+if [[ -n "$SKIP_LIST" && ! -f "$SKIP_LIST" ]]; then
+  echo "skip-list not found: $SKIP_LIST" >&2
+  exit 1
+fi
 
 now_epoch="$(date +%s)"
 copied_files=0
 copied_bytes=0
 skipped_recent=0
 skipped_existing=0
+skipped_blocklist=0
 considered=0
 
 while IFS= read -r src_path; do
@@ -100,6 +112,11 @@ while IFS= read -r src_path; do
   src_size="$(stat -c%s "$src_path")"
   src_mtime="$(stat -c%Y "$src_path")"
   age="$((now_epoch - src_mtime))"
+
+  if [[ -n "$SKIP_LIST" ]] && grep -Fqx "$name" "$SKIP_LIST"; then
+    skipped_blocklist=$((skipped_blocklist + 1))
+    continue
+  fi
 
   if [[ "$age" -lt "$MIN_AGE_SECONDS" ]]; then
     skipped_recent=$((skipped_recent + 1))
@@ -144,5 +161,5 @@ while IFS= read -r src_path; do
 done < <(find "$SRC_DIR" -maxdepth 1 -type f -name '*.parquet' | sort)
 
 copied_gib="$(awk -v b="$copied_bytes" 'BEGIN { printf "%.2f", b/1024/1024/1024 }')"
-echo "[$(date -Iseconds)] considered=$considered copied_files=$copied_files copied_gib=$copied_gib skipped_recent=$skipped_recent skipped_existing=$skipped_existing" | tee -a "$log"
+echo "[$(date -Iseconds)] considered=$considered copied_files=$copied_files copied_gib=$copied_gib skipped_recent=$skipped_recent skipped_existing=$skipped_existing skipped_blocklist=$skipped_blocklist" | tee -a "$log"
 echo "log_file=$log" | tee -a "$log"

@@ -76,7 +76,25 @@ This loop:
 - syncs shard outputs back to warm storage
 - deletes processed hot parquet files to reclaim local space
 - retries shard builds automatically on OOM-like failures by reducing batch size
+- preflights selected parquet files (row groups/rows/required `text` field)
+- quarantines bad hot parquet files and tracks them in `artifacts/reports/fineweb_stage_shard_loop/bad_parquet_files.txt`
+- marks files processed only after post-batch guardrails pass (valid report+manifest, non-empty shard files)
 - on 20-core hosts, two shard jobs with tokenizer batch encoding is the current higher-throughput profile
+
+Optional watchdog for large FineWeb downloads:
+```bash
+bash scripts/hf_download_watchdog.sh \
+  --dataset HuggingFaceFW/fineweb \
+  --repo-type dataset \
+  --include "sample/350BT/*.parquet" \
+  --local-dir /mnt/ceph/llm/data/fineweb/sample-350BT \
+  --max-workers 4 \
+  --enable-hf-transfer \
+  --skip-dry-run \
+  --attempt-timeout-seconds 5400 \
+  --stall-seconds 1200
+```
+The watchdog monitors parquet/incomplete byte growth and restarts the resumable worker if it exits or stalls.
 
 Auto-resume trainer supervisor for growing shard sets:
 ```bash

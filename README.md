@@ -67,6 +67,7 @@ make pipeline-eta # print combined download/shard/train ETA reporter usage
 make pipeline-live # print live terminal pipeline dashboard usage
 make shard-corpus-batch # print shared-tokenizer batch sharding usage
 make hf-download-resumable # print self-healing HF resume-download worker usage
+make hf-download-watchdog # print auto-restart wrapper for stalled/exited HF downloads
 make sync-warm   # sync raw/training data + artifacts to warm storage
 make hydrate-warm # hydrate hot workspace from warm storage
 make offload-zim # continuously move raw ZIMs hot -> warm
@@ -197,11 +198,30 @@ Notes:
 - For very large pulls (like 350BT), `--skip-dry-run` avoids metadata preflight stalls.
 - `--attempt-timeout-seconds` prevents one hung transfer from stalling progress forever.
 - Keep 350BT parquet on warm storage and stage bounded chunks to hot storage before sharding.
+- For unattended runs, wrap with `scripts/hf_download_watchdog.sh` to auto-restart on stalls.
+
+3aaa. Optional watchdog wrapper for stalled/exited downloads:
+```bash
+bash scripts/hf_download_watchdog.sh \
+  --dataset HuggingFaceFW/fineweb \
+  --repo-type dataset \
+  --include "sample/350BT/*.parquet" \
+  --local-dir /mnt/ceph/llm/data/fineweb/sample-350BT \
+  --max-workers 4 \
+  --enable-hf-transfer \
+  --skip-dry-run \
+  --attempt-timeout-seconds 5400 \
+  --stall-seconds 1200 \
+  --worker-log-file artifacts/reports/fineweb_350bt_download_resumable.log \
+  --watchdog-log-file artifacts/reports/hf_download_watchdog.log
+```
 
 3ab. Stage FineWeb chunks from warm to hot as needed:
 ```bash
 bash scripts/stage_fineweb_from_warm.sh --max-files 4 --max-gib 8
 ```
+You can pass `--skip-list artifacts/reports/fineweb_stage_shard_loop/bad_parquet_files.txt`
+to avoid restaging files previously flagged as invalid.
 
 3ac. Run rolling warm->hot staging + sharding loop (recommended for 350BT on limited hot disk):
 ```bash
@@ -218,8 +238,13 @@ bash scripts/fineweb_stage_shard_loop.sh \
 This loop stages bounded parquet files to hot storage, builds verified shard batches under
 `data/shards_global/fineweb-global-bpe-v1/`, syncs those batches back to warm storage,
 and purges processed hot parquet files.
+Before sharding each batch, the loop now runs a parquet preflight check (row groups/rows/field),
+quarantines failing hot files, and records their basenames in
+`artifacts/reports/fineweb_stage_shard_loop/bad_parquet_files.txt` so they are skipped in future staging.
 `--hot-queue-min-files` keeps a small parquet queue staged locally so shard building is less likely to idle on copy waits.
 If a shard build fails with OOM-like errors, the loop retries automatically with a smaller batch size.
+Batch guardrails now require valid report/manifest + non-empty shard outputs before files are marked
+processed or purged from hot storage.
 For 20-core hosts, `--shard-jobs 2 --tokenizer-threads 10 --encode-batch-size 1024` is the
 current high-throughput profile.
 

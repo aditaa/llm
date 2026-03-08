@@ -274,7 +274,8 @@ process_batch() {
 
   : > "$files_list"
   for name in "${files[@]}"; do
-    printf '%s/%s\n' "$HOT_PARQUET_DIR" "$name" >> "$files_list"
+    # Store paths relative to --input-dir so fineweb_parquet_to_shards resolves correctly.
+    printf '%s\n' "$name" >> "$files_list"
   done
 
   local tok_arg_flag

@@ -143,5 +143,6 @@ while IFS= read -r src_path; do
   echo "COPY ok $name size_bytes=$src_size" | tee -a "$log"
 done < <(find "$SRC_DIR" -maxdepth 1 -type f -name '*.parquet' | sort)
 
-echo "[$(date -Iseconds)] considered=$considered copied_files=$copied_files copied_gib=$(awk \"BEGIN {printf \\\"%.2f\\\", $copied_bytes/1024/1024/1024}\") skipped_recent=$skipped_recent skipped_existing=$skipped_existing" | tee -a "$log"
+copied_gib="$(awk -v b="$copied_bytes" 'BEGIN { printf "%.2f", b/1024/1024/1024 }')"
+echo "[$(date -Iseconds)] considered=$considered copied_files=$copied_files copied_gib=$copied_gib skipped_recent=$skipped_recent skipped_existing=$skipped_existing" | tee -a "$log"
 echo "log_file=$log" | tee -a "$log"

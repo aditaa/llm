@@ -102,6 +102,14 @@ bash scripts/hf_download_watchdog.sh \
 ```
 The watchdog monitors parquet/incomplete byte growth and restarts the resumable worker if it exits or stalls.
 
+Hot-queue prefetch worker (stage on demand while training):
+```bash
+bash scripts/fineweb_prefetch_hot_queue.sh \
+  --queue-min-files 12 \
+  --stage-max-files 8 \
+  --sleep-seconds 60
+```
+
 Auto-resume trainer supervisor for growing shard sets:
 ```bash
 bash scripts/train_supervisor_rtx5070_350bt.sh \
@@ -123,12 +131,17 @@ primarily gate via the post-chunk prompt-suite regression/promotion checks.
 Trend outputs:
 - `artifacts/reports/train_supervisor_350bt/train_trend.tsv`
 - `artifacts/reports/train_supervisor_350bt/eval_trend.tsv`
+- `artifacts/reports/train_supervisor_350bt/eval_dashboard.html`
 The supervisor eval step now auto-selects the latest successful eval report as
 baseline, compares deltas (pass/check/score), and applies
 `configs/eval/promotion_policy_v1.json` when present.
+Supervisor now auto-promotes `best.pt` aliases after successful eval promotion checks.
 
 For long runs with bounded disk use, pass checkpoint retention options:
 `--checkpoint-keep-last 6 --checkpoint-keep-every 10000`
+
+For context-extension stage from a 512-token checkpoint:
+`--resume-from <last.pt> --context-length 1024 --allow-context-extension`
 
 Checkpoint smoothing after training/eval:
 ```bash

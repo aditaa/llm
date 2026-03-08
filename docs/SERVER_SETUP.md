@@ -100,3 +100,26 @@ PYTHONPATH=src .venv/bin/python -m llm.cli verify-shards \
   --raw-zim-dir data/raw_zim \
   --strict-source
 ```
+
+## 9) systemd Services (Recommended for Long Runs)
+Install reboot-safe worker services:
+
+```bash
+bash scripts/install_systemd_services.sh --install-watchdog
+```
+
+Installed units:
+- `llm-train-supervisor.service`
+- `llm-fineweb-prefetch.service`
+- `llm-hf-download-watchdog.service` (optional but recommended for long HF pulls)
+
+Environment file:
+- `/etc/llm/llm.env` (seeded from `deploy/systemd/llm.env.example`)
+
+Useful commands:
+```bash
+sudo systemctl status llm-train-supervisor.service
+sudo systemctl status llm-fineweb-prefetch.service
+sudo systemctl restart llm-train-supervisor.service
+sudo journalctl -u llm-train-supervisor.service -f
+```

@@ -42,6 +42,7 @@ bash scripts/bootstrap_dev.sh
 ## Common Commands
 ```bash
 make setup-infer # install inference/deploy dependencies
+make install-systemd-services # install/reload long-run systemd units
 make test        # run unit tests
 make lint        # run Ruff checks
 make format      # run Black formatter
@@ -52,6 +53,8 @@ make train       # print baseline training command usage
 make generate    # print checkpoint text-generation command usage
 make average-checkpoints # print checkpoint averaging usage
 make eval-checkpoint # print standardized prompt-suite eval usage
+make render-eval-dashboard # print eval trend dashboard render usage
+make package-inference-bundle # print deploy bundle packaging usage
 make train-tokenizer-global # print shared-tokenizer command usage
 make corpus-quality-report # print quality report command usage
 make clean-corpus-batch # print batch cleanup command usage
@@ -59,10 +62,12 @@ make dataset-risk-report # print heuristic dataset risk audit command usage
 make pull-hf-rows # print Hugging Face rows API pull helper usage
 make fineweb-parquet-to-shards # print direct FineWeb parquet->token-shards usage
 make stage-fineweb-from-warm # print warm->hot FineWeb chunk staging usage
+make fineweb-prefetch-hot-queue # print hot-queue prefetch worker usage
 make fineweb-stage-shard-loop # print rolling stage->shard->verify->sync->purge usage
 make fineweb-hot-queue # print hot parquet queue-oriented stage/shard usage
 make lr-sweep-350bt # print RTX 5070 LR sweep usage for staged 350BT shards
 make train-350bt-v2 # print 350BT long-run launcher usage
+make train-350bt-ctx1024 # print long-context continuation launcher usage
 make train-supervisor-350bt # print auto-resume trainer supervisor usage
 make pipeline-eta # print combined download/shard/train ETA reporter usage
 make pipeline-live # print live terminal pipeline dashboard usage
@@ -383,7 +388,7 @@ PYTHONPATH=src .venv/bin/python -m llm.cli average-checkpoints \
 ```bash
 PYTHONPATH=src .venv/bin/python scripts/eval_checkpoint_prompts.py \
   --checkpoint artifacts/checkpoints/medlineplus_baseline/last.pt \
-  --suite configs/eval/standard_prompt_suite_v2.json \
+  --suite configs/eval/standard_prompt_suite_v3.json \
   --baseline-report artifacts/reports/evals/<previous_report>.json \
   --promotion-policy configs/eval/promotion_policy_v1.json \
   --fail-on-regression
@@ -431,6 +436,12 @@ PYTHONPATH=src .venv/bin/python -m llm.cli train \
   --resume-from artifacts/checkpoints/fineweb-350bt-run1/last.pt \
   --max-steps 3000
 ```
+
+Long-context continuation from a converged ctx512 run:
+```bash
+bash scripts/train_rtx5070_fineweb_350bt_bpe_v2_ctx1024.sh
+```
+This path resumes from the base run and uses `--allow-context-extension`.
 
 Optional text-first path still exists for inspection-heavy runs:
 `parquet_to_corpus -> clean-corpus-batch -> train-tokenizer-global -> shard-corpus-batch`.
@@ -509,9 +520,13 @@ the train-loop held-out perplexity gate is noisy; prompt-suite regression/promot
 checks still run in the supervisor eval step.
 Supervisor resume guardrails now validate `last.pt`/`ckpt_step_*.pt` before resume and
 quarantine invalid checkpoint files automatically, then continue from the newest valid one.
+When post-chunk eval passes promotion logic (or beats prior pass-rate baseline), supervisor
+also exports `best.pt`, `best_eval_report.json`, and safetensors best aliases.
 Supervisor outputs:
 - `artifacts/reports/train_supervisor_350bt/train_trend.tsv` (per-chunk train telemetry)
 - `artifacts/reports/train_supervisor_350bt/eval_trend.tsv` (post-chunk eval trend, including regression/promotion columns)
+- `artifacts/reports/train_supervisor_350bt/eval_dashboard.html` (rendered trend dashboard)
+- `artifacts/reports/train_supervisor_350bt/eval_dashboard_summary.json` (dashboard summary JSON)
 The supervisor now auto-selects the latest successful eval report as baseline for the next eval cycle.
 
 Combined pipeline ETA/status reporter:
@@ -534,6 +549,31 @@ This is a live-only monitor (no report/status files written) and includes:
 
 It refreshes in-place (full-screen mode). If your terminal does not handle full-screen
 escape codes well, add `--no-alt-screen`.
+
+## Service Mode (systemd)
+For reboot-safe long runs, install service units for supervisor + prefetch:
+
+```bash
+make install-systemd-services
+```
+
+Templates:
+- `deploy/systemd/llm-train-supervisor.service`
+- `deploy/systemd/llm-fineweb-prefetch.service`
+- `deploy/systemd/llm-hf-download-watchdog.service`
+
+Environment template:
+- `deploy/systemd/llm.env.example` (installed to `/etc/llm/llm.env`)
+
+## Inference Bundle Packaging
+Build a portable local deploy bundle (with checksums and optional tarball):
+
+```bash
+PYTHONPATH=src .venv/bin/python scripts/package_inference_bundle.py \
+  --checkpoint artifacts/checkpoints/fineweb-350bt-bpe-v2-run1/best.pt \
+  --model-id local/fineweb-bpe-v2 \
+  --create-tar
+```
 
 ## Warm Storage (Ceph Mount)
 Use `./data` and `./artifacts` as the hot working set.

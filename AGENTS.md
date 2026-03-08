@@ -17,6 +17,7 @@ Use the `Makefile` as the source of truth:
 - `make setup-train`: install training/notebook extras
 - `make setup-infer`: install inference/deploy extras
 - `make install-server-system`: install Ubuntu/Debian system packages
+- `make install-systemd-services`: install/reload systemd service units for long-running workers
 - `make doctor`: environment/tooling diagnostics
 - `make test`: run `unittest` test suite
 - `make lint`: run Ruff lint checks
@@ -28,6 +29,8 @@ Use the `Makefile` as the source of truth:
 - `make generate`: usage helper for checkpoint text generation
 - `make average-checkpoints`: usage helper for checkpoint weight averaging
 - `make eval-checkpoint`: usage helper for standardized checkpoint prompt-suite eval
+- `make render-eval-dashboard`: usage helper for rendering eval trend HTML/JSON dashboard
+- `make package-inference-bundle`: usage helper for local deploy bundle packaging with checksums
 - `make train-tokenizer-global`: usage helper for shared tokenizer training
 - `make corpus-quality-report`: usage helper for corpus quality scan
 - `make clean-corpus-batch`: usage helper for batch corpus cleanup
@@ -35,10 +38,12 @@ Use the `Makefile` as the source of truth:
 - `make pull-hf-rows`: usage helper for bounded Hugging Face rows pulls
 - `make fineweb-parquet-to-shards`: usage helper for direct FineWeb parquet -> tokenizer -> shard conversion
 - `make stage-fineweb-from-warm`: usage helper for staging FineWeb parquet chunks from warm to hot
+- `make fineweb-prefetch-hot-queue`: usage helper for warm->hot queue prefetch worker
 - `make fineweb-stage-shard-loop`: usage helper for rolling warm->hot stage + shard + verify + sync + purge
 - `make fineweb-hot-queue`: usage helper for hot parquet queue-oriented stage + shard flow
 - `make lr-sweep-350bt`: usage helper for RTX 5070 LR sweep on staged 350BT shards (`2e-4..4e-4`, ctx 512)
 - `make train-350bt-v2`: usage helper for the 350BT long-run launcher profile
+- `make train-350bt-ctx1024`: usage helper for context-extension continuation stage
 - `make train-supervisor-350bt`: usage helper for auto-resume chunked training that refreshes manifest set between cycles
 - `make pipeline-eta`: usage helper for combined download + sharding + training ETA/status reporting
 - `make pipeline-live`: usage helper for a live terminal pipeline dashboard
@@ -128,9 +133,10 @@ Keep PR scope narrow; split refactors and features into separate PRs.
 - Use `--no-train-fail-on-eval-regression` in supervisor when you want train chunks to continue and rely on post-chunk prompt-suite gates
 - On 12 GB RTX 5070 profiles, start supervisor with `--batch-size 12 --target-effective-batch 24 --min-batch-size 6 --max-batch-size 20 --batch-step 2` to avoid early OOM churn
 - Supervisor writes chunk trends to `artifacts/reports/train_supervisor_350bt/train_trend.tsv` and post-chunk eval trends to `artifacts/reports/train_supervisor_350bt/eval_trend.tsv`
+- Supervisor also renders `artifacts/reports/train_supervisor_350bt/eval_dashboard.html` and exports `best.pt` aliases after successful eval promotions
 - Use `scripts/pipeline_eta_report.py --loop` for combined ETA snapshots in `artifacts/reports/pipeline_status.{json,txt}` (includes `top`, `free -h`, `nvidia-smi`, and `df -h` captures)
 - Use `scripts/pipeline_live_view.py --refresh-seconds 5` for a live-only terminal monitor (system + pipeline task status, no report writes; add `--no-alt-screen` if needed)
-- For checkpoint regression tracking, run `scripts/eval_checkpoint_prompts.py` with `configs/eval/standard_prompt_suite_v2.json`; use `--baseline-report` and `--promotion-policy configs/eval/promotion_policy_v1.json` to emit regression deltas + promotion verdict
+- For checkpoint regression tracking, run `scripts/eval_checkpoint_prompts.py` with `configs/eval/standard_prompt_suite_v3.json`; use `--baseline-report` and `--promotion-policy configs/eval/promotion_policy_v1.json` to emit regression deltas + promotion verdict
 - Promotion/comparison logic lives in `src/llm/eval_policy.py`; keep policy checks unit-tested (`tests/test_eval_policy.py`)
 - For FineWeb-first training runs, build shards directly with `PYTHONPATH=src .venv/bin/python scripts/fineweb_parquet_to_shards.py --input-dir data/fineweb/sample-350BT --output-dir data/shards_global/fineweb-global-bpe-v1 --tokenizer-out artifacts/tokenizer/fineweb-global-bpe-v1.json --bpe-vocab-size 32000 --field text`
 - FineWeb-only baseline flow: `fineweb_parquet_to_shards -> verify-shards -> train`
@@ -142,11 +148,12 @@ Keep PR scope narrow; split refactors and features into separate PRs.
 - Prefer `llm.cli train --lr-schedule cosine --lr-warmup-steps <N>` for stable first-pass runs
 - Use `--grad-accum-steps` when VRAM is tight and you need higher effective batch
 - Keep disk use bounded with `llm.cli train --checkpoint-keep-last <N> --checkpoint-keep-every <M>`
+- For context-extension continuation, resume with `llm.cli train --allow-context-extension --context-length 1024 ...`
 - Use EMA for long runs with `--ema-decay 0.999 --ema-start-step <warmup_end>` and generate with `--use-ema` when present
 - Keep held-out eval batches frozen (default) and enable regression gating with `--fail-on-eval-regression`
 - Optimizer uses no-weight-decay groups for norms/biases/embeddings by default
 - For post-run smoothing, merge several checkpoints with `llm.cli average-checkpoints --state-key model_state` (or `ema_state`)
-- For deploy bundles, export weights-only safetensors via `llm.cli train --export-safetensors` or `hf_prepare_and_publish_model.py --include-safetensors`
+- For deploy bundles, use `scripts/package_inference_bundle.py` (checksums + optional tarball) or `hf_prepare_and_publish_model.py --include-safetensors`
 - RTX 5070 tuned training profiles live in `configs/train/rtx5070/`; preferred 350BT launchers: `bash scripts/lr_sweep_rtx5070_fineweb_350bt_ctx512.sh` then `bash scripts/train_rtx5070_fineweb_350bt_bpe_v2.sh`
 - Version extracted/tokenized/sharded outputs with the ZIM date stamp (for example `serverfault_2025-08`)
 - Keep raw ZIM archives in `/mnt/ceph/llm/data/raw_zim/`

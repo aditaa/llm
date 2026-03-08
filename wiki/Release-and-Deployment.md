@@ -13,6 +13,16 @@ export HF_TOKEN=hf_xxx
   --push
 ```
 
+## Package Local Inference Bundle
+Create a portable local bundle (checkpoint + tokenizer + checksums + optional tarball):
+
+```bash
+PYTHONPATH=src .venv/bin/python scripts/package_inference_bundle.py \
+  --checkpoint artifacts/checkpoints/fineweb-350bt-bpe-v2-run1/best.pt \
+  --model-id local/fineweb-bpe-v2 \
+  --create-tar
+```
+
 ## Deploy on another server
 
 1. Bootstrap runtime:

@@ -24,8 +24,12 @@ make smoke
 make verify-shards
 make train
 make generate
+make render-eval-dashboard
+make package-inference-bundle
 make train-tokenizer-global
 make shard-corpus-batch
+make fineweb-prefetch-hot-queue
+make install-systemd-services
 make sync-warm
 make hydrate-warm
 make offload-zim
@@ -57,7 +61,18 @@ bash scripts/train_rtx5070_fineweb_bpe_v1_big.sh
 ```
 - Training defaults now include warmup+cosine LR and fixed held-out eval batches.
 - For VRAM pressure, increase effective batch with `--grad-accum-steps`.
-- For release bundles, use `--include-safetensors` in HF prepare script.
+- For long-context continuation, use `bash scripts/train_rtx5070_fineweb_350bt_bpe_v2_ctx1024.sh`.
+- For release bundles, use `scripts/package_inference_bundle.py` or `--include-safetensors` in HF prepare script.
+
+## systemd Services
+Install reboot-safe workers:
+```bash
+make install-systemd-services
+```
+Units installed from `deploy/systemd/`:
+- `llm-train-supervisor.service`
+- `llm-fineweb-prefetch.service`
+- `llm-hf-download-watchdog.service` (optional)
 
 ## Wiki Publishing
 Wiki pages are source-controlled in `wiki/` and published with:

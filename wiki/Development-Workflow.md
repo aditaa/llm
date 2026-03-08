@@ -44,7 +44,7 @@ Run a fixed prompt-suite eval after each major training run:
 ```bash
 PYTHONPATH=src .venv/bin/python scripts/eval_checkpoint_prompts.py \
   --checkpoint artifacts/checkpoints/<run>/last.pt \
-  --suite configs/eval/standard_prompt_suite_v2.json \
+  --suite configs/eval/standard_prompt_suite_v3.json \
   --baseline-report artifacts/reports/evals/<previous_report>.json \
   --promotion-policy configs/eval/promotion_policy_v1.json \
   --fail-on-regression
@@ -65,6 +65,8 @@ PYTHONPATH=src .venv/bin/python -m llm.cli train \
 ```
 For bounded checkpoint storage during long runs, add:
 `--checkpoint-keep-last 6 --checkpoint-keep-every 10000`
+For context-extension continuation from 512->1024, add:
+`--resume-from <last.pt> --context-length 1024 --allow-context-extension`
 
 Merge adjacent checkpoints into one smoother snapshot:
 
@@ -74,6 +76,14 @@ PYTHONPATH=src .venv/bin/python -m llm.cli average-checkpoints \
   --checkpoint artifacts/checkpoints/<run>/ckpt_step_0002000.pt \
   --output artifacts/checkpoints/<run>/avg_last2.pt \
   --state-key model_state
+```
+
+Render supervisor eval trend dashboard:
+```bash
+PYTHONPATH=src .venv/bin/python scripts/render_eval_trend_dashboard.py \
+  --input-tsv artifacts/reports/train_supervisor_350bt/eval_trend.tsv \
+  --output-html artifacts/reports/train_supervisor_350bt/eval_dashboard.html \
+  --output-json artifacts/reports/train_supervisor_350bt/eval_dashboard_summary.json
 ```
 
 ## Wiki Maintenance

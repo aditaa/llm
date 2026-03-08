@@ -32,6 +32,9 @@ EVAL_INTERVAL=1000
 EVAL_STEPS=6
 LOG_INTERVAL=100
 PRECISION="auto"
+EMA_DECAY="0.0"
+EMA_UPDATE_EVERY=1
+EMA_START_STEP=0
 
 AUTO_TUNE=1
 BATCH_STEP=2
@@ -87,6 +90,9 @@ Training shape:
   --eval-steps N               Train-loop eval steps (default: 6)
   --log-interval N             Train log interval (default: 100)
   --precision MODE             Precision mode (default: auto)
+  --ema-decay X                EMA decay for model weights (default: 0.0 disabled)
+  --ema-update-every N         EMA update interval in optimizer steps (default: 1)
+  --ema-start-step N           First optimizer step to apply EMA updates (default: 0)
 
 Auto-tune options:
   --no-auto-tune               Disable automatic batch tuning
@@ -148,6 +154,9 @@ while [[ $# -gt 0 ]]; do
     --eval-steps) EVAL_STEPS="$2"; shift 2 ;;
     --log-interval) LOG_INTERVAL="$2"; shift 2 ;;
     --precision) PRECISION="$2"; shift 2 ;;
+    --ema-decay) EMA_DECAY="$2"; shift 2 ;;
+    --ema-update-every) EMA_UPDATE_EVERY="$2"; shift 2 ;;
+    --ema-start-step) EMA_START_STEP="$2"; shift 2 ;;
     --no-auto-tune) AUTO_TUNE=0; shift ;;
     --batch-step) BATCH_STEP="$2"; shift 2 ;;
     --min-batch-size) MIN_BATCH_SIZE="$2"; shift 2 ;;
@@ -461,7 +470,7 @@ fi
 
 failure_streak=0
 log "supervisor_start shards_path=$SHARDS_PATH output_dir=$OUTPUT_DIR step_chunk=$STEP_CHUNK"
-log "tuning_start batch_size=$BATCH_SIZE grad_accum=$GRAD_ACCUM_STEPS auto_tune=$AUTO_TUNE target_effective_batch=$TARGET_EFFECTIVE_BATCH"
+log "tuning_start batch_size=$BATCH_SIZE grad_accum=$GRAD_ACCUM_STEPS auto_tune=$AUTO_TUNE target_effective_batch=$TARGET_EFFECTIVE_BATCH ema_decay=$EMA_DECAY ema_update_every=$EMA_UPDATE_EVERY ema_start_step=$EMA_START_STEP"
 
 while true; do
   mcount="$(manifest_count)"
@@ -508,6 +517,9 @@ while true; do
       --eval-regression-tolerance 0.20 \
       --log-interval "$LOG_INTERVAL" \
       --precision "$PRECISION" \
+      --ema-decay "$EMA_DECAY" \
+      --ema-update-every "$EMA_UPDATE_EVERY" \
+      --ema-start-step "$EMA_START_STEP" \
       --export-safetensors \
       "${resume_args[@]}"
   ) > >(tee -a "$run_log") 2>&1 &

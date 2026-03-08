@@ -23,6 +23,7 @@ class GenerateConfig:
     device: str = "auto"
     seed: int = 42
     stop_on_eos: bool = True
+    use_ema: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         payload = asdict(self)
@@ -76,8 +77,14 @@ def run_generation(config: GenerateConfig) -> dict[str, Any]:
         raise ValueError("checkpoint missing tokenizer_path")
     tokenizer = load_tokenizer(tokenizer_path)
 
+    state_key = "model_state"
+    if config.use_ema:
+        if "ema_state" not in checkpoint:
+            raise ValueError("checkpoint missing ema_state; rerun without --use-ema")
+        state_key = "ema_state"
+
     model = GPTModel(model_config).to(device)
-    model.load_state_dict(checkpoint["model_state"])
+    model.load_state_dict(checkpoint[state_key])
     model.eval()
 
     token_ids = tokenizer.encode(config.prompt)
@@ -111,4 +118,5 @@ def run_generation(config: GenerateConfig) -> dict[str, Any]:
         "prompt": config.prompt,
         "output_text": output_text,
         "token_count": len(token_ids),
+        "state_key": state_key,
     }

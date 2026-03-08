@@ -244,6 +244,8 @@ def cmd_clean_corpus_batch(
     min_unique_token_ratio: float,
     dedupe_within_file: bool,
     dedupe_global: bool,
+    dedupe_normalized: bool,
+    dedupe_normalized_min_chars: int,
     skip_existing: bool,
     output_suffix: str,
     decode_html_entities: bool,
@@ -261,6 +263,9 @@ def cmd_clean_corpus_batch(
     drop_code_like: bool,
     code_symbol_ratio_threshold: float,
     code_keyword_hits_threshold: int,
+    drop_contamination: bool,
+    contamination_pattern: list[str],
+    contamination_patterns_file: str | None,
     report_output: str,
 ) -> int:
     files = iter_corpus_files(
@@ -277,6 +282,14 @@ def cmd_clean_corpus_batch(
     if boilerplate_report is not None:
         boilerplate_lines = load_boilerplate_lines_from_report(Path(boilerplate_report))
 
+    contamination_patterns = list(contamination_pattern)
+    if contamination_patterns_file is not None:
+        for raw in Path(contamination_patterns_file).read_text(encoding="utf-8").splitlines():
+            line = raw.strip()
+            if not line or line.startswith("#"):
+                continue
+            contamination_patterns.append(line)
+
     report = clean_corpora_batch(
         input_files=files,
         output_dir=Path(output_dir),
@@ -292,6 +305,8 @@ def cmd_clean_corpus_batch(
             min_unique_token_ratio=min_unique_token_ratio,
             dedupe_within_file=dedupe_within_file,
             dedupe_global=dedupe_global,
+            dedupe_normalized=dedupe_normalized,
+            dedupe_normalized_min_chars=dedupe_normalized_min_chars,
             max_lines_per_file=max_lines_per_file,
             skip_existing=skip_existing,
             output_suffix=output_suffix,
@@ -310,6 +325,8 @@ def cmd_clean_corpus_batch(
             drop_code_like=drop_code_like,
             code_symbol_ratio_threshold=code_symbol_ratio_threshold,
             code_keyword_hits_threshold=code_keyword_hits_threshold,
+            drop_contamination=drop_contamination,
+            contamination_patterns=tuple(contamination_patterns),
         ),
         boilerplate_lines=boilerplate_lines,
     )
@@ -334,6 +351,7 @@ def cmd_clean_corpus_batch(
     print(f"removed_boilerplate={totals['removed_boilerplate']}")
     print(f"removed_non_english={totals['removed_non_english']}")
     print(f"removed_code_like={totals['removed_code_like']}")
+    print(f"removed_contamination={totals['removed_contamination']}")
     print(f"removed_duplicate_within={totals['removed_duplicate_within']}")
     print(f"removed_duplicate_global={totals['removed_duplicate_global']}")
     return 0
@@ -552,6 +570,9 @@ def cmd_train(
     compile_mode: str,
     export_safetensors: bool,
     safetensors_every_checkpoint: bool,
+    ema_decay: float,
+    ema_update_every: int,
+    ema_start_step: int,
 ) -> int:
     from llm.train import TrainConfig, run_training
 
@@ -592,6 +613,9 @@ def cmd_train(
         compile_mode=compile_mode,
         export_safetensors=export_safetensors,
         safetensors_every_checkpoint=safetensors_every_checkpoint,
+        ema_decay=ema_decay,
+        ema_update_every=ema_update_every,
+        ema_start_step=ema_start_step,
     )
     result = run_training(config)
     print(f"output_dir={result['output_dir']}")
@@ -602,6 +626,7 @@ def cmd_train(
     print(f"tokenizer_contract_hash={result['tokenizer_contract_hash']}")
     print(f"best_val_loss={result['best_val_loss']}")
     print(f"best_val_ppl={result['best_val_ppl']}")
+    print(f"ema_enabled={int(result['ema_enabled'])}")
     return 0
 
 
@@ -614,6 +639,7 @@ def cmd_generate(
     device: str,
     seed: int,
     no_stop_on_eos: bool,
+    use_ema: bool,
 ) -> int:
     from llm.generate import GenerateConfig, run_generation
 
@@ -626,16 +652,45 @@ def cmd_generate(
         device=device,
         seed=seed,
         stop_on_eos=not no_stop_on_eos,
+        use_ema=use_ema,
     )
     result = run_generation(config)
     print(f"checkpoint_path={result['checkpoint_path']}")
     print(f"tokenizer_path={result['tokenizer_path']}")
     print(f"device={result['device']}")
+    print(f"state_key={result['state_key']}")
     print(f"seed={result['seed']}")
     print(f"token_count={result['token_count']}")
     print("output_text_start")
     print(result["output_text"])
     print("output_text_end")
+    return 0
+
+
+def cmd_average_checkpoints(
+    checkpoint_paths: list[str],
+    output_path: str,
+    state_key: str,
+    export_safetensors: bool,
+) -> int:
+    from llm.checkpoints import AverageCheckpointsConfig, run_checkpoint_average
+
+    if len(checkpoint_paths) < 2:
+        raise ValueError("average-checkpoints requires at least two --checkpoint inputs")
+
+    result = run_checkpoint_average(
+        AverageCheckpointsConfig(
+            checkpoint_paths=[Path(path) for path in checkpoint_paths],
+            output_path=Path(output_path),
+            state_key=state_key,
+            export_safetensors=export_safetensors,
+        )
+    )
+    print(f"output_checkpoint={result['output_checkpoint']}")
+    print(f"state_key={result['state_key']}")
+    print(f"averaged_count={result['averaged_count']}")
+    if result["output_safetensors"] is not None:
+        print(f"output_safetensors={result['output_safetensors']}")
     return 0
 
 
@@ -888,6 +943,17 @@ def parse_args() -> argparse.Namespace:
         help="Drop duplicate lines across all output files",
     )
     clean_parser.add_argument(
+        "--no-dedupe-normalized",
+        action="store_true",
+        help="Disable punctuation/case-normalized dedupe keys",
+    )
+    clean_parser.add_argument(
+        "--dedupe-normalized-min-chars",
+        type=int,
+        default=40,
+        help="Minimum line length for normalized dedupe key usage",
+    )
+    clean_parser.add_argument(
         "--no-skip-existing",
         action="store_true",
         help="Rebuild cleaned file even when output already exists",
@@ -977,6 +1043,22 @@ def parse_args() -> argparse.Namespace:
         type=int,
         default=2,
         help="Drop line as code-like if code-keyword hits meet this threshold",
+    )
+    clean_parser.add_argument(
+        "--no-drop-contamination",
+        action="store_true",
+        help="Disable heuristic contamination filtering for benchmark/prompt/refusal fragments",
+    )
+    clean_parser.add_argument(
+        "--contamination-pattern",
+        action="append",
+        default=[],
+        help="Additional regex pattern for contamination filtering (repeatable)",
+    )
+    clean_parser.add_argument(
+        "--contamination-patterns-file",
+        default=None,
+        help="Optional newline-delimited regex file for contamination filtering",
     )
     clean_parser.add_argument(
         "--report-output",
@@ -1268,6 +1350,51 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Also export step-specific ckpt_step_*.safetensors files",
     )
+    train_parser.add_argument(
+        "--ema-decay",
+        type=float,
+        default=0.0,
+        help="EMA decay for model weights (0 disables EMA)",
+    )
+    train_parser.add_argument(
+        "--ema-update-every",
+        type=int,
+        default=1,
+        help="Update EMA every N optimizer steps",
+    )
+    train_parser.add_argument(
+        "--ema-start-step",
+        type=int,
+        default=0,
+        help="Start EMA updates at this optimizer step",
+    )
+
+    avg_parser = subparsers.add_parser(
+        "average-checkpoints",
+        help="Average model weights across multiple checkpoints",
+    )
+    avg_parser.add_argument(
+        "--checkpoint",
+        action="append",
+        required=True,
+        help="Checkpoint .pt path (repeatable, at least two)",
+    )
+    avg_parser.add_argument(
+        "--output",
+        required=True,
+        help="Output averaged checkpoint .pt path",
+    )
+    avg_parser.add_argument(
+        "--state-key",
+        choices=["model_state", "ema_state"],
+        default="model_state",
+        help="Which state dict key to average from each input checkpoint",
+    )
+    avg_parser.add_argument(
+        "--export-safetensors",
+        action="store_true",
+        help="Also export averaged weights to a safetensors file",
+    )
 
     gen_parser = subparsers.add_parser("generate", help="Generate text from a model checkpoint")
     gen_parser.add_argument("--checkpoint", required=True, help="Checkpoint path (*.pt)")
@@ -1294,6 +1421,11 @@ def parse_args() -> argparse.Namespace:
         "--no-stop-on-eos",
         action="store_true",
         help="Disable early stop when EOS token is sampled",
+    )
+    gen_parser.add_argument(
+        "--use-ema",
+        action="store_true",
+        help="Load ema_state from checkpoint instead of model_state when available",
     )
 
     return parser.parse_args()
@@ -1375,6 +1507,8 @@ def main() -> int:
             min_unique_token_ratio=args.min_unique_token_ratio,
             dedupe_within_file=not args.no_dedupe_within_file,
             dedupe_global=args.dedupe_global,
+            dedupe_normalized=not args.no_dedupe_normalized,
+            dedupe_normalized_min_chars=args.dedupe_normalized_min_chars,
             skip_existing=not args.no_skip_existing,
             output_suffix=args.output_suffix,
             decode_html_entities=not args.no_decode_html_entities,
@@ -1392,6 +1526,9 @@ def main() -> int:
             drop_code_like=not args.no_drop_code_like,
             code_symbol_ratio_threshold=args.code_symbol_ratio_threshold,
             code_keyword_hits_threshold=args.code_keyword_hits_threshold,
+            drop_contamination=not args.no_drop_contamination,
+            contamination_pattern=args.contamination_pattern,
+            contamination_patterns_file=args.contamination_patterns_file,
             report_output=args.report_output,
         )
     if args.command == "dataset-risk-report":
@@ -1476,6 +1613,16 @@ def main() -> int:
             compile_mode=args.compile_mode,
             export_safetensors=args.export_safetensors,
             safetensors_every_checkpoint=args.safetensors_every_checkpoint,
+            ema_decay=args.ema_decay,
+            ema_update_every=args.ema_update_every,
+            ema_start_step=args.ema_start_step,
+        )
+    if args.command == "average-checkpoints":
+        return cmd_average_checkpoints(
+            checkpoint_paths=args.checkpoint,
+            output_path=args.output,
+            state_key=args.state_key,
+            export_safetensors=args.export_safetensors,
         )
     if args.command == "generate":
         return cmd_generate(
@@ -1487,6 +1634,7 @@ def main() -> int:
             device=args.device,
             seed=args.seed,
             no_stop_on_eos=args.no_stop_on_eos,
+            use_ema=args.use_ema,
         )
     raise ValueError(f"Unsupported command: {args.command}")
 

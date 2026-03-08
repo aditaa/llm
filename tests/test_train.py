@@ -10,8 +10,10 @@ try:
     from llm.tokenizer import BPETokenizer, tokenizer_contract_fingerprint, tokenizer_fingerprint
     from llm.train import (
         ShardBatchSampler,
+        _init_ema_state,
         _lr_for_step,
         _resolve_amp_mode,
+        _update_ema_state,
         collect_shard_training_info,
     )
 except ModuleNotFoundError:
@@ -20,8 +22,10 @@ except ModuleNotFoundError:
     tokenizer_contract_fingerprint = None
     tokenizer_fingerprint = None
     ShardBatchSampler = None
+    _init_ema_state = None
     _lr_for_step = None
     _resolve_amp_mode = None
+    _update_ema_state = None
     collect_shard_training_info = None
 
 
@@ -185,6 +189,17 @@ class TrainDataTests(unittest.TestCase):
             self.assertEqual(tuple(yb.shape), (4, 8))
             self.assertEqual(xb.dtype, torch.long)
             self.assertTrue(torch.all(xb[:, 1:] == yb[:, :-1]))
+
+    def test_ema_state_update(self) -> None:
+        model = torch.nn.Linear(2, 2, bias=False)
+        with torch.no_grad():
+            model.weight.fill_(1.0)
+        ema_state = _init_ema_state(model)
+        with torch.no_grad():
+            model.weight.fill_(3.0)
+        _update_ema_state(ema_state, model, decay=0.5)
+        expected = torch.full_like(model.weight, 2.0)
+        self.assertTrue(torch.allclose(ema_state["weight"], expected))
 
 
 if __name__ == "__main__":

@@ -18,6 +18,7 @@ _HTML_TAG_RE = re.compile(r"</?[A-Za-z][^>\n]{0,200}>")
 _WORD_RE = re.compile(r"[A-Za-z']+")
 _TOKEN_RE = re.compile(r"[A-Za-z0-9_']+")
 _URL_RE = re.compile(r"https?://|www\.", re.IGNORECASE)
+_DEDUPE_CANON_RE = re.compile(r"[^a-z0-9]+")
 _SITE_SUFFIX_RE = re.compile(r"\s+-\s*(stack overflow|stack exchange)\b", re.IGNORECASE)
 _STACK_SHELL_RE = re.compile(
     r"\bstack overflow stack exchange\b.*?\bpublic questions tags users about\b",
@@ -136,6 +137,16 @@ _EN_STOPWORDS = {
     "your",
 }
 
+DEFAULT_CONTAMINATION_PATTERNS: tuple[str, ...] = (
+    (
+        r"\b(?:as an ai language model|"
+        r"i(?:'m| am) sorry(?:,)? but i (?:can't|cannot|can not)|"
+        r"i (?:can't|cannot|can not) (?:assist|help|comply))\b"
+    ),
+    r"(?:^|\s)(?:###\s*instruction:|###\s*response:|<\|(?:system|user|assistant)\|>|\[/?INST\])",
+    r"\b(?:mmlu|gsm8k|hellaswag|winogrande|truthfulqa|arc[- ](?:easy|challenge)|openbookqa)\b",
+)
+
 
 @dataclass(frozen=True)
 class CorpusQualityConfig:
@@ -161,6 +172,8 @@ class CleanCorpusConfig:
     min_unique_token_ratio: float = 0.35
     dedupe_within_file: bool = True
     dedupe_global: bool = False
+    dedupe_normalized: bool = True
+    dedupe_normalized_min_chars: int = 40
     max_lines_per_file: int = 0
     skip_existing: bool = True
     output_suffix: str = ".clean.txt"
@@ -179,6 +192,8 @@ class CleanCorpusConfig:
     drop_code_like: bool = True
     code_symbol_ratio_threshold: float = 0.08
     code_keyword_hits_threshold: int = 2
+    drop_contamination: bool = True
+    contamination_patterns: tuple[str, ...] = DEFAULT_CONTAMINATION_PATTERNS
 
 
 def normalize_whitespace(text: str) -> str:
@@ -258,6 +273,12 @@ def _strip_web_shell(text: str, config: CleanCorpusConfig) -> str:
     return normalize_whitespace(out)
 
 
+def _canonicalize_for_dedupe(text: str) -> str:
+    normalized = ud.normalize("NFKC", text).casefold()
+    normalized = _DEDUPE_CANON_RE.sub(" ", normalized)
+    return normalize_whitespace(normalized)
+
+
 def _collapse_repeated_prefix(text: str, *, min_words: int = 5, max_words: int = 24) -> str:
     words = text.split()
     if len(words) < min_words * 2:
@@ -323,6 +344,23 @@ def _is_code_like(text: str, config: CleanCorpusConfig) -> bool:
     if text.count("{") + text.count("}") >= 2:
         return True
     return False
+
+
+def _compile_contamination_patterns(config: CleanCorpusConfig) -> list[re.Pattern[str]]:
+    if not config.drop_contamination:
+        return []
+    patterns: list[re.Pattern[str]] = []
+    for raw in config.contamination_patterns:
+        if not raw.strip():
+            continue
+        patterns.append(re.compile(raw, re.IGNORECASE))
+    return patterns
+
+
+def _is_contaminated_line(text: str, patterns: list[re.Pattern[str]]) -> bool:
+    if not patterns:
+        return False
+    return any(pattern.search(text) for pattern in patterns)
 
 
 def analyze_corpora(
@@ -500,6 +538,8 @@ def clean_corpora_batch(
         raise ValueError("repeated_token_run_threshold must be >= 2")
     if not 0.0 <= config.min_unique_token_ratio <= 1.0:
         raise ValueError("min_unique_token_ratio must be in [0, 1]")
+    if config.dedupe_normalized_min_chars < 0:
+        raise ValueError("dedupe_normalized_min_chars must be >= 0")
     if config.max_lines_per_file < 0:
         raise ValueError("max_lines_per_file must be >= 0")
     if config.english_min_words < 0:
@@ -514,9 +554,12 @@ def clean_corpora_batch(
         raise ValueError("code_symbol_ratio_threshold must be in [0, 1]")
     if config.code_keyword_hits_threshold < 0:
         raise ValueError("code_keyword_hits_threshold must be >= 0")
+    if config.drop_contamination and not config.contamination_patterns:
+        raise ValueError("contamination_patterns must not be empty")
 
     output_dir.mkdir(parents=True, exist_ok=True)
     boilerplate_lines = boilerplate_lines or set()
+    contamination_patterns = _compile_contamination_patterns(config)
 
     global_seen: set[str] = set()
     files: list[dict[str, Any]] = []
@@ -536,6 +579,7 @@ def clean_corpora_batch(
         "removed_boilerplate": 0,
         "removed_non_english": 0,
         "removed_code_like": 0,
+        "removed_contamination": 0,
         "removed_duplicate_within": 0,
         "removed_duplicate_global": 0,
         "files_skipped_existing": 0,
@@ -569,6 +613,7 @@ def clean_corpora_batch(
             "boilerplate": 0,
             "non_english": 0,
             "code_like": 0,
+            "contamination": 0,
             "duplicate_within": 0,
             "duplicate_global": 0,
         }
@@ -630,6 +675,11 @@ def clean_corpora_batch(
                     totals["removed_code_like"] += 1
                     continue
 
+                if _is_contaminated_line(line, contamination_patterns):
+                    removed["contamination"] += 1
+                    totals["removed_contamination"] += 1
+                    continue
+
                 if _symbol_ratio(line) > config.max_symbol_ratio:
                     removed["high_symbol"] += 1
                     totals["removed_high_symbol"] += 1
@@ -645,7 +695,10 @@ def clean_corpora_batch(
                     totals["removed_too_few_words"] += 1
                     continue
 
-                digest = hashlib.blake2b(line.encode("utf-8"), digest_size=16).hexdigest()
+                dedupe_line = line
+                if config.dedupe_normalized and len(line) >= config.dedupe_normalized_min_chars:
+                    dedupe_line = _canonicalize_for_dedupe(line)
+                digest = hashlib.blake2b(dedupe_line.encode("utf-8"), digest_size=16).hexdigest()
                 if config.dedupe_within_file and digest in within_seen:
                     removed["duplicate_within"] += 1
                     totals["removed_duplicate_within"] += 1
@@ -689,6 +742,8 @@ def clean_corpora_batch(
             "min_unique_token_ratio": config.min_unique_token_ratio,
             "dedupe_within_file": config.dedupe_within_file,
             "dedupe_global": config.dedupe_global,
+            "dedupe_normalized": config.dedupe_normalized,
+            "dedupe_normalized_min_chars": config.dedupe_normalized_min_chars,
             "max_lines_per_file": config.max_lines_per_file,
             "skip_existing": config.skip_existing,
             "output_suffix": config.output_suffix,
@@ -708,6 +763,8 @@ def clean_corpora_batch(
             "drop_code_like": config.drop_code_like,
             "code_symbol_ratio_threshold": config.code_symbol_ratio_threshold,
             "code_keyword_hits_threshold": config.code_keyword_hits_threshold,
+            "drop_contamination": config.drop_contamination,
+            "contamination_patterns_count": len(config.contamination_patterns),
         },
     }
 

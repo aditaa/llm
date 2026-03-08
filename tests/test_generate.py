@@ -113,6 +113,54 @@ class GenerateTests(unittest.TestCase):
                     )
                 )
 
+    def test_run_generation_use_ema_state(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            tokenizer_path = tmp_path / "vocab.json"
+            tokenizer = BPETokenizer.train_from_iterator(
+                ["hello world\nhello generation\n"],
+                vocab_size=256,
+                min_frequency=1,
+            )
+            tokenizer.save(tokenizer_path)
+
+            model_config = ModelConfig(
+                vocab_size=tokenizer.vocab_size,
+                max_seq_len=32,
+                n_layers=1,
+                n_heads=1,
+                d_model=32,
+                dropout=0.0,
+            )
+            model = GPTModel(model_config)
+            checkpoint_path = tmp_path / "ckpt.pt"
+            torch.save(
+                {
+                    "step": 0,
+                    "model_state": model.state_dict(),
+                    "ema_state": model.state_dict(),
+                    "optimizer_state": {},
+                    "model_config": model_config.to_dict(),
+                    "tokenizer_path": str(tokenizer_path),
+                },
+                checkpoint_path,
+            )
+
+            result = run_generation(
+                GenerateConfig(
+                    checkpoint_path=checkpoint_path,
+                    prompt="he",
+                    max_new_tokens=8,
+                    temperature=1.0,
+                    top_k=0,
+                    device="cpu",
+                    seed=7,
+                    use_ema=True,
+                )
+            )
+
+        self.assertEqual(result["state_key"], "ema_state")
+
 
 if __name__ == "__main__":
     unittest.main()

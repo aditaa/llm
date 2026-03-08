@@ -337,6 +337,64 @@ class CorpusCleaningTests(unittest.TestCase):
             self.assertEqual(out_lines, [valid])
             self.assertEqual(report["totals"]["removed_url_heavy"], 1)
 
+    def test_clean_corpora_batch_uses_normalized_dedupe_keys(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            input_dir = root / "input"
+            output_dir = root / "output"
+            input_dir.mkdir(parents=True, exist_ok=True)
+
+            line_a = "How to tune Linux kernel networking buffers for throughput?"
+            line_b = "how to tune linux kernel networking buffers for throughput"
+            (input_dir / "a.txt").write_text("\n".join([line_a, line_b]) + "\n", encoding="utf-8")
+
+            report = clean_corpora_batch(
+                input_files=[input_dir / "a.txt"],
+                output_dir=output_dir,
+                config=CleanCorpusConfig(
+                    min_chars=20,
+                    min_words=6,
+                    dedupe_within_file=True,
+                    dedupe_global=False,
+                    dedupe_normalized=True,
+                    dedupe_normalized_min_chars=20,
+                ),
+                boilerplate_lines=set(),
+            )
+            out_lines = (output_dir / "a.clean.txt").read_text(encoding="utf-8").splitlines()
+            self.assertEqual(out_lines, [line_a])
+            self.assertEqual(report["totals"]["removed_duplicate_within"], 1)
+
+    def test_clean_corpora_batch_drops_contamination_fragments(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            input_dir = root / "input"
+            output_dir = root / "output"
+            input_dir.mkdir(parents=True, exist_ok=True)
+
+            clean = "This article explains practical backup verification steps for Linux servers."
+            contaminated = "As an AI language model, I cannot assist with that request."
+            (input_dir / "a.txt").write_text(
+                "\n".join([clean, contaminated]) + "\n",
+                encoding="utf-8",
+            )
+
+            report = clean_corpora_batch(
+                input_files=[input_dir / "a.txt"],
+                output_dir=output_dir,
+                config=CleanCorpusConfig(
+                    min_chars=20,
+                    min_words=6,
+                    dedupe_within_file=True,
+                    dedupe_global=False,
+                    drop_contamination=True,
+                ),
+                boilerplate_lines=set(),
+            )
+            out_lines = (output_dir / "a.clean.txt").read_text(encoding="utf-8").splitlines()
+            self.assertEqual(out_lines, [clean])
+            self.assertEqual(report["totals"]["removed_contamination"], 1)
+
 
 if __name__ == "__main__":
     unittest.main()

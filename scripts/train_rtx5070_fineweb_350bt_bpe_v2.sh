@@ -26,4 +26,7 @@ PYTHONPATH=src \
   --eval-regression-tolerance 0.20 \
   --log-interval 100 \
   --precision auto \
+  --ema-decay 0.999 \
+  --ema-update-every 1 \
+  --ema-start-step 1000 \
   --export-safetensors

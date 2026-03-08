@@ -57,6 +57,9 @@ class TrainConfig:
     compile_mode: str = "reduce-overhead"
     export_safetensors: bool = False
     safetensors_every_checkpoint: bool = False
+    ema_decay: float = 0.0
+    ema_update_every: int = 1
+    ema_start_step: int = 0
 
     def to_dict(self) -> dict[str, Any]:
         payload = asdict(self)
@@ -433,6 +436,7 @@ def _save_checkpoint(
     lr: float,
     best_val_loss: float | None,
     best_val_ppl: float | None,
+    ema_state: dict[str, Tensor] | None = None,
 ) -> Path:
     output_dir.mkdir(parents=True, exist_ok=True)
     ckpt_path = output_dir / f"ckpt_step_{step:07d}.pt"
@@ -449,6 +453,7 @@ def _save_checkpoint(
         "lr": lr,
         "best_val_loss": best_val_loss,
         "best_val_ppl": best_val_ppl,
+        "ema_state": ema_state,
     }
     torch.save(payload, ckpt_path)
     torch.save(payload, output_dir / "last.pt")
@@ -484,7 +489,39 @@ def _save_checkpoint(
             json.dumps(safe_meta, indent=2),
             encoding="utf-8",
         )
+        if ema_state is not None:
+            ema_state_cpu = {
+                name: tensor.detach().cpu().contiguous()
+                for name, tensor in ema_state.items()
+                if isinstance(tensor, torch.Tensor)
+            }
+            ema_last_safe_path = output_dir / "last_ema.safetensors"
+            save_file(ema_state_cpu, str(ema_last_safe_path))
+            if config.safetensors_every_checkpoint:
+                ema_step_safe_path = output_dir / f"ckpt_step_{step:07d}_ema.safetensors"
+                save_file(ema_state_cpu, str(ema_step_safe_path))
     return ckpt_path
+
+
+def _init_ema_state(model: GPTModel) -> dict[str, Tensor]:
+    state: dict[str, Tensor] = {}
+    for name, tensor in model.state_dict().items():
+        state[name] = tensor.detach().clone()
+    return state
+
+
+def _update_ema_state(ema_state: dict[str, Tensor], model: GPTModel, decay: float) -> None:
+    one_minus = 1.0 - decay
+    with torch.no_grad():
+        for name, tensor in model.state_dict().items():
+            ema_tensor = ema_state.get(name)
+            if ema_tensor is None:
+                ema_state[name] = tensor.detach().clone()
+                continue
+            if torch.is_floating_point(ema_tensor):
+                ema_tensor.mul_(decay).add_(tensor.detach(), alpha=one_minus)
+            else:
+                ema_tensor.copy_(tensor.detach())
 
 
 def run_training(config: TrainConfig) -> dict[str, Any]:
@@ -510,6 +547,12 @@ def run_training(config: TrainConfig) -> dict[str, Any]:
         raise ValueError("eval_regression_tolerance must be >= 0")
     if config.safetensors_every_checkpoint and not config.export_safetensors:
         raise ValueError("safetensors_every_checkpoint requires export_safetensors")
+    if not 0.0 <= config.ema_decay < 1.0:
+        raise ValueError("ema_decay must be in [0, 1)")
+    if config.ema_update_every <= 0:
+        raise ValueError("ema_update_every must be > 0")
+    if config.ema_start_step < 0:
+        raise ValueError("ema_start_step must be >= 0")
 
     random.seed(config.seed)
     np.random.seed(config.seed)
@@ -542,6 +585,7 @@ def run_training(config: TrainConfig) -> dict[str, Any]:
     start_step = 0
     best_val_loss: float | None = None
     best_val_ppl: float | None = None
+    ema_state: dict[str, Tensor] | None = None
     resume_checkpoint: dict[str, Any] | None = None
     if config.resume_from is not None:
         resume_checkpoint = torch.load(config.resume_from, map_location=device)
@@ -577,6 +621,18 @@ def run_training(config: TrainConfig) -> dict[str, Any]:
             best_val_loss = float(best_val_loss_raw)
         if isinstance(best_val_ppl_raw, (int, float)):
             best_val_ppl = float(best_val_ppl_raw)
+        if config.ema_decay > 0.0:
+            resume_ema_state = resume_checkpoint.get("ema_state")
+            if isinstance(resume_ema_state, dict):
+                typed_ema: dict[str, Tensor] = {}
+                for key, value in resume_ema_state.items():
+                    if isinstance(key, str) and isinstance(value, torch.Tensor):
+                        typed_ema[key] = value
+                if typed_ema:
+                    ema_state = typed_ema
+
+    if config.ema_decay > 0.0 and ema_state is None:
+        ema_state = _init_ema_state(model)
 
     train_model: torch.nn.Module = model
     if config.compile_model:
@@ -644,6 +700,11 @@ def run_training(config: TrainConfig) -> dict[str, Any]:
     if config.export_safetensors:
         print("export_safetensors=1")
         print(f"safetensors_every_checkpoint={int(config.safetensors_every_checkpoint)}")
+    print(f"ema_enabled={int(config.ema_decay > 0.0)}")
+    if config.ema_decay > 0.0:
+        print(f"ema_decay={config.ema_decay}")
+        print(f"ema_update_every={config.ema_update_every}")
+        print(f"ema_start_step={config.ema_start_step}")
 
     autocast_kwargs: dict[str, Any] = {"device_type": device.type, "enabled": amp_enabled}
     if amp_dtype is not None:
@@ -685,6 +746,13 @@ def run_training(config: TrainConfig) -> dict[str, Any]:
         else:
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=config.grad_clip)
             optimizer.step()
+
+        if (
+            ema_state is not None
+            and step >= config.ema_start_step
+            and (step % config.ema_update_every) == 0
+        ):
+            _update_ema_state(ema_state, model, config.ema_decay)
 
         train_loss = sum(micro_losses) / len(micro_losses)
         if step == 1 or step % config.log_interval == 0:
@@ -729,6 +797,7 @@ def run_training(config: TrainConfig) -> dict[str, Any]:
                 lr=lr,
                 best_val_loss=best_val_loss,
                 best_val_ppl=best_val_ppl,
+                ema_state=ema_state,
             )
             print(
                 f"step={step} val_loss={val_loss:.6f} val_ppl={val_ppl:.4f} "
@@ -754,4 +823,5 @@ def run_training(config: TrainConfig) -> dict[str, Any]:
         "tokenizer_contract_hash": info.tokenizer_contract_hash,
         "best_val_loss": best_val_loss,
         "best_val_ppl": best_val_ppl,
+        "ema_enabled": bool(config.ema_decay > 0.0),
     }

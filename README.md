@@ -50,6 +50,7 @@ make smoke       # tiny CLI smoke check
 make verify-shards # print shard integrity check usage
 make train       # print baseline training command usage
 make generate    # print checkpoint text-generation command usage
+make average-checkpoints # print checkpoint averaging usage
 make eval-checkpoint # print standardized prompt-suite eval usage
 make train-tokenizer-global # print shared-tokenizer command usage
 make corpus-quality-report # print quality report command usage
@@ -158,8 +159,12 @@ Additional quality guards are enabled by default:
 - symbol-density filter (`--max-symbol-ratio`, default `0.20`)
 - URL-heavy line filter (`--max-urls-per-line`, default `1`)
 - repetitive-token noise filter (`--repeated-token-run-threshold`, default `8`)
+- normalized dedupe keys across punctuation/case variants (`--no-dedupe-normalized` to disable)
+- contamination filter for benchmark/prompt/refusal fragments (`--no-drop-contamination` to disable)
 For talking-only passes, keep code filtering enabled (default) or tune with:
 `--code-symbol-ratio-threshold` and `--code-keyword-hits-threshold`.
+You can extend contamination filtering with repeatable `--contamination-pattern` or
+`--contamination-patterns-file`.
 
 3a. Pull a bounded Hugging Face dataset slice (for example FineWeb sample rows):
 ```bash
@@ -350,6 +355,7 @@ Training now supports:
 - gradient accumulation (`--grad-accum-steps`)
 - fixed held-out eval batches (`--no-eval-freeze-batches` to disable)
 - eval regression gate (`--fail-on-eval-regression --eval-regression-tolerance 0.20`)
+- optional EMA weights (`--ema-decay`, `--ema-update-every`, `--ema-start-step`)
 - optional weights-only export (`--export-safetensors`)
 
 9. Generate text from a checkpoint:
@@ -360,6 +366,16 @@ PYTHONPATH=src .venv/bin/python -m llm.cli generate \
   --max-new-tokens 200 \
   --temperature 0.9 \
   --top-k 50
+```
+Use `--use-ema` to generate from `ema_state` when the checkpoint includes EMA weights.
+
+9a. Average multiple checkpoints for a more stable inference snapshot:
+```bash
+PYTHONPATH=src .venv/bin/python -m llm.cli average-checkpoints \
+  --checkpoint artifacts/checkpoints/medlineplus_baseline/ckpt_step_0001000.pt \
+  --checkpoint artifacts/checkpoints/medlineplus_baseline/ckpt_step_0002000.pt \
+  --output artifacts/checkpoints/medlineplus_baseline/avg_last2.pt \
+  --state-key model_state
 ```
 
 10. Run standardized checkpoint eval (fixed prompt suite + scored report):

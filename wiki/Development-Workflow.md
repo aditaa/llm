@@ -53,6 +53,27 @@ PYTHONPATH=src .venv/bin/python scripts/eval_checkpoint_prompts.py \
 This writes scored JSON reports to `artifacts/reports/evals/` for run-to-run comparison,
 including regression deltas and promotion verdict fields.
 
+## EMA and Checkpoint Smoothing
+For longer runs, enable EMA in training and optionally evaluate/generate from EMA weights:
+
+```bash
+PYTHONPATH=src .venv/bin/python -m llm.cli train \
+  --shards-path data/shards_global/fineweb-global-bpe-v1 \
+  --output-dir artifacts/checkpoints/<run> \
+  --ema-decay 0.999 \
+  --ema-start-step 1000
+```
+
+Merge adjacent checkpoints into one smoother snapshot:
+
+```bash
+PYTHONPATH=src .venv/bin/python -m llm.cli average-checkpoints \
+  --checkpoint artifacts/checkpoints/<run>/ckpt_step_0001000.pt \
+  --checkpoint artifacts/checkpoints/<run>/ckpt_step_0002000.pt \
+  --output artifacts/checkpoints/<run>/avg_last2.pt \
+  --state-key model_state
+```
+
 ## Wiki Maintenance
 When docs change in repo:
 1. Update pages in `wiki/`.

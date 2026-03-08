@@ -33,6 +33,12 @@ Shared tokenizer workflow for multi-dataset training:
 PYTHONPATH=src .venv/bin/python -m llm.cli train-tokenizer-global --input-dir data/cleaned --pattern "*.clean.txt" --from-shards-path data/shards --output artifacts/tokenizer/global-bpe-v1.json --bpe-vocab-size 32000 --bpe-min-frequency 2
 PYTHONPATH=src .venv/bin/python -m llm.cli shard-corpus-batch --input-dir data/cleaned --pattern "*.clean.txt" --from-shards-path data/shards --tokenizer artifacts/tokenizer/global-bpe-v1.json --output-root data/shards_global/global-bpe-v1
 PYTHONPATH=src .venv/bin/python -m llm.cli train --shards-path data/shards_global/global-bpe-v1 --output-dir artifacts/checkpoints/global-bpe-v1
+```
+
+Cleaning defaults now include:
+- normalized dedupe across punctuation/case variants (disable with `--no-dedupe-normalized`)
+- contamination filtering for benchmark/prompt/refusal fragments (disable with `--no-drop-contamination`)
+- extendable contamination regexes via `--contamination-pattern` or `--contamination-patterns-file`
 
 Throughput tuning notes:
 - Prefer `--precision auto` on CUDA.
@@ -41,8 +47,8 @@ Throughput tuning notes:
 - Use `--grad-accum-steps` to trade throughput for lower peak VRAM.
 - Keep held-out eval batches frozen (default) and optionally gate regressions with
   `--fail-on-eval-regression --eval-regression-tolerance 0.20`.
+- Enable EMA for long runs with `--ema-decay 0.999 --ema-start-step <warmup_end>`.
 - If utilization is bursty, test `--compile-model --compile-mode reduce-overhead`.
-```
 
 Direct FineWeb parquet to shards:
 ```bash
@@ -116,6 +122,15 @@ Trend outputs:
 The supervisor eval step now auto-selects the latest successful eval report as
 baseline, compares deltas (pass/check/score), and applies
 `configs/eval/promotion_policy_v1.json` when present.
+
+Checkpoint smoothing after training/eval:
+```bash
+PYTHONPATH=src .venv/bin/python -m llm.cli average-checkpoints \
+  --checkpoint artifacts/checkpoints/fineweb-350bt-run1/ckpt_step_0002000.pt \
+  --checkpoint artifacts/checkpoints/fineweb-350bt-run1/ckpt_step_0003000.pt \
+  --output artifacts/checkpoints/fineweb-350bt-run1/avg_last2.pt \
+  --state-key model_state
+```
 
 Combined ETA/status reporter:
 ```bash

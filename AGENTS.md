@@ -26,6 +26,7 @@ Use the `Makefile` as the source of truth:
 - `make verify-shards`: usage helper for shard integrity verification
 - `make train`: usage helper for baseline GPT training
 - `make generate`: usage helper for checkpoint text generation
+- `make average-checkpoints`: usage helper for checkpoint weight averaging
 - `make eval-checkpoint`: usage helper for standardized checkpoint prompt-suite eval
 - `make train-tokenizer-global`: usage helper for shared tokenizer training
 - `make corpus-quality-report`: usage helper for corpus quality scan
@@ -104,6 +105,7 @@ Keep PR scope narrow; split refactors and features into separate PRs.
 - Prefer `clean-corpus-batch --en-only` for first-pass talking runs
 - For talking-only runs, keep `clean-corpus-batch` code-like filtering enabled (default)
 - Cleanup defaults also enforce min words, URL density, symbol density, and repetitive-token filters
+- Cleanup defaults also apply normalized dedupe keys and contamination filtering; tune with `--no-dedupe-normalized`, `--no-drop-contamination`, `--contamination-pattern`, and `--contamination-patterns-file`
 - Use `bash scripts/sync_warm_storage.sh /mnt/ceph/llm/data` to copy local artifacts to warm storage
 - `sync_warm_storage.sh` covers raw + training data: `data/raw_zim`, `data/fineweb`, `data/cleaned`, `data/extracted`, `data/shards`, `data/shards_global`, `artifacts/tokenizer`, `artifacts/checkpoints`, `artifacts/reports`
 - Use `bash scripts/zim_offload_worker.sh data/raw_zim /mnt/ceph/llm/data/raw_zim 120` for continuous hot->warm raw ZIM offload
@@ -137,8 +139,10 @@ Keep PR scope narrow; split refactors and features into separate PRs.
 - Default training architecture is `gpt_rope_rmsnorm_swiglu_v1`; use legacy profile only for old checkpoint compatibility
 - Prefer `llm.cli train --lr-schedule cosine --lr-warmup-steps <N>` for stable first-pass runs
 - Use `--grad-accum-steps` when VRAM is tight and you need higher effective batch
+- Use EMA for long runs with `--ema-decay 0.999 --ema-start-step <warmup_end>` and generate with `--use-ema` when present
 - Keep held-out eval batches frozen (default) and enable regression gating with `--fail-on-eval-regression`
 - Optimizer uses no-weight-decay groups for norms/biases/embeddings by default
+- For post-run smoothing, merge several checkpoints with `llm.cli average-checkpoints --state-key model_state` (or `ema_state`)
 - For deploy bundles, export weights-only safetensors via `llm.cli train --export-safetensors` or `hf_prepare_and_publish_model.py --include-safetensors`
 - RTX 5070 tuned training profiles live in `configs/train/rtx5070/`; preferred 350BT launchers: `bash scripts/lr_sweep_rtx5070_fineweb_350bt_ctx512.sh` then `bash scripts/train_rtx5070_fineweb_350bt_bpe_v2.sh`
 - Version extracted/tokenized/sharded outputs with the ZIM date stamp (for example `serverfault_2025-08`)

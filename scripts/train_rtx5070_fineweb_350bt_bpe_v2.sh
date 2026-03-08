@@ -26,6 +26,8 @@ PYTHONPATH=src \
   --eval-regression-tolerance 0.20 \
   --log-interval 100 \
   --precision auto \
+  --checkpoint-keep-last 6 \
+  --checkpoint-keep-every 10000 \
   --ema-decay 0.999 \
   --ema-update-every 1 \
   --ema-start-step 1000 \

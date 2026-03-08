@@ -32,6 +32,8 @@ EVAL_INTERVAL=1000
 EVAL_STEPS=6
 LOG_INTERVAL=100
 PRECISION="auto"
+CHECKPOINT_KEEP_LAST=6
+CHECKPOINT_KEEP_EVERY=10000
 EMA_DECAY="0.0"
 EMA_UPDATE_EVERY=1
 EMA_START_STEP=0
@@ -90,6 +92,8 @@ Training shape:
   --eval-steps N               Train-loop eval steps (default: 6)
   --log-interval N             Train log interval (default: 100)
   --precision MODE             Precision mode (default: auto)
+  --checkpoint-keep-last N     Keep last N step checkpoints (default: 6)
+  --checkpoint-keep-every N    Keep every Nth checkpoint step (default: 10000)
   --ema-decay X                EMA decay for model weights (default: 0.0 disabled)
   --ema-update-every N         EMA update interval in optimizer steps (default: 1)
   --ema-start-step N           First optimizer step to apply EMA updates (default: 0)
@@ -106,7 +110,7 @@ Auto-tune options:
 
 Post-chunk eval:
   --no-eval-after-chunk        Disable checkpoint prompt-suite eval after each successful chunk
-  --eval-suite FILE            Eval suite JSON (default: configs/eval/standard_prompt_suite_v1.json)
+  --eval-suite FILE            Eval suite JSON (default: configs/eval/standard_prompt_suite_v2.json)
   --eval-max-new-tokens N      Eval max new tokens per case (default: 120)
   --eval-temperature X         Eval sampling temperature (default: 0.2)
   --eval-top-k N               Eval top-k (default: 0)
@@ -154,6 +158,8 @@ while [[ $# -gt 0 ]]; do
     --eval-steps) EVAL_STEPS="$2"; shift 2 ;;
     --log-interval) LOG_INTERVAL="$2"; shift 2 ;;
     --precision) PRECISION="$2"; shift 2 ;;
+    --checkpoint-keep-last) CHECKPOINT_KEEP_LAST="$2"; shift 2 ;;
+    --checkpoint-keep-every) CHECKPOINT_KEEP_EVERY="$2"; shift 2 ;;
     --ema-decay) EMA_DECAY="$2"; shift 2 ;;
     --ema-update-every) EMA_UPDATE_EVERY="$2"; shift 2 ;;
     --ema-start-step) EMA_START_STEP="$2"; shift 2 ;;
@@ -209,6 +215,10 @@ if [[ "$BATCH_SIZE" -le 0 || "$GRAD_ACCUM_STEPS" -le 0 ]]; then
   echo "error: batch-size and grad-accum-steps must be > 0" >&2
   exit 1
 fi
+if [[ "$CHECKPOINT_KEEP_LAST" -lt 0 || "$CHECKPOINT_KEEP_EVERY" -lt 0 ]]; then
+  echo "error: checkpoint retention values must be >= 0" >&2
+  exit 1
+fi
 
 mkdir -p "$OUTPUT_DIR" "$STATE_DIR" artifacts/reports/evals
 
@@ -259,18 +269,81 @@ clamp_batch_size() {
   fi
 }
 
-current_step() {
-  local ckpt="$OUTPUT_DIR/last.pt"
-  if [[ ! -f "$ckpt" ]]; then
-    echo "0"
-    return 0
-  fi
+checkpoint_step() {
+  local ckpt="$1"
   "$PYTHON_BIN" - <<'PY' "$ckpt"
 import sys
 import torch
-ckpt = torch.load(sys.argv[1], map_location="cpu")
-print(int(ckpt.get("step", 0)))
+obj = torch.load(sys.argv[1], map_location="cpu")
+step = obj.get("step")
+if not isinstance(step, int):
+    raise SystemExit(2)
+print(step)
 PY
+}
+
+checkpoint_is_valid_for_resume() {
+  local ckpt="$1"
+  "$PYTHON_BIN" - <<'PY' "$ckpt"
+import sys
+import torch
+obj = torch.load(sys.argv[1], map_location="cpu")
+required = ["step", "model_state", "optimizer_state", "model_config", "tokenizer_path"]
+for key in required:
+    if key not in obj:
+        raise SystemExit(2)
+if not isinstance(obj.get("step"), int):
+    raise SystemExit(2)
+if not isinstance(obj.get("model_state"), dict):
+    raise SystemExit(2)
+if not isinstance(obj.get("optimizer_state"), dict):
+    raise SystemExit(2)
+if not isinstance(obj.get("model_config"), dict):
+    raise SystemExit(2)
+if not isinstance(obj.get("tokenizer_path"), str):
+    raise SystemExit(2)
+print("ok")
+PY
+}
+
+quarantine_bad_checkpoint() {
+  local ckpt="$1"
+  local reason="$2"
+  if [[ ! -f "$ckpt" ]]; then
+    return 0
+  fi
+  local ts
+  ts="$(date +%Y%m%d_%H%M%S)"
+  local bad_path="${ckpt}.bad_${ts}"
+  mv "$ckpt" "$bad_path"
+  log "checkpoint_quarantined reason=$reason old=$ckpt new=$bad_path"
+}
+
+select_resume_checkpoint() {
+  local candidates=()
+  if [[ -f "$OUTPUT_DIR/last.pt" ]]; then
+    candidates+=("$OUTPUT_DIR/last.pt")
+  fi
+  while IFS= read -r path; do
+    candidates+=("$path")
+  done < <(find "$OUTPUT_DIR" -maxdepth 1 -type f -name 'ckpt_step_*.pt' | sort -r)
+
+  local ckpt
+  for ckpt in "${candidates[@]}"; do
+    if checkpoint_is_valid_for_resume "$ckpt" >/dev/null 2>&1; then
+      echo "$ckpt"
+      return 0
+    fi
+    quarantine_bad_checkpoint "$ckpt" "invalid_resume"
+  done
+  echo ""
+}
+
+log_has_resume_checkpoint_error() {
+  local run_log="$1"
+  grep -Eqi \
+    "pytorchstreamreader|failed finding central directory|pickle data was truncated|unexpected eof|zip archive|invalid load key|optimizer_state|resume checkpoint|load_state_dict" \
+    "$run_log"
 }
 
 manifest_count() {
@@ -470,7 +543,7 @@ fi
 
 failure_streak=0
 log "supervisor_start shards_path=$SHARDS_PATH output_dir=$OUTPUT_DIR step_chunk=$STEP_CHUNK"
-log "tuning_start batch_size=$BATCH_SIZE grad_accum=$GRAD_ACCUM_STEPS auto_tune=$AUTO_TUNE target_effective_batch=$TARGET_EFFECTIVE_BATCH ema_decay=$EMA_DECAY ema_update_every=$EMA_UPDATE_EVERY ema_start_step=$EMA_START_STEP"
+log "tuning_start batch_size=$BATCH_SIZE grad_accum=$GRAD_ACCUM_STEPS auto_tune=$AUTO_TUNE target_effective_batch=$TARGET_EFFECTIVE_BATCH checkpoint_keep_last=$CHECKPOINT_KEEP_LAST checkpoint_keep_every=$CHECKPOINT_KEEP_EVERY ema_decay=$EMA_DECAY ema_update_every=$EMA_UPDATE_EVERY ema_start_step=$EMA_START_STEP"
 
 while true; do
   mcount="$(manifest_count)"
@@ -480,17 +553,22 @@ while true; do
     continue
   fi
 
-  step_now="$(current_step)"
+  resume_ckpt="$(select_resume_checkpoint)"
+  if [[ -n "$resume_ckpt" ]]; then
+    step_now="$(checkpoint_step "$resume_ckpt" || echo 0)"
+  else
+    step_now="0"
+  fi
   target_step=$((step_now + STEP_CHUNK))
   run_tag="$(date +%Y%m%d_%H%M%S)"
   run_log="$STATE_DIR/train_${step_now}_to_${target_step}_${run_tag}.log"
   gpu_log="$STATE_DIR/gpu_${step_now}_to_${target_step}_${run_tag}.csv"
   resume_args=()
-  if [[ -f "$OUTPUT_DIR/last.pt" ]]; then
-    resume_args=(--resume-from "$OUTPUT_DIR/last.pt")
+  if [[ -n "$resume_ckpt" ]]; then
+    resume_args=(--resume-from "$resume_ckpt")
   fi
 
-  log "train_launch manifests=$mcount step_now=$step_now target_step=$target_step batch_size=$BATCH_SIZE grad_accum=$GRAD_ACCUM_STEPS run_log=$run_log"
+  log "train_launch manifests=$mcount step_now=$step_now target_step=$target_step batch_size=$BATCH_SIZE grad_accum=$GRAD_ACCUM_STEPS resume=${resume_ckpt:-none} run_log=$run_log"
 
   set +e
   (
@@ -517,6 +595,8 @@ while true; do
       --eval-regression-tolerance 0.20 \
       --log-interval "$LOG_INTERVAL" \
       --precision "$PRECISION" \
+      --checkpoint-keep-last "$CHECKPOINT_KEEP_LAST" \
+      --checkpoint-keep-every "$CHECKPOINT_KEEP_EVERY" \
       --ema-decay "$EMA_DECAY" \
       --ema-update-every "$EMA_UPDATE_EVERY" \
       --ema-start-step "$EMA_START_STEP" \
@@ -533,7 +613,12 @@ while true; do
   fi
   set -e
 
-  new_step="$(current_step)"
+  new_resume_ckpt="$(select_resume_checkpoint)"
+  if [[ -n "$new_resume_ckpt" ]]; then
+    new_step="$(checkpoint_step "$new_resume_ckpt" || echo 0)"
+  else
+    new_step="0"
+  fi
   best_val_ppl="$(best_val_ppl_from_log "$run_log")"
   read -r gpu_avg_util gpu_max_mem < <(gpu_summary "$gpu_log")
   echo -e "${run_tag}\t${step_now}\t${target_step}\t${new_step}\t${rc}\t${mcount}\t${BATCH_SIZE}\t${GRAD_ACCUM_STEPS}\t${best_val_ppl}\t${gpu_avg_util}\t${gpu_max_mem}\t${run_log}" >> "$TRAIN_TREND_TSV"
@@ -543,6 +628,9 @@ while true; do
     log "train_done rc=0 step_now=$new_step best_val_ppl=$best_val_ppl gpu_avg_util=$gpu_avg_util gpu_max_mem=$gpu_max_mem"
     run_post_chunk_eval "$run_tag" "$new_step"
   else
+    if [[ -n "$resume_ckpt" ]] && log_has_resume_checkpoint_error "$run_log"; then
+      quarantine_bad_checkpoint "$resume_ckpt" "resume_failure"
+    fi
     failure_streak=$((failure_streak + 1))
     log "train_failed rc=$rc failure_streak=$failure_streak best_val_ppl=$best_val_ppl gpu_avg_util=$gpu_avg_util gpu_max_mem=$gpu_max_mem"
     if [[ "$MAX_FAILURE_STREAK" -gt 0 && "$failure_streak" -ge "$MAX_FAILURE_STREAK" ]]; then

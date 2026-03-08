@@ -570,6 +570,8 @@ def cmd_train(
     compile_mode: str,
     export_safetensors: bool,
     safetensors_every_checkpoint: bool,
+    checkpoint_keep_last: int,
+    checkpoint_keep_every: int,
     ema_decay: float,
     ema_update_every: int,
     ema_start_step: int,
@@ -613,6 +615,8 @@ def cmd_train(
         compile_mode=compile_mode,
         export_safetensors=export_safetensors,
         safetensors_every_checkpoint=safetensors_every_checkpoint,
+        checkpoint_keep_last=checkpoint_keep_last,
+        checkpoint_keep_every=checkpoint_keep_every,
         ema_decay=ema_decay,
         ema_update_every=ema_update_every,
         ema_start_step=ema_start_step,
@@ -1351,6 +1355,18 @@ def parse_args() -> argparse.Namespace:
         help="Also export step-specific ckpt_step_*.safetensors files",
     )
     train_parser.add_argument(
+        "--checkpoint-keep-last",
+        type=int,
+        default=0,
+        help="Keep only last N step checkpoints (0 disables pruning by this rule)",
+    )
+    train_parser.add_argument(
+        "--checkpoint-keep-every",
+        type=int,
+        default=0,
+        help="Also keep checkpoints every N steps (0 disables this keep rule)",
+    )
+    train_parser.add_argument(
         "--ema-decay",
         type=float,
         default=0.0,
@@ -1613,6 +1629,8 @@ def main() -> int:
             compile_mode=args.compile_mode,
             export_safetensors=args.export_safetensors,
             safetensors_every_checkpoint=args.safetensors_every_checkpoint,
+            checkpoint_keep_last=args.checkpoint_keep_last,
+            checkpoint_keep_every=args.checkpoint_keep_every,
             ema_decay=args.ema_decay,
             ema_update_every=args.ema_update_every,
             ema_start_step=args.ema_start_step,

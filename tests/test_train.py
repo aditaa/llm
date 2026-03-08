@@ -10,8 +10,10 @@ try:
     from llm.tokenizer import BPETokenizer, tokenizer_contract_fingerprint, tokenizer_fingerprint
     from llm.train import (
         ShardBatchSampler,
+        _compute_keep_steps,
         _init_ema_state,
         _lr_for_step,
+        _prune_old_checkpoints,
         _resolve_amp_mode,
         _update_ema_state,
         collect_shard_training_info,
@@ -22,8 +24,10 @@ except ModuleNotFoundError:
     tokenizer_contract_fingerprint = None
     tokenizer_fingerprint = None
     ShardBatchSampler = None
+    _compute_keep_steps = None
     _init_ema_state = None
     _lr_for_step = None
+    _prune_old_checkpoints = None
     _resolve_amp_mode = None
     _update_ema_state = None
     collect_shard_training_info = None
@@ -200,6 +204,42 @@ class TrainDataTests(unittest.TestCase):
         _update_ema_state(ema_state, model, decay=0.5)
         expected = torch.full_like(model.weight, 2.0)
         self.assertTrue(torch.allclose(ema_state["weight"], expected))
+
+    def test_compute_keep_steps(self) -> None:
+        keep = _compute_keep_steps(
+            all_steps=[100, 200, 300, 400, 500],
+            current_step=500,
+            keep_last=2,
+            keep_every=300,
+        )
+        self.assertEqual(keep, {300, 400, 500})
+
+    def test_prune_old_checkpoints(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            for step in [100, 200, 300, 400, 500]:
+                (root / f"ckpt_step_{step:07d}.pt").write_bytes(b"x")
+                (root / f"ckpt_step_{step:07d}.safetensors").write_bytes(b"x")
+                (root / f"ckpt_step_{step:07d}_ema.safetensors").write_bytes(b"x")
+
+            _prune_old_checkpoints(
+                output_dir=root,
+                current_step=500,
+                keep_last=2,
+                keep_every=300,
+            )
+
+            remaining = sorted(p.name for p in root.glob("ckpt_step_*.pt"))
+            self.assertEqual(
+                remaining,
+                [
+                    "ckpt_step_0000300.pt",
+                    "ckpt_step_0000400.pt",
+                    "ckpt_step_0000500.pt",
+                ],
+            )
+            self.assertFalse((root / "ckpt_step_0000100.safetensors").exists())
+            self.assertFalse((root / "ckpt_step_0000100_ema.safetensors").exists())
 
 
 if __name__ == "__main__":

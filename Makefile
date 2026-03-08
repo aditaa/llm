@@ -94,7 +94,7 @@ train-350bt-v2:
 
 train-supervisor-350bt:
 	@echo "Usage:"
-	@echo "  bash scripts/train_supervisor_rtx5070_350bt.sh --step-chunk 2000 --poll-seconds 60 --batch-size 12 --target-effective-batch 24 --min-batch-size 6 --max-batch-size 20 --batch-step 2"
+	@echo "  bash scripts/train_supervisor_rtx5070_350bt.sh --step-chunk 2000 --poll-seconds 60 --batch-size 12 --target-effective-batch 24 --min-batch-size 6 --max-batch-size 20 --batch-step 2 --checkpoint-keep-last 6 --checkpoint-keep-every 10000"
 
 pipeline-eta:
 	@echo "Usage:"
@@ -115,7 +115,7 @@ verify-shards:
 
 train:
 	@echo "Usage:"
-	@echo "  PYTHONPATH=src $(PYTHON) -m llm.cli train --shards-path data/shards/<dataset> --output-dir artifacts/checkpoints/<run_name> --lr-schedule cosine --lr-warmup-steps 200 --grad-accum-steps 1 --fail-on-eval-regression"
+	@echo "  PYTHONPATH=src $(PYTHON) -m llm.cli train --shards-path data/shards/<dataset> --output-dir artifacts/checkpoints/<run_name> --lr-schedule cosine --lr-warmup-steps 200 --grad-accum-steps 1 --checkpoint-keep-last 6 --checkpoint-keep-every 10000 --fail-on-eval-regression"
 
 generate:
 	@echo "Usage:"

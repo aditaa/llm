@@ -57,6 +57,8 @@ class TrainConfig:
     compile_mode: str = "reduce-overhead"
     export_safetensors: bool = False
     safetensors_every_checkpoint: bool = False
+    checkpoint_keep_last: int = 0
+    checkpoint_keep_every: int = 0
     ema_decay: float = 0.0
     ema_update_every: int = 1
     ema_start_step: int = 0
@@ -500,6 +502,13 @@ def _save_checkpoint(
             if config.safetensors_every_checkpoint:
                 ema_step_safe_path = output_dir / f"ckpt_step_{step:07d}_ema.safetensors"
                 save_file(ema_state_cpu, str(ema_step_safe_path))
+
+    _prune_old_checkpoints(
+        output_dir=output_dir,
+        current_step=step,
+        keep_last=config.checkpoint_keep_last,
+        keep_every=config.checkpoint_keep_every,
+    )
     return ckpt_path
 
 
@@ -522,6 +531,70 @@ def _update_ema_state(ema_state: dict[str, Tensor], model: GPTModel, decay: floa
                 ema_tensor.mul_(decay).add_(tensor.detach(), alpha=one_minus)
             else:
                 ema_tensor.copy_(tensor.detach())
+
+
+def _parse_checkpoint_step(path: Path) -> int | None:
+    stem = path.stem
+    if not stem.startswith("ckpt_step_"):
+        return None
+    step_raw = stem.replace("ckpt_step_", "", 1).replace("_ema", "")
+    if not step_raw.isdigit():
+        return None
+    return int(step_raw)
+
+
+def _compute_keep_steps(
+    *,
+    all_steps: list[int],
+    current_step: int,
+    keep_last: int,
+    keep_every: int,
+) -> set[int]:
+    keep_steps = {current_step}
+    sorted_steps = sorted(set(all_steps))
+    if keep_last > 0:
+        keep_steps.update(sorted_steps[-keep_last:])
+    if keep_every > 0:
+        keep_steps.update(step for step in sorted_steps if step % keep_every == 0)
+    return keep_steps
+
+
+def _prune_old_checkpoints(
+    *,
+    output_dir: Path,
+    current_step: int,
+    keep_last: int,
+    keep_every: int,
+) -> None:
+    if keep_last <= 0 and keep_every <= 0:
+        return
+    pt_files = sorted(output_dir.glob("ckpt_step_*.pt"))
+    if not pt_files:
+        return
+    step_files: dict[int, list[Path]] = {}
+    for path in pt_files:
+        step = _parse_checkpoint_step(path)
+        if step is None:
+            continue
+        step_files.setdefault(step, []).append(path)
+    if not step_files:
+        return
+
+    keep_steps = _compute_keep_steps(
+        all_steps=list(step_files.keys()),
+        current_step=current_step,
+        keep_last=keep_last,
+        keep_every=keep_every,
+    )
+    for step, files in step_files.items():
+        if step in keep_steps:
+            continue
+        for path in files:
+            path.unlink(missing_ok=True)
+        safe_path = output_dir / f"ckpt_step_{step:07d}.safetensors"
+        safe_ema_path = output_dir / f"ckpt_step_{step:07d}_ema.safetensors"
+        safe_path.unlink(missing_ok=True)
+        safe_ema_path.unlink(missing_ok=True)
 
 
 def run_training(config: TrainConfig) -> dict[str, Any]:
@@ -547,6 +620,10 @@ def run_training(config: TrainConfig) -> dict[str, Any]:
         raise ValueError("eval_regression_tolerance must be >= 0")
     if config.safetensors_every_checkpoint and not config.export_safetensors:
         raise ValueError("safetensors_every_checkpoint requires export_safetensors")
+    if config.checkpoint_keep_last < 0:
+        raise ValueError("checkpoint_keep_last must be >= 0")
+    if config.checkpoint_keep_every < 0:
+        raise ValueError("checkpoint_keep_every must be >= 0")
     if not 0.0 <= config.ema_decay < 1.0:
         raise ValueError("ema_decay must be in [0, 1)")
     if config.ema_update_every <= 0:
@@ -700,6 +777,8 @@ def run_training(config: TrainConfig) -> dict[str, Any]:
     if config.export_safetensors:
         print("export_safetensors=1")
         print(f"safetensors_every_checkpoint={int(config.safetensors_every_checkpoint)}")
+    print(f"checkpoint_keep_last={config.checkpoint_keep_last}")
+    print(f"checkpoint_keep_every={config.checkpoint_keep_every}")
     print(f"ema_enabled={int(config.ema_decay > 0.0)}")
     if config.ema_decay > 0.0:
         print(f"ema_decay={config.ema_decay}")

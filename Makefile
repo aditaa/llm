@@ -78,11 +78,11 @@ stage-fineweb-from-warm:
 
 fineweb-stage-shard-loop:
 	@echo "Usage:"
-	@echo "  bash scripts/fineweb_stage_shard_loop.sh --hot-queue-min-files 8 --stage-max-files 2 --process-max-files 4 --sleep-seconds 60 --shard-min-batch-size 512"
+	@echo "  bash scripts/fineweb_stage_shard_loop.sh --hot-queue-min-files 8 --stage-max-files 2 --process-max-files 4 --shard-jobs 2 --tokenizer-threads 10 --encode-batch-size 1024 --sleep-seconds 60 --shard-min-batch-size 512"
 
 fineweb-hot-queue:
 	@echo "Usage:"
-	@echo "  bash scripts/fineweb_stage_shard_loop.sh --hot-queue-min-files 12 --stage-max-files 3 --process-max-files 4 --sleep-seconds 60"
+	@echo "  bash scripts/fineweb_stage_shard_loop.sh --hot-queue-min-files 12 --stage-max-files 10 --process-max-files 10 --shard-jobs 2 --tokenizer-threads 10 --encode-batch-size 1024 --sleep-seconds 60"
 
 lr-sweep-350bt:
 	@echo "Usage:"

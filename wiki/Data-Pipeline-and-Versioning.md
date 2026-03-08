@@ -61,8 +61,11 @@ Rolling FineWeb 350BT ingestion on limited hot disk:
 ```bash
 bash scripts/fineweb_stage_shard_loop.sh \
   --hot-queue-min-files 8 \
-  --stage-max-files 2 \
-  --process-max-files 4 \
+  --stage-max-files 10 \
+  --process-max-files 10 \
+  --shard-jobs 2 \
+  --tokenizer-threads 10 \
+  --encode-batch-size 1024 \
   --sleep-seconds 60 \
   --shard-min-batch-size 512
 ```
@@ -73,6 +76,7 @@ This loop:
 - syncs shard outputs back to warm storage
 - deletes processed hot parquet files to reclaim local space
 - retries shard builds automatically on OOM-like failures by reducing batch size
+- on 20-core hosts, two shard jobs with tokenizer batch encoding is the current higher-throughput profile
 
 Auto-resume trainer supervisor for growing shard sets:
 ```bash

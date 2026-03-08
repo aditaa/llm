@@ -10,6 +10,9 @@ WARM_ROOT="/mnt/ceph/llm/data"
 
 FIELD="text"
 BATCH_SIZE=8192
+ENCODE_BATCH_SIZE=1024
+TOKENIZER_THREADS=10
+SHARD_JOBS=1
 SHARD_RETRY_ON_OOM=1
 SHARD_MIN_BATCH_SIZE=512
 SHARD_SIZE_TOKENS=5000000
@@ -57,6 +60,9 @@ Options:
 
   --field NAME                Parquet text field (default: text)
   --batch-size N              Parquet read batch size (default: 8192)
+  --encode-batch-size N       Tokenizer encode batch size (default: 1024)
+  --tokenizer-threads N       Tokenizer worker threads via RAYON_NUM_THREADS (default: 10)
+  --shard-jobs N              Parallel shard jobs per batch (default: 1)
   --no-shard-retry-on-oom     Disable automatic shard build retry on OOM/memory errors
   --shard-min-batch-size N    Lower bound for batch-size backoff on OOM (default: 512)
   --shard-size-tokens N       Tokens per output shard (default: 5000000)
@@ -133,6 +139,18 @@ while [[ $# -gt 0 ]]; do
       ;;
     --batch-size)
       BATCH_SIZE="$2"
+      shift 2
+      ;;
+    --encode-batch-size)
+      ENCODE_BATCH_SIZE="$2"
+      shift 2
+      ;;
+    --tokenizer-threads)
+      TOKENIZER_THREADS="$2"
+      shift 2
+      ;;
+    --shard-jobs)
+      SHARD_JOBS="$2"
       shift 2
       ;;
     --no-shard-retry-on-oom)
@@ -298,6 +316,89 @@ sync_batch_to_warm() {
   rsync -ah "$LOG_FILE" "$warm_reports_dir/"
 }
 
+run_shard_job() {
+  local job_id="$1"
+  local files_list="$2"
+  local tok_arg_flag="$3"
+  local tok_arg_path="$4"
+  local report_json="$STATE_DIR/${job_id}.report.json"
+  local output_dir="$SHARDS_ROOT/$job_id"
+
+  if [[ "$DRY_RUN" -eq 1 ]]; then
+    log "dry_run_shard_build id=$job_id output_dir=$output_dir files_list=$files_list"
+    return 0
+  fi
+
+  local shard_batch_size
+  shard_batch_size="$BATCH_SIZE"
+  local shard_attempt=1
+  local shard_rc=0
+  while true; do
+    local shard_attempt_log="$STATE_DIR/${job_id}.shard_attempt_${shard_attempt}.log"
+    log "shard_build_attempt id=$job_id attempt=$shard_attempt batch_size=$shard_batch_size encode_batch_size=$ENCODE_BATCH_SIZE tokenizer_threads=$TOKENIZER_THREADS"
+
+    set +e
+    TOKENIZERS_PARALLELISM=true RAYON_NUM_THREADS="$TOKENIZER_THREADS" PYTHONPATH=src .venv/bin/python scripts/fineweb_parquet_to_shards.py \
+      --input-dir "$HOT_PARQUET_DIR" \
+      --files-list "$files_list" \
+      --output-dir "$output_dir" \
+      "$tok_arg_flag" "$tok_arg_path" \
+      --field "$FIELD" \
+      --batch-size "$shard_batch_size" \
+      --encode-batch-size "$ENCODE_BATCH_SIZE" \
+      --shard-size-tokens "$SHARD_SIZE_TOKENS" \
+      --val-ratio "$VAL_RATIO" \
+      --seed "$SEED" \
+      --min-chars "$MIN_CHARS" \
+      --max-chars "$MAX_CHARS" \
+      --max-rows-per-file "$MAX_ROWS_PER_FILE" \
+      --report-output "$report_json" 2>&1 | tee -a "$LOG_FILE" "$shard_attempt_log"
+    shard_rc=${PIPESTATUS[0]}
+    set -e
+
+    if [[ "$shard_rc" -eq 0 ]]; then
+      break
+    fi
+
+    if [[ "$SHARD_RETRY_ON_OOM" -ne 1 ]]; then
+      log "shard_build_failed id=$job_id attempt=$shard_attempt rc=$shard_rc retry_on_oom=0"
+      return "$shard_rc"
+    fi
+
+    if ! grep -Eqi 'out of memory|memoryerror|arrowmemoryerror|bad_alloc|cannot allocate memory|std::bad_alloc' "$shard_attempt_log"; then
+      log "shard_build_failed id=$job_id attempt=$shard_attempt rc=$shard_rc reason=non_oom_error"
+      return "$shard_rc"
+    fi
+
+    if [[ "$shard_batch_size" -le "$SHARD_MIN_BATCH_SIZE" ]]; then
+      log "shard_build_failed id=$job_id attempt=$shard_attempt rc=$shard_rc reason=min_batch_reached batch_size=$shard_batch_size"
+      return "$shard_rc"
+    fi
+
+    local next_batch_size
+    next_batch_size=$((shard_batch_size / 2))
+    if [[ "$next_batch_size" -lt "$SHARD_MIN_BATCH_SIZE" ]]; then
+      next_batch_size="$SHARD_MIN_BATCH_SIZE"
+    fi
+    if [[ "$next_batch_size" -eq "$shard_batch_size" ]]; then
+      log "shard_build_failed id=$job_id attempt=$shard_attempt rc=$shard_rc reason=no_batch_change_possible batch_size=$shard_batch_size"
+      return "$shard_rc"
+    fi
+
+    log "shard_build_retry id=$job_id from_batch_size=$shard_batch_size to_batch_size=$next_batch_size reason=oom_detected"
+    shard_batch_size="$next_batch_size"
+    shard_attempt=$((shard_attempt + 1))
+  done
+
+  PYTHONPATH=src .venv/bin/python -m llm.cli verify-shards \
+    --path "$output_dir" | tee -a "$LOG_FILE"
+
+  if [[ "$SYNC_TO_WARM" -eq 1 ]]; then
+    sync_batch_to_warm "$output_dir" "$report_json"
+    log "batch_synced id=$job_id warm_shards_root=$warm_shards_root"
+  fi
+}
+
 process_batch() {
   local batch_index="$1"
   shift
@@ -308,15 +409,6 @@ process_batch() {
 
   local batch_id
   batch_id="fw350bt_$(printf '%04d' "$batch_index")_$(date +%Y%m%d_%H%M%S)"
-  local files_list="$STATE_DIR/${batch_id}.files.txt"
-  local report_json="$STATE_DIR/${batch_id}.report.json"
-  local output_dir="$SHARDS_ROOT/$batch_id"
-
-  : > "$files_list"
-  for name in "${files[@]}"; do
-    # Store paths relative to --input-dir so fineweb_parquet_to_shards resolves correctly.
-    printf '%s\n' "$name" >> "$files_list"
-  done
 
   local tok_arg_flag
   local tok_arg_path
@@ -329,77 +421,63 @@ process_batch() {
     mkdir -p "$(dirname "$TOKENIZER_PATH")"
   fi
 
-  log "batch_start id=$batch_id files=${#files[@]} tokenizer_arg=$tok_arg_flag"
+  log "batch_start id=$batch_id files=${#files[@]} tokenizer_arg=$tok_arg_flag shard_jobs=$SHARD_JOBS"
 
-  if [[ "$DRY_RUN" -eq 1 ]]; then
-    log "dry_run_shard_build output_dir=$output_dir files_list=$files_list"
+  local job_count="$SHARD_JOBS"
+  if [[ "$tok_arg_flag" == "--tokenizer-out" && "$job_count" -gt 1 ]]; then
+    log "batch_warn id=$batch_id reason=tokenizer_train_requires_single_job requested_jobs=$job_count forcing_jobs=1"
+    job_count=1
+  fi
+  if [[ "$job_count" -gt "${#files[@]}" ]]; then
+    job_count="${#files[@]}"
+  fi
+
+  if [[ "$job_count" -le 1 ]]; then
+    local files_list="$STATE_DIR/${batch_id}.files.txt"
+    : > "$files_list"
+    for name in "${files[@]}"; do
+      printf '%s\n' "$name" >> "$files_list"
+    done
+    run_shard_job "$batch_id" "$files_list" "$tok_arg_flag" "$tok_arg_path"
   else
-    local shard_batch_size
-    shard_batch_size="$BATCH_SIZE"
-    local shard_attempt=1
-    local shard_rc=0
-    while true; do
-      local shard_attempt_log="$STATE_DIR/${batch_id}.shard_attempt_${shard_attempt}.log"
-      log "shard_build_attempt id=$batch_id attempt=$shard_attempt batch_size=$shard_batch_size"
-
-      set +e
-      PYTHONPATH=src .venv/bin/python scripts/fineweb_parquet_to_shards.py \
-        --input-dir "$HOT_PARQUET_DIR" \
-        --files-list "$files_list" \
-        --output-dir "$output_dir" \
-        "$tok_arg_flag" "$tok_arg_path" \
-        --field "$FIELD" \
-        --batch-size "$shard_batch_size" \
-        --shard-size-tokens "$SHARD_SIZE_TOKENS" \
-        --val-ratio "$VAL_RATIO" \
-        --seed "$SEED" \
-        --min-chars "$MIN_CHARS" \
-        --max-chars "$MAX_CHARS" \
-        --max-rows-per-file "$MAX_ROWS_PER_FILE" \
-        --report-output "$report_json" 2>&1 | tee -a "$LOG_FILE" "$shard_attempt_log"
-      shard_rc=${PIPESTATUS[0]}
-      set -e
-
-      if [[ "$shard_rc" -eq 0 ]]; then
-        break
-      fi
-
-      if [[ "$SHARD_RETRY_ON_OOM" -ne 1 ]]; then
-        log "shard_build_failed id=$batch_id attempt=$shard_attempt rc=$shard_rc retry_on_oom=0"
-        return "$shard_rc"
-      fi
-
-      if ! grep -Eqi 'out of memory|memoryerror|arrowmemoryerror|bad_alloc|cannot allocate memory|std::bad_alloc' "$shard_attempt_log"; then
-        log "shard_build_failed id=$batch_id attempt=$shard_attempt rc=$shard_rc reason=non_oom_error"
-        return "$shard_rc"
-      fi
-
-      if [[ "$shard_batch_size" -le "$SHARD_MIN_BATCH_SIZE" ]]; then
-        log "shard_build_failed id=$batch_id attempt=$shard_attempt rc=$shard_rc reason=min_batch_reached batch_size=$shard_batch_size"
-        return "$shard_rc"
-      fi
-
-      local next_batch_size
-      next_batch_size=$((shard_batch_size / 2))
-      if [[ "$next_batch_size" -lt "$SHARD_MIN_BATCH_SIZE" ]]; then
-        next_batch_size="$SHARD_MIN_BATCH_SIZE"
-      fi
-      if [[ "$next_batch_size" -eq "$shard_batch_size" ]]; then
-        log "shard_build_failed id=$batch_id attempt=$shard_attempt rc=$shard_rc reason=no_batch_change_possible batch_size=$shard_batch_size"
-        return "$shard_rc"
-      fi
-
-      log "shard_build_retry id=$batch_id from_batch_size=$shard_batch_size to_batch_size=$next_batch_size reason=oom_detected"
-      shard_batch_size="$next_batch_size"
-      shard_attempt=$((shard_attempt + 1))
+    local -a job_lists=()
+    local -a job_ids=()
+    local -a pids=()
+    local -a active_job_ids=()
+    local idx=0
+    local j
+    for ((j = 0; j < job_count; j++)); do
+      local jid="${batch_id}_j$(printf '%02d' $((j + 1)))"
+      local jlist="$STATE_DIR/${jid}.files.txt"
+      : > "$jlist"
+      job_lists+=("$jlist")
+      job_ids+=("$jid")
+    done
+    for name in "${files[@]}"; do
+      local bucket=$((idx % job_count))
+      printf '%s\n' "$name" >> "${job_lists[$bucket]}"
+      idx=$((idx + 1))
     done
 
-    PYTHONPATH=src .venv/bin/python -m llm.cli verify-shards \
-      --path "$output_dir" | tee -a "$LOG_FILE"
+    for ((j = 0; j < job_count; j++)); do
+      if [[ ! -s "${job_lists[$j]}" ]]; then
+        continue
+      fi
+      run_shard_job "${job_ids[$j]}" "${job_lists[$j]}" "$tok_arg_flag" "$tok_arg_path" &
+      pids+=("$!")
+      active_job_ids+=("${job_ids[$j]}")
+    done
 
-    if [[ "$SYNC_TO_WARM" -eq 1 ]]; then
-      sync_batch_to_warm "$output_dir" "$report_json"
-      log "batch_synced id=$batch_id warm_shards_root=$warm_shards_root"
+    local failed=0
+    for ((j = 0; j < ${#pids[@]}; j++)); do
+      if ! wait "${pids[$j]}"; then
+        log "batch_job_failed id=${active_job_ids[$j]}"
+        failed=1
+      fi
+    done
+    if [[ "$failed" -ne 0 ]]; then
+      log "batch_failed id=$batch_id reason=one_or_more_parallel_jobs_failed"
+      return 1
     fi
   fi
 

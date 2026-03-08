@@ -207,8 +207,11 @@ bash scripts/stage_fineweb_from_warm.sh --max-files 4 --max-gib 8
 ```bash
 bash scripts/fineweb_stage_shard_loop.sh \
   --hot-queue-min-files 8 \
-  --stage-max-files 2 \
-  --process-max-files 4 \
+  --stage-max-files 10 \
+  --process-max-files 10 \
+  --shard-jobs 2 \
+  --tokenizer-threads 10 \
+  --encode-batch-size 1024 \
   --sleep-seconds 60 \
   --shard-min-batch-size 512
 ```
@@ -217,6 +220,8 @@ This loop stages bounded parquet files to hot storage, builds verified shard bat
 and purges processed hot parquet files.
 `--hot-queue-min-files` keeps a small parquet queue staged locally so shard building is less likely to idle on copy waits.
 If a shard build fails with OOM-like errors, the loop retries automatically with a smaller batch size.
+For 20-core hosts, `--shard-jobs 2 --tokenizer-threads 10 --encode-batch-size 1024` is the
+current high-throughput profile.
 
 3ad. Build tokenizer + token shards directly from FineWeb parquet:
 ```bash

@@ -111,6 +111,7 @@ Keep PR scope narrow; split refactors and features into separate PRs.
 - For parquet-based FineWeb workflows, use `scripts/stage_fineweb_from_warm.sh` to copy bounded warm chunks into hot storage
 - For long-running 350BT ingestion on limited hot disk, use `scripts/fineweb_stage_shard_loop.sh` for staged processing and automatic hot-space reclaim
 - Use `fineweb_stage_shard_loop.sh --hot-queue-min-files <N>` to keep a bounded hot parquet queue and reduce sharder copy stalls
+- For higher CPU throughput on this 20-core host, prefer `--shard-jobs 2 --tokenizer-threads 10 --encode-batch-size 1024`
 - Keep stage-loop OOM retry enabled (default) so shard builds back off to smaller `--batch-size` automatically
 - For continuously growing shard sets, use `scripts/train_supervisor_rtx5070_350bt.sh` so each resumed chunk re-reads new manifests before training continues
 - Supervisor writes chunk trends to `artifacts/reports/train_supervisor_350bt/train_trend.tsv` and post-chunk eval trends to `artifacts/reports/train_supervisor_350bt/eval_trend.tsv`

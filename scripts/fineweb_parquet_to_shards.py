@@ -184,6 +184,12 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--field", default="text", help="Parquet text column")
     parser.add_argument("--batch-size", type=int, default=8192, help="Parquet read batch size")
+    parser.add_argument(
+        "--encode-batch-size",
+        type=int,
+        default=1024,
+        help="Tokenizer encode batch size (higher can improve CPU throughput)",
+    )
     parser.add_argument("--shard-size-tokens", type=int, default=5_000_000, help="Tokens per shard")
     parser.add_argument("--val-ratio", type=float, default=0.01, help="Validation split ratio")
     parser.add_argument("--seed", type=int, default=42, help="Random seed")
@@ -222,6 +228,8 @@ def main() -> int:
         raise ValueError("bpe-vocab-size must be > 0")
     if args.bpe_min_frequency < 1:
         raise ValueError("bpe-min-frequency must be >= 1")
+    if args.encode_batch_size <= 0:
+        raise ValueError("encode-batch-size must be > 0")
 
     input_dir = Path(args.input_dir)
     output_dir = Path(args.output_dir)
@@ -317,7 +325,37 @@ def main() -> int:
 
     rng = random.Random(args.seed)
     pass2_rows = 0
-    print(f"pass=2 action=tokenize_and_shard token_dtype={token_dtype}")
+    print(
+        "pass=2 action=tokenize_and_shard "
+        f"token_dtype={token_dtype} encode_batch_size={args.encode_batch_size}"
+    )
+
+    pending_rows: list[str] = []
+
+    def _encode_many(texts: list[str]) -> list[list[int]]:
+        encode_batch = getattr(tokenizer, "encode_batch", None)
+        if callable(encode_batch):
+            return encode_batch(texts)
+        return [tokenizer.encode(text) for text in texts]
+
+    def _flush_pending() -> None:
+        nonlocal pass2_rows, pending_rows
+        if not pending_rows:
+            return
+        encoded_rows = _encode_many(pending_rows)
+        for token_ids in encoded_rows:
+            if rng.random() < args.val_ratio:
+                val_writer.add(token_ids)
+            else:
+                train_writer.add(token_ids)
+            pass2_rows += 1
+            if pass2_rows % 500_000 == 0:
+                print(
+                    f"pass=2 rows={pass2_rows} train_tokens={train_writer.total_tokens} "
+                    f"val_tokens={val_writer.total_tokens}"
+                )
+        pending_rows = []
+
     for text in _iter_text_rows(
         parquet_files=parquet_files,
         field=args.field,
@@ -326,18 +364,10 @@ def main() -> int:
         max_chars=args.max_chars,
         max_rows_per_file=args.max_rows_per_file,
     ):
-        token_ids = tokenizer.encode(text + "\n")
-        if rng.random() < args.val_ratio:
-            val_writer.add(token_ids)
-        else:
-            train_writer.add(token_ids)
-
-        pass2_rows += 1
-        if pass2_rows % 500_000 == 0:
-            print(
-                f"pass=2 rows={pass2_rows} train_tokens={train_writer.total_tokens} "
-                f"val_tokens={val_writer.total_tokens}"
-            )
+        pending_rows.append(text + "\n")
+        if len(pending_rows) >= args.encode_batch_size:
+            _flush_pending()
+    _flush_pending()
 
     train_writer.finalize()
     val_writer.finalize()
@@ -373,6 +403,7 @@ def main() -> int:
             "min_chars": args.min_chars,
             "max_chars": args.max_chars,
             "max_rows_per_file": args.max_rows_per_file,
+            "encode_batch_size": args.encode_batch_size,
         },
         "elapsed_seconds": elapsed,
     }
@@ -387,6 +418,7 @@ def main() -> int:
         "rows_sharded": pass2_rows,
         "vocab_size": tokenizer.vocab_size,
         "token_dtype": token_dtype,
+        "encode_batch_size": args.encode_batch_size,
         "train_tokens": train_writer.total_tokens,
         "val_tokens": val_writer.total_tokens,
         "train_shards": len(train_writer.shards),

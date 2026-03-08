@@ -28,6 +28,13 @@ class TokenizerLike(Protocol):
 
     def encode(self, text: str, add_bos: bool = False, add_eos: bool = False) -> list[int]: ...
 
+    def encode_batch(
+        self,
+        texts: list[str],
+        add_bos: bool = False,
+        add_eos: bool = False,
+    ) -> list[list[int]]: ...
+
     def decode(self, ids: list[int], skip_special_tokens: bool = True) -> str: ...
 
     def save(self, output_path: str | Path) -> None: ...
@@ -142,6 +149,23 @@ class BPETokenizer:
         if add_eos and self._eos_id is not None:
             ids = [*ids, self._eos_id]
         return ids
+
+    def encode_batch(
+        self,
+        texts: list[str],
+        add_bos: bool = False,
+        add_eos: bool = False,
+    ) -> list[list[int]]:
+        encoded_batch = self._tokenizer.encode_batch(texts)
+        output: list[list[int]] = []
+        for encoded in encoded_batch:
+            ids = [int(tok) for tok in encoded.ids]
+            if add_bos and self._bos_id is not None:
+                ids = [self._bos_id, *ids]
+            if add_eos and self._eos_id is not None:
+                ids = [*ids, self._eos_id]
+            output.append(ids)
+        return output
 
     def decode(self, ids: list[int], skip_special_tokens: bool = True) -> str:
         if skip_special_tokens:

@@ -464,10 +464,12 @@ Live terminal view (single command to watch continuously):
 ```bash
 PYTHONPATH=src .venv/bin/python scripts/pipeline_live_view.py --refresh-seconds 5
 ```
-Defaults to `--view-mode rotate` (cycles full detail through `top`, `free -h`, `nvidia-smi`, `df -h`)
-so smaller terminals still show complete sections.
-Use `--view-mode full` to print all sections each frame.
-The live view refreshes in-place (full-screen mode). If your terminal does not handle full-screen
+This is a live-only monitor (no report/status files written) and includes:
+- system status (CPU, memory, GPU, disk mounts)
+- pipeline progress (download/staging/sharding/training)
+- running project task states with pid/runtime/cpu/mem summaries
+
+It refreshes in-place (full-screen mode). If your terminal does not handle full-screen
 escape codes well, add `--no-alt-screen`.
 
 ## Warm Storage (Ceph Mount)

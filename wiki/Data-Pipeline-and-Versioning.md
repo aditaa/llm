@@ -95,6 +95,7 @@ PYTHONPATH=src .venv/bin/python scripts/pipeline_eta_report.py --loop --interval
 Outputs:
 - `artifacts/reports/pipeline_status.json`
 - `artifacts/reports/pipeline_status.txt`
+Includes system snapshots from `top -b -n1`, `free -h`, `nvidia-smi`, and `df -h`.
 
 ## Versioning Rule
 Use ZIM date stamps as the canonical dataset version.

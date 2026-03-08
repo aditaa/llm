@@ -65,6 +65,52 @@ def _pgrep_count(pattern: str) -> int:
     return len(lines)
 
 
+def _capture_command(
+    cmd: list[str],
+    *,
+    timeout_seconds: int = 20,
+    max_lines: int = 200,
+) -> dict[str, Any]:
+    try:
+        proc = subprocess.run(
+            cmd,
+            text=True,
+            capture_output=True,
+            check=False,
+            timeout=timeout_seconds,
+        )
+        output = (proc.stdout or proc.stderr or "").strip()
+        lines = output.splitlines()
+        truncated = False
+        if len(lines) > max_lines:
+            lines = lines[:max_lines]
+            lines.append(f"... truncated to {max_lines} lines ...")
+            truncated = True
+        return {
+            "command": " ".join(cmd),
+            "ok": proc.returncode == 0,
+            "returncode": proc.returncode,
+            "truncated": truncated,
+            "output": "\n".join(lines),
+        }
+    except FileNotFoundError:
+        return {
+            "command": " ".join(cmd),
+            "ok": False,
+            "returncode": 127,
+            "truncated": False,
+            "output": "command not found",
+        }
+    except subprocess.TimeoutExpired:
+        return {
+            "command": " ".join(cmd),
+            "ok": False,
+            "returncode": 124,
+            "truncated": False,
+            "output": f"timed out after {timeout_seconds}s",
+        }
+
+
 STEP_RE = re.compile(r"step=(\d+)\b")
 
 
@@ -125,6 +171,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output-json", default="artifacts/reports/pipeline_status.json")
     parser.add_argument("--output-text", default="artifacts/reports/pipeline_status.txt")
     parser.add_argument("--state-file", default="artifacts/reports/pipeline_status_state.json")
+    parser.add_argument("--command-timeout-seconds", type=int, default=20)
+    parser.add_argument("--command-max-lines", type=int, default=200)
     parser.add_argument("--interval-seconds", type=int, default=60)
     parser.add_argument("--loop", action="store_true")
     return parser.parse_args()
@@ -165,6 +213,28 @@ def collect_status(args: argparse.Namespace) -> dict[str, Any]:
         "train_supervisor": _pgrep_count(r"train_supervisor_rtx5070_350bt\.sh"),
         "trainer": _pgrep_count(r"llm\.cli train"),
         "eval_runner": _pgrep_count(r"scripts/eval_checkpoint_prompts\.py"),
+    }
+    system_commands = {
+        "top": _capture_command(
+            ["top", "-b", "-n", "1"],
+            timeout_seconds=args.command_timeout_seconds,
+            max_lines=args.command_max_lines,
+        ),
+        "free_h": _capture_command(
+            ["free", "-h"],
+            timeout_seconds=args.command_timeout_seconds,
+            max_lines=args.command_max_lines,
+        ),
+        "nvidia_smi": _capture_command(
+            ["nvidia-smi"],
+            timeout_seconds=args.command_timeout_seconds,
+            max_lines=args.command_max_lines,
+        ),
+        "df_h": _capture_command(
+            ["df", "-h"],
+            timeout_seconds=args.command_timeout_seconds,
+            max_lines=args.command_max_lines,
+        ),
     }
 
     prev = _read_state(Path(args.state_file))
@@ -249,6 +319,7 @@ def collect_status(args: argparse.Namespace) -> dict[str, Any]:
             "train": _fmt_eta(eta["train_seconds"]),
         },
         "active_processes": active,
+        "system_commands": system_commands,
     }
     return status
 
@@ -261,6 +332,7 @@ def write_reports(status: dict[str, Any], output_json: Path, output_text: Path) 
     m = status["metrics"]
     r = status["rates"]
     p = status["active_processes"]
+    c = status["system_commands"]
     text = "\n".join(
         [
             f"time_utc={status['timestamp_utc']}",
@@ -276,6 +348,18 @@ def write_reports(status: dict[str, Any], output_json: Path, output_text: Path) 
             f" download_worker={p['download_worker']} stage_loop={p['stage_loop']}"
             f" shard_builder={p['shard_builder']} train_supervisor={p['train_supervisor']}"
             f" trainer={p['trainer']} eval_runner={p['eval_runner']}",
+            "",
+            "--- top -b -n 1 ---",
+            c["top"]["output"],
+            "",
+            "--- free -h ---",
+            c["free_h"]["output"],
+            "",
+            "--- nvidia-smi ---",
+            c["nvidia_smi"]["output"],
+            "",
+            "--- df -h ---",
+            c["df_h"]["output"],
         ]
     )
     output_text.write_text(text + "\n", encoding="utf-8")

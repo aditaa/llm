@@ -457,6 +457,7 @@ PYTHONPATH=src .venv/bin/python scripts/pipeline_eta_report.py --loop --interval
 Outputs:
 - `artifacts/reports/pipeline_status.json`
 - `artifacts/reports/pipeline_status.txt`
+Includes embedded snapshots of `top -b -n1`, `free -h`, `nvidia-smi`, and `df -h`.
 
 ## Warm Storage (Ceph Mount)
 Use `./data` and `./artifacts` as the hot working set.

@@ -160,6 +160,7 @@ all manifests under `data/shards_global/fineweb-global-bpe-v1` so newly added sh
 batches are picked up without manual intervention.
 Use `--min-unique-input-files <N>` to avoid starting training before enough parquet
 coverage is represented in shard manifests.
+Use `--min-train-tokens <N>` when you want readiness gated by total train-token coverage.
 Use `--dedupe-report-keep <N>` to cap saved dedupe report/log artifacts during long waits.
 Resume guardrail now validates `last.pt`/`ckpt_step_*.pt` for resumability and
 quarantines invalid files before fallback to the newest valid checkpoint.

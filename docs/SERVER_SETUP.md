@@ -120,6 +120,8 @@ Environment file:
 - Set `LLM_STAGE_SHARD_LOOP_ARGS` to tune staging/sharding (default template includes
   `--stage-min-free-gib 80`, `--auto-tune-shard-jobs`, `--sync-background`, and
   `--shard-size-tokens 20000000` for safer/faster long runs on limited hot disk)
+- Set `LLM_TRAIN_SUPERVISOR_ARGS` to tune training readiness gates (for example
+  `--min-train-tokens 40000000000` to gate by token coverage instead of only file count)
 
 Useful commands:
 ```bash

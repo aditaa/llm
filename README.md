@@ -563,6 +563,7 @@ manifest file-sets and reports partial overlaps for review.
 Use `--no-dedupe-overlap-manifests` to disable, or `--dedupe-dry-run` to audit without disabling duplicates.
 Use `--dedupe-report-keep <N>` to cap saved dedupe report/log artifacts during long waits.
 Use `--min-unique-input-files <N>` to hold training until enough unique parquet inputs are represented in manifests.
+Use `--min-train-tokens <N>` to gate startup by total train-token coverage instead of raw file count.
 Add `--no-train-fail-on-eval-regression` if you want chunk runs to continue even when
 the train-loop held-out perplexity gate is noisy; prompt-suite regression/promotion
 checks still run in the supervisor eval step.

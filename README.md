@@ -64,6 +64,7 @@ make fineweb-parquet-to-shards # print direct FineWeb parquet->token-shards usag
 make fineweb-manifest-dedupe # print overlap-manifest dedupe helper usage
 make stage-fineweb-from-warm # print warm->hot FineWeb chunk staging usage
 make fineweb-prefetch-hot-queue # print hot-queue prefetch worker usage
+make fineweb-revalidate-bad-parquet # print bad parquet revalidate/restage usage
 make fineweb-stage-shard-loop # print rolling stage->shard->verify->sync->purge usage
 make fineweb-stage-shard-watchdog # print auto-restart watchdog usage for stage/shard loop
 make fineweb-hot-queue # print hot parquet queue-oriented stage/shard usage
@@ -633,6 +634,16 @@ Templates:
 
 Note: prefetch is optional when stage-loop already uses hot-queue staging flags
 (`--hot-queue-min-files`, `--stage-max-files`, `--stage-copy-jobs`, `--stage-min-free-gib`).
+If you run prefetch with stage-loop, keep auto skip enabled so it respects
+processed/bad parquet lists from `artifacts/reports/fineweb_stage_shard_loop/`.
+
+Revalidate and optionally restore bad parquet files:
+```bash
+PYTHONPATH=src .venv/bin/python scripts/revalidate_bad_parquet.py \
+  --restage-valid \
+  --max-restage-files 15 \
+  --min-free-gib 80
+```
 
 Environment template:
 - `deploy/systemd/llm.env.example` (installed to `/etc/llm/llm.env`)

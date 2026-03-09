@@ -98,6 +98,10 @@ fi
 
 mkdir -p "$DEST_DIR" artifacts/reports
 log="artifacts/reports/stage_fineweb_from_warm_$(date +%Y%m%d_%H%M%S).log"
+lock_key="$(printf '%s' "$DEST_DIR" | sha256sum | awk '{print $1}')"
+lock_file="artifacts/reports/stage_fineweb_from_warm_${lock_key}.lock"
+exec 9>"$lock_file"
+flock 9
 
 echo "[$(date -Iseconds)] source=$SRC_DIR" | tee -a "$log"
 echo "[$(date -Iseconds)] dest=$DEST_DIR" | tee -a "$log"

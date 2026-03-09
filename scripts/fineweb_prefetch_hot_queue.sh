@@ -7,10 +7,13 @@ QUEUE_MIN_FILES=12
 STAGE_MAX_FILES=8
 STAGE_MAX_GIB=0
 STAGE_MIN_AGE_SECONDS=180
+STAGE_COPY_JOBS=1
 MIN_FREE_GIB=50
 SLEEP_SECONDS=60
 ITERATIONS=0
 SKIP_LIST=""
+AUTO_SKIP_STATE_DIR="artifacts/reports/fineweb_stage_shard_loop"
+AUTO_SKIP=1
 DRY_RUN=0
 STATE_DIR="artifacts/reports/fineweb_prefetch_hot_queue"
 
@@ -28,6 +31,8 @@ Options:
   --queue-min-files N         Target minimum number of hot parquet files
                               (default: 12)
   --stage-max-files N         Max files to stage in one cycle (default: 8)
+  --stage-copy-jobs N         Parallel warm->hot copy workers per stage cycle
+                              (default: 1)
   --stage-max-gib N           Max GiB to stage in one cycle (default: 0 unlimited)
   --stage-min-age-seconds N   Ignore warm files newer than this age (default: 180)
   --min-free-gib N            Skip staging if hot filesystem free GiB is below this
@@ -35,6 +40,9 @@ Options:
   --sleep-seconds N           Sleep between cycles (default: 60)
   --iterations N              Number of cycles (default: 0 infinite)
   --skip-list FILE            Optional parquet basename skip list
+  --auto-skip-state-dir DIR   Stage-loop state dir for auto skip list
+                              (default: artifacts/reports/fineweb_stage_shard_loop)
+  --no-auto-skip              Disable auto skip-list discovery/merge
   --state-dir DIR             Log/state directory
   --dry-run                   Print actions without copying files
   -h, --help                  Show help
@@ -65,6 +73,10 @@ while [[ $# -gt 0 ]]; do
       STAGE_MAX_FILES="$2"
       shift 2
       ;;
+    --stage-copy-jobs)
+      STAGE_COPY_JOBS="$2"
+      shift 2
+      ;;
     --stage-max-gib)
       STAGE_MAX_GIB="$2"
       shift 2
@@ -88,6 +100,14 @@ while [[ $# -gt 0 ]]; do
     --skip-list)
       SKIP_LIST="$2"
       shift 2
+      ;;
+    --auto-skip-state-dir)
+      AUTO_SKIP_STATE_DIR="$2"
+      shift 2
+      ;;
+    --no-auto-skip)
+      AUTO_SKIP=0
+      shift
       ;;
     --state-dir)
       STATE_DIR="$2"
@@ -121,6 +141,14 @@ if [[ "$QUEUE_MIN_FILES" -lt 1 ]]; then
   echo "error: queue-min-files must be >= 1" >&2
   exit 1
 fi
+if ! [[ "$STAGE_COPY_JOBS" =~ ^[1-9][0-9]*$ ]]; then
+  echo "error: stage-copy-jobs must be a positive integer" >&2
+  exit 1
+fi
+if [[ -n "$SKIP_LIST" && ! -f "$SKIP_LIST" ]]; then
+  echo "error: skip-list not found: $SKIP_LIST" >&2
+  exit 1
+fi
 if [[ "$SLEEP_SECONDS" -lt 1 ]]; then
   echo "error: sleep-seconds must be >= 1" >&2
   exit 1
@@ -135,6 +163,7 @@ if ! flock -n 9; then
 fi
 
 LOG_FILE="$STATE_DIR/prefetch_$(date +%Y%m%d_%H%M%S).log"
+AUTO_SKIP_FILE="$STATE_DIR/auto_skip_list.txt"
 log() {
   echo "[$(date -Iseconds)] $*" | tee -a "$LOG_FILE"
 }
@@ -149,8 +178,42 @@ hot_free_gib() {
   awk -v kib="$avail_kib" 'BEGIN { printf "%.2f", kib/1024/1024 }'
 }
 
+resolve_skip_list() {
+  if [[ -n "$SKIP_LIST" ]]; then
+    echo "$SKIP_LIST"
+    return
+  fi
+  if [[ "$AUTO_SKIP" -ne 1 ]]; then
+    echo ""
+    return
+  fi
+
+  local direct_file="$AUTO_SKIP_STATE_DIR/stage_skip_list.txt"
+  if [[ -f "$direct_file" ]]; then
+    echo "$direct_file"
+    return
+  fi
+
+  : > "$AUTO_SKIP_FILE"
+  local src
+  for src in \
+    "$AUTO_SKIP_STATE_DIR/processed_parquet_files.txt" \
+    "$AUTO_SKIP_STATE_DIR/bad_parquet_files.txt"
+  do
+    if [[ -s "$src" ]]; then
+      cat "$src" >> "$AUTO_SKIP_FILE"
+    fi
+  done
+  if [[ -s "$AUTO_SKIP_FILE" ]]; then
+    sort -u "$AUTO_SKIP_FILE" -o "$AUTO_SKIP_FILE"
+    echo "$AUTO_SKIP_FILE"
+    return
+  fi
+  echo ""
+}
+
 cycle=0
-log "prefetch_start warm=$WARM_PARQUET_DIR hot=$HOT_PARQUET_DIR queue_min_files=$QUEUE_MIN_FILES stage_max_files=$STAGE_MAX_FILES stage_max_gib=$STAGE_MAX_GIB min_free_gib=$MIN_FREE_GIB dry_run=$DRY_RUN"
+log "prefetch_start warm=$WARM_PARQUET_DIR hot=$HOT_PARQUET_DIR queue_min_files=$QUEUE_MIN_FILES stage_max_files=$STAGE_MAX_FILES stage_copy_jobs=$STAGE_COPY_JOBS stage_max_gib=$STAGE_MAX_GIB min_free_gib=$MIN_FREE_GIB auto_skip=$AUTO_SKIP auto_skip_state_dir=$AUTO_SKIP_STATE_DIR dry_run=$DRY_RUN"
 
 while true; do
   cycle=$((cycle + 1))
@@ -170,17 +233,19 @@ while true; do
       --src-dir "$WARM_PARQUET_DIR"
       --dest-dir "$HOT_PARQUET_DIR"
       --max-files "$stage_files"
+      --copy-jobs "$STAGE_COPY_JOBS"
       --max-gib "$STAGE_MAX_GIB"
       --min-age-seconds "$STAGE_MIN_AGE_SECONDS"
     )
-    if [[ -n "$SKIP_LIST" ]]; then
-      stage_cmd+=(--skip-list "$SKIP_LIST")
+    resolved_skip_list="$(resolve_skip_list)"
+    if [[ -n "$resolved_skip_list" ]]; then
+      stage_cmd+=(--skip-list "$resolved_skip_list")
     fi
     if [[ "$DRY_RUN" -eq 1 ]]; then
       stage_cmd+=(--dry-run)
     fi
 
-    log "cycle=$cycle action=stage hot_files=$current_hot need=$need stage_files=$stage_files free_gib=$free_gib"
+    log "cycle=$cycle action=stage hot_files=$current_hot need=$need stage_files=$stage_files stage_copy_jobs=$STAGE_COPY_JOBS free_gib=$free_gib skip_list=${resolved_skip_list:-none}"
     "${stage_cmd[@]}" >> "$LOG_FILE" 2>&1 || {
       log "cycle=$cycle action=stage_failed"
     }

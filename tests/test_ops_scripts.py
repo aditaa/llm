@@ -100,6 +100,30 @@ class ScriptTests(unittest.TestCase):
         self.assertIn("--keep-local-runs", proc.stdout)
         self.assertIn("--sync-only", proc.stdout)
 
+    def test_fineweb_prefetch_help_lists_auto_skip_options(self) -> None:
+        proc = subprocess.run(
+            ["bash", "scripts/fineweb_prefetch_hot_queue.sh", "--help"],
+            cwd=Path(__file__).resolve().parents[1],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(proc.returncode, 0, msg=proc.stderr)
+        self.assertIn("--auto-skip-state-dir", proc.stdout)
+        self.assertIn("--no-auto-skip", proc.stdout)
+
+    def test_revalidate_bad_parquet_help(self) -> None:
+        proc = subprocess.run(
+            [sys.executable, "scripts/revalidate_bad_parquet.py", "--help"],
+            cwd=Path(__file__).resolve().parents[1],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(proc.returncode, 0, msg=proc.stderr)
+        self.assertIn("--restage-valid", proc.stdout)
+        self.assertIn("--no-rewrite-bad-list", proc.stdout)
+
     def test_set_swappiness_help(self) -> None:
         proc = subprocess.run(
             ["bash", "scripts/set_swappiness.sh", "--help"],

@@ -4,7 +4,7 @@ ifneq ("$(wildcard .venv/bin/python)","")
 PYTHON=.venv/bin/python
 endif
 
-.PHONY: setup-dev setup-train setup-infer doctor install-server-system install-systemd-services test lint format typecheck smoke extract-zim train-tokenizer train-tokenizer-global corpus-quality-report clean-corpus-batch dataset-risk-report pull-hf-rows parquet-to-corpus fineweb-parquet-to-shards fineweb-manifest-dedupe stage-fineweb-from-warm fineweb-prefetch-hot-queue fineweb-stage-shard-loop fineweb-stage-shard-watchdog fineweb-hot-queue lr-sweep-350bt train-350bt-v2 train-350bt-ctx1024 train-supervisor-350bt pipeline-eta pipeline-live shard-corpus-batch verify-shards train generate average-checkpoints eval-checkpoint render-eval-dashboard package-inference-bundle sync-warm hydrate-warm offload-zim checkpoint-offload-prune set-swappiness hf-download-resumable hf-download-watchdog hf-prepare-publish hf-download-model serve-openai publish-wiki
+.PHONY: setup-dev setup-train setup-infer doctor install-server-system install-systemd-services test lint format typecheck smoke extract-zim train-tokenizer train-tokenizer-global corpus-quality-report clean-corpus-batch dataset-risk-report pull-hf-rows parquet-to-corpus fineweb-parquet-to-shards fineweb-manifest-dedupe stage-fineweb-from-warm fineweb-prefetch-hot-queue fineweb-revalidate-bad-parquet fineweb-stage-shard-loop fineweb-stage-shard-watchdog fineweb-hot-queue lr-sweep-350bt train-350bt-v2 train-350bt-ctx1024 train-supervisor-350bt pipeline-eta pipeline-live shard-corpus-batch verify-shards train generate average-checkpoints eval-checkpoint render-eval-dashboard package-inference-bundle sync-warm hydrate-warm offload-zim checkpoint-offload-prune set-swappiness hf-download-resumable hf-download-watchdog hf-prepare-publish hf-download-model serve-openai publish-wiki
 
 setup-dev:
 	bash scripts/bootstrap_dev.sh
@@ -86,7 +86,11 @@ stage-fineweb-from-warm:
 
 fineweb-prefetch-hot-queue:
 	@echo "Usage:"
-	@echo "  bash scripts/fineweb_prefetch_hot_queue.sh --queue-min-files 12 --stage-max-files 8 --sleep-seconds 60"
+	@echo "  bash scripts/fineweb_prefetch_hot_queue.sh --queue-min-files 18 --stage-max-files 12 --sleep-seconds 30 --auto-skip-state-dir artifacts/reports/fineweb_stage_shard_loop"
+
+fineweb-revalidate-bad-parquet:
+	@echo "Usage:"
+	@echo "  PYTHONPATH=src $(PYTHON) scripts/revalidate_bad_parquet.py --restage-valid --max-restage-files 15 --min-free-gib 80"
 
 fineweb-stage-shard-loop:
 	@echo "Usage:"

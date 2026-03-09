@@ -595,6 +595,8 @@ Outputs:
 - `artifacts/reports/pipeline_status.txt`
 Includes embedded snapshots of `top -b -n1`, `free -h`, `nvidia-smi`, and `df -h`.
 Also reports manifest coverage metrics (`manifest_unique_input_files`, overlap counts, `coverage_complete`).
+Also includes per-task `RUN/STOP` state with stop reasons (for example `download complete`,
+`staging handled by stage-loop`, `idle between chunks/eval`, or gate waits).
 
 Live terminal view (single command to watch continuously):
 ```bash
@@ -606,6 +608,7 @@ This is a live-only monitor (no report/status files written) and includes:
 - manifest coverage status (`unique/510`, overlap inputs/manifests, coverage rate + ETA, completion flag)
 - supervisor gate status (for example waiting on `min_unique_input_files`)
 - running project task states with pid/runtime/cpu/mem summaries
+- explicit stop reasons for tasks that are not running
 - alert rows for stage-controller health and shard-manifest stall conditions
 
 It refreshes in-place (full-screen mode). If your terminal does not handle full-screen
@@ -627,6 +630,9 @@ Templates:
 - `deploy/systemd/llm-checkpoint-offload-prune.service`
 - `deploy/systemd/llm-checkpoint-offload-prune.timer`
 - `deploy/systemd/llm-vm-swappiness.service`
+
+Note: prefetch is optional when stage-loop already uses hot-queue staging flags
+(`--hot-queue-min-files`, `--stage-max-files`, `--stage-copy-jobs`, `--stage-min-free-gib`).
 
 Environment template:
 - `deploy/systemd/llm.env.example` (installed to `/etc/llm/llm.env`)

@@ -516,6 +516,8 @@ def _stop_reason(
     if task_name == "prefetch-worker":
         if coverage_complete:
             return "coverage complete"
+        if task_counts.get("stage-loop", 0) > 0:
+            return "staging handled by stage-loop"
         return "not started"
     if task_name == "stage-watchdog":
         if coverage_complete:

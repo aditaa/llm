@@ -114,6 +114,9 @@ def _capture_command(
 STEP_RE = re.compile(r"step=(\d+)\b")
 TARGET_STEP_RE = re.compile(r"target_step=(\d+)\b")
 MAX_STEPS_RE = re.compile(r"--max-steps(?:=|\s+)(\d+)\b")
+WAIT_MANIFESTS_RE = re.compile(r"waiting_for_manifests have=(\d+) need=(\d+)")
+WAIT_UNIQUE_RE = re.compile(r"waiting_for_unique_inputs have=(\d+) need=(\d+)")
+WAIT_TRAIN_TOKENS_RE = re.compile(r"waiting_for_train_tokens have_tokens=(\d+) need_tokens=(\d+)")
 
 
 def _latest_train_step(supervisor_state_dir: Path) -> int:
@@ -269,6 +272,105 @@ def _manifest_input_coverage(shards_root: Path) -> dict[str, int]:
     }
 
 
+def _latest_supervisor_gate(supervisor_state_dir: Path) -> str:
+    if not supervisor_state_dir.exists():
+        return "unknown"
+    logs = sorted(
+        supervisor_state_dir.glob("supervisor_*.log"),
+        key=lambda p: p.stat().st_mtime,
+        reverse=True,
+    )
+    for log_path in logs[:3]:
+        proc = subprocess.run(
+            ["tail", "-n", "200", str(log_path)],
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        if proc.returncode != 0 or not proc.stdout:
+            continue
+        lines = [line.strip() for line in proc.stdout.splitlines() if line.strip()]
+        for line in reversed(lines):
+            match = WAIT_TRAIN_TOKENS_RE.search(line)
+            if match:
+                return f"waiting_train_tokens {match.group(1)}/{match.group(2)}"
+            match = WAIT_UNIQUE_RE.search(line)
+            if match:
+                return f"waiting_unique_inputs {match.group(1)}/{match.group(2)}"
+            match = WAIT_MANIFESTS_RE.search(line)
+            if match:
+                return f"waiting_manifests {match.group(1)}/{match.group(2)}"
+            if "train_launch " in line:
+                return "train_chunk_launching"
+    return "unknown"
+
+
+def _task_stop_reason(
+    task_name: str,
+    *,
+    active: dict[str, int],
+    coverage_complete: bool,
+    warm_parquet: int,
+    expected_parquet_files: int,
+    train_step: int,
+    train_target_step: int | None,
+    supervisor_gate: str,
+) -> str:
+    if task_name == "hf_watchdog":
+        if warm_parquet >= expected_parquet_files:
+            return "download complete"
+        return "not started"
+    if task_name == "download_worker":
+        if warm_parquet >= expected_parquet_files:
+            return "download complete"
+        if active.get("hf_watchdog", 0) > 0:
+            return "watchdog-managed; worker idle/restarting"
+        return "not started"
+    if task_name == "prefetch_worker":
+        if coverage_complete:
+            return "coverage complete"
+        if active.get("stage_loop", 0) > 0:
+            return "staging handled by stage-loop"
+        return "not started"
+    if task_name == "stage_watchdog":
+        if coverage_complete:
+            return "coverage complete"
+        if active.get("stage_loop", 0) > 0:
+            return "stage-loop running directly (no watchdog)"
+        return "not started"
+    if task_name == "stage_loop":
+        if coverage_complete:
+            return "coverage complete"
+        if active.get("stage_watchdog", 0) > 0:
+            return "waiting for watchdog restart"
+        return "not started"
+    if task_name == "shard_builder":
+        if coverage_complete:
+            return "all expected parquet processed"
+        if active.get("stage_loop", 0) > 0:
+            return "idle between shard batches"
+        return "not started"
+    if task_name == "train_supervisor":
+        if train_target_step is not None and train_step >= train_target_step:
+            return "target step reached"
+        if supervisor_gate != "unknown":
+            return f"blocked: {supervisor_gate}"
+        return "not started"
+    if task_name == "trainer":
+        if train_target_step is not None and train_step >= train_target_step:
+            return "target step reached"
+        if active.get("train_supervisor", 0) > 0:
+            if supervisor_gate.startswith("waiting_"):
+                return f"waiting on supervisor gate ({supervisor_gate})"
+            return "idle between chunks/eval"
+        return "no active supervisor"
+    if task_name == "eval_runner":
+        return "runs only during eval windows"
+    if task_name == "generation_gate_runner":
+        return "runs only on scheduled gate interval"
+    return "not started"
+
+
 def _eta_seconds(remaining: float | None, rate_per_sec: float | None) -> float | None:
     if remaining is None:
         return None
@@ -350,6 +452,7 @@ def collect_status(args: argparse.Namespace) -> dict[str, Any]:
     sharded_parquet = _count_nonempty_lines(stage_state_dir / "processed_parquet_files.txt")
     train_step = _latest_train_step(sup_dir)
     train_target_step = _effective_train_target_step(args.train_target_step, sup_dir, train_step)
+    supervisor_gate = _latest_supervisor_gate(sup_dir)
     generation_gate_latest = _latest_generation_summary(sup_dir)
 
     active = {
@@ -436,6 +539,36 @@ def collect_status(args: argparse.Namespace) -> dict[str, Any]:
         and manifest_unique_inputs >= int(args.expected_parquet_files)
     )
 
+    task_order = [
+        "hf_watchdog",
+        "download_worker",
+        "prefetch_worker",
+        "stage_watchdog",
+        "stage_loop",
+        "shard_builder",
+        "train_supervisor",
+        "trainer",
+        "eval_runner",
+        "generation_gate_runner",
+    ]
+    task_status: dict[str, dict[str, Any]] = {}
+    for task_name in task_order:
+        count = int(active.get(task_name, 0))
+        if count > 0:
+            task_status[task_name] = {"state": "RUN", "count": count, "reason": ""}
+            continue
+        reason = _task_stop_reason(
+            task_name,
+            active=active,
+            coverage_complete=coverage_complete,
+            warm_parquet=warm_parquet,
+            expected_parquet_files=int(args.expected_parquet_files),
+            train_step=train_step,
+            train_target_step=train_target_step,
+            supervisor_gate=supervisor_gate,
+        )
+        task_status[task_name] = {"state": "STOP", "count": 0, "reason": reason}
+
     eta = {
         "download_seconds": _eta_seconds(rem_bytes, bytes_rate),
         "download_parquet_seconds": _eta_seconds(rem_download_parquet, warm_parquet_rate),
@@ -492,6 +625,8 @@ def collect_status(args: argparse.Namespace) -> dict[str, Any]:
             "train": _fmt_eta(eta["train_seconds"]),
         },
         "active_processes": active,
+        "task_status": task_status,
+        "supervisor_gate": supervisor_gate,
         "generation_gate_latest": generation_gate_latest,
         "system_commands": system_commands,
     }
@@ -508,6 +643,30 @@ def write_reports(status: dict[str, Any], output_json: Path, output_text: Path) 
     p = status["active_processes"]
     c = status["system_commands"]
     g = status.get("generation_gate_latest", {})
+    supervisor_gate = status.get("supervisor_gate", "unknown")
+    task_status = status.get("task_status", {})
+    task_order = [
+        "hf_watchdog",
+        "download_worker",
+        "prefetch_worker",
+        "stage_watchdog",
+        "stage_loop",
+        "shard_builder",
+        "train_supervisor",
+        "trainer",
+        "eval_runner",
+        "generation_gate_runner",
+    ]
+    task_lines: list[str] = []
+    for name in task_order:
+        row = task_status.get(name, {})
+        state = str(row.get("state", "STOP"))
+        count = int(row.get("count", 0) or 0)
+        if state == "RUN":
+            task_lines.append(f"  {name}=RUN x{count}")
+            continue
+        reason = str(row.get("reason", "not started"))
+        task_lines.append(f"  {name}=STOP reason={reason}")
     text = "\n".join(
         [
             f"time_utc={status['timestamp_utc']}",
@@ -525,6 +684,9 @@ def write_reports(status: dict[str, Any], output_json: Path, output_text: Path) 
             f" hf_watchdog={p['hf_watchdog']} download_worker={p['download_worker']} prefetch_worker={p['prefetch_worker']} stage_watchdog={p['stage_watchdog']} stage_loop={p['stage_loop']}"
             f" shard_builder={p['shard_builder']} train_supervisor={p['train_supervisor']}"
             f" trainer={p['trainer']} eval_runner={p['eval_runner']} generation_gate_runner={p['generation_gate_runner']}",
+            f"supervisor_gate={supervisor_gate}",
+            "tasks:",
+            *task_lines,
             "generation_gate_latest:"
             f" step={g.get('step')} rc={g.get('generation_rc')} pass_rate={g.get('pass_rate')} regression_pass={g.get('regression_pass')}",
             "",

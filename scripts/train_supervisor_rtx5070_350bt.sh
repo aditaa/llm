@@ -87,7 +87,6 @@ DEDUPE_OVERLAP_MANIFESTS=1
 DEDUPE_KEEP="newest"
 DEDUPE_DRY_RUN=0
 DEDUPE_REPORT_KEEP=240
-ORIG_ARGS=("$@")
 
 usage() {
   cat <<'USAGE'
@@ -328,13 +327,14 @@ fi
 mkdir -p "$OUTPUT_DIR" "$STATE_DIR" artifacts/reports/evals
 
 LOCK_FILE="$STATE_DIR/supervisor.lock"
-if [[ -z "${LLM_SUPERVISOR_LOCKED:-}" ]]; then
-  if ! command -v flock >/dev/null 2>&1; then
-    echo "error: required command not found: flock" >&2
-    exit 1
-  fi
-  export LLM_SUPERVISOR_LOCKED=1
-  exec flock -n -o "$LOCK_FILE" "$0" "${ORIG_ARGS[@]}"
+if ! command -v flock >/dev/null 2>&1; then
+  echo "error: required command not found: flock" >&2
+  exit 1
+fi
+exec 9>"$LOCK_FILE"
+if ! flock -n 9; then
+  echo "error: another train_supervisor instance is already running ($LOCK_FILE)" >&2
+  exit 3
 fi
 
 SUP_LOG="$STATE_DIR/supervisor_$(date +%Y%m%d_%H%M%S).log"

@@ -236,6 +236,7 @@ while true; do
       --copy-jobs "$STAGE_COPY_JOBS"
       --max-gib "$STAGE_MAX_GIB"
       --min-age-seconds "$STAGE_MIN_AGE_SECONDS"
+      --min-free-gib "$MIN_FREE_GIB"
     )
     resolved_skip_list="$(resolve_skip_list)"
     if [[ -n "$resolved_skip_list" ]]; then

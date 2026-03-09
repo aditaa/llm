@@ -14,6 +14,7 @@ RSYNC_CONNECT_TIMEOUT_SECONDS=30
 RSYNC_TIMEOUT_SECONDS=900
 SKIP_LIST=""
 DRY_RUN=0
+RSYNC_USE_CONTIMEOUT=0
 
 usage() {
   cat <<'USAGE'
@@ -169,6 +170,10 @@ do
   fi
 done
 
+if [[ "$SRC_DIR" == rsync://* || "$DEST_DIR" == rsync://* || "$SRC_DIR" == *"::"* || "$DEST_DIR" == *"::"* ]]; then
+  RSYNC_USE_CONTIMEOUT=1
+fi
+
 now_epoch="$(date +%s)"
 copied_files=0
 copied_bytes=0
@@ -190,13 +195,19 @@ copy_one() {
   local tmp_size
   local attempt
   local max_attempts=$((RSYNC_RETRIES + 1))
+  local -a rsync_args=(
+    -ah
+    --partial
+    --inplace
+    --timeout="$RSYNC_TIMEOUT_SECONDS"
+  )
+  if [[ "$RSYNC_USE_CONTIMEOUT" -eq 1 ]]; then
+    rsync_args+=(--contimeout="$RSYNC_CONNECT_TIMEOUT_SECONDS")
+  fi
 
   for ((attempt = 1; attempt <= max_attempts; attempt++)); do
     rm -f "$tmp_path"
-    if rsync -ah --partial --inplace \
-      --contimeout="$RSYNC_CONNECT_TIMEOUT_SECONDS" \
-      --timeout="$RSYNC_TIMEOUT_SECONDS" \
-      "$src_path" "$tmp_path" >> "$log" 2>&1; then
+    if rsync "${rsync_args[@]}" "$src_path" "$tmp_path" >> "$log" 2>&1; then
       break
     fi
     rm -f "$tmp_path"

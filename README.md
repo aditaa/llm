@@ -571,6 +571,8 @@ Use `--no-dedupe-overlap-manifests` to disable, or `--dedupe-dry-run` to audit w
 Use `--dedupe-report-keep <N>` to cap saved dedupe report/log artifacts during long waits.
 Use `--min-unique-input-files <N>` to hold training until enough unique parquet inputs are represented in manifests.
 Use `--min-train-tokens <N>` to gate startup by total train-token coverage instead of raw file count.
+Supervisor enforces a singleton lock at
+`artifacts/reports/train_supervisor_350bt/supervisor.lock`.
 Add `--no-train-fail-on-eval-regression` if you want chunk runs to continue even when
 the train-loop held-out perplexity gate is noisy; prompt-suite regression/promotion
 checks still run in the supervisor eval step.
@@ -638,6 +640,8 @@ Note: prefetch is optional when stage-loop already uses hot-queue staging flags
 (`--hot-queue-min-files`, `--stage-max-files`, `--stage-copy-jobs`, `--stage-min-free-gib`).
 If you run prefetch with stage-loop, keep auto skip enabled so it respects
 processed/bad parquet lists from `artifacts/reports/fineweb_stage_shard_loop/`.
+Prefetch now forwards `--min-free-gib` to `stage_fineweb_from_warm.sh`, so
+stage-loop and prefetch apply the same hot-disk free-space guardrail.
 
 Revalidate and optionally restore bad parquet files:
 ```bash

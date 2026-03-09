@@ -139,6 +139,7 @@ Keep PR scope narrow; split refactors and features into separate PRs.
 - Use `fineweb_stage_shard_loop.sh --hot-queue-min-files <N>` to keep a bounded hot parquet queue and reduce sharder copy stalls
 - `stage_fineweb_from_warm.sh` now uses a per-destination lock so stage-loop and prefetch worker staging calls serialize safely
 - `stage_fineweb_from_warm.sh --lock-wait-seconds 0` (default) skips quickly when another staging call holds the lock; tune if you want blocking behavior
+- `stage_fineweb_from_warm.sh` only applies rsync `--contimeout` for rsync-daemon sources (`rsync://` or `::`); local/NFS paths avoid this flag
 - Use `fineweb_stage_shard_loop.sh --stage-copy-jobs <N>` to forward parallel staging copy workers into each stage cycle
 - Use `fineweb_stage_shard_loop.sh --stage-min-free-gib <N>` so staging never drives hot disk below a free-space guardrail
 - Use `fineweb_stage_shard_loop.sh --auto-tune-shard-jobs` to adapt shard parallelism and tokenizer threads from CPU load + batch runtime
@@ -161,6 +162,7 @@ Keep PR scope narrow; split refactors and features into separate PRs.
 - Supervisor now runs `scripts/fineweb_manifest_dedupe.py` before each train chunk launch to disable exact duplicate manifest file-sets (`keep=newest`) and report partial overlaps; use `--no-dedupe-overlap-manifests` or `--dedupe-dry-run` as needed
 - Use supervisor `--dedupe-report-keep <N>` to cap per-chunk dedupe report/log file growth during long coverage waits
 - For continuous 350BT pipeline runs, keep exactly one `fineweb_stage_shard_watchdog.sh` and one `train_supervisor_rtx5070_350bt.sh` process active; avoid concurrent one-off `llm.cli train` runs against the same checkpoint directory
+- `train_supervisor_rtx5070_350bt.sh` now acquires `artifacts/reports/train_supervisor_350bt/supervisor.lock` directly for non-bypassable singleton control
 - Supervisor resume guardrail validates `last.pt`/`ckpt_step_*.pt` and quarantines invalid checkpoint files before retry
 - Use `--no-train-fail-on-eval-regression` in supervisor when you want train chunks to continue and rely on post-chunk prompt-suite gates
 - On 12 GB RTX 5070 profiles, start supervisor with `--batch-size 12 --target-effective-batch 24 --min-batch-size 6 --max-batch-size 20 --batch-step 2` to avoid early OOM churn
@@ -177,6 +179,7 @@ Keep PR scope narrow; split refactors and features into separate PRs.
 - `pipeline_live_view.py` also shows supervisor gate state (for example `waiting_unique_inputs <have>/<need>` or `waiting_train_tokens <have_tokens>/<need_tokens>`)
 - `pipeline_live_view.py` shows `STOP | <reason>` for non-running tasks (for example `staging handled by stage-loop` for prefetch when stage-loop queue staging is enabled)
 - `fineweb_prefetch_hot_queue.sh` can auto-read stage-loop skip data (`--auto-skip-state-dir artifacts/reports/fineweb_stage_shard_loop`) so it avoids restaging processed/bad parquet files
+- `fineweb_prefetch_hot_queue.sh` forwards `--min-free-gib` into stage calls so prefetch and stage-loop share the same hot-space floor
 - Revalidate/recover bad parquet list entries with `scripts/revalidate_bad_parquet.py`; use `--restage-valid` to copy newly validated files back into hot storage
 - Optional automation: `llm-bad-parquet-revalidate.timer` runs `revalidate_bad_parquet.py` periodically via systemd
 - For checkpoint regression tracking, run `scripts/eval_checkpoint_prompts.py` with `configs/eval/standard_prompt_suite_v3.json`; use `--baseline-report` and `--promotion-policy configs/eval/promotion_policy_v1.json` to emit regression deltas + promotion verdict

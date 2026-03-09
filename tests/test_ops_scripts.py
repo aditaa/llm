@@ -87,6 +87,113 @@ class ScriptTests(unittest.TestCase):
         )
         self.assertEqual(proc.returncode, 0, msg=proc.stderr)
         self.assertIn("--no-cleanup-stale-workers", proc.stdout)
+        self.assertIn("--lock-file", proc.stdout)
+        self.assertIn("--no-adopt-existing-loop", proc.stdout)
+
+    def test_stage_watchdog_lock_is_independent_of_log_file(self) -> None:
+        if (
+            subprocess.run(
+                ["pgrep", "-af", r"scripts/fineweb_stage_shard_loop.sh"],
+                capture_output=True,
+                text=True,
+                check=False,
+            ).returncode
+            == 0
+        ):
+            self.skipTest("stage loop already running on host")
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            hot = root / "hot"
+            shards = root / "shards"
+            state = root / "state"
+            hot.mkdir(parents=True, exist_ok=True)
+            shards.mkdir(parents=True, exist_ok=True)
+            state.mkdir(parents=True, exist_ok=True)
+            processed_file = state / "processed_parquet_files.txt"
+            processed_file.write_text("", encoding="utf-8")
+            lock_file = state / "watchdog.lock"
+            log_a = state / "watchdog_a.log"
+            log_b = state / "watchdog_b.log"
+
+            # Provide an adoptable fake stage-loop process so watchdog stays alive.
+            dummy = subprocess.Popen(
+                ["bash", "-lc", "exec -a scripts/fineweb_stage_shard_loop.sh sleep 30"],
+                cwd=Path(__file__).resolve().parents[1],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            watchdog = subprocess.Popen(
+                [
+                    "bash",
+                    "scripts/fineweb_stage_shard_watchdog.sh",
+                    "--watchdog-log-file",
+                    str(log_a),
+                    "--lock-file",
+                    str(lock_file),
+                    "--check-interval-seconds",
+                    "60",
+                    "--stall-seconds",
+                    "600",
+                    "--hot-parquet-dir",
+                    str(hot),
+                    "--shards-root",
+                    str(shards),
+                    "--processed-file",
+                    str(processed_file),
+                    "--no-cleanup-stale-workers",
+                ],
+                cwd=Path(__file__).resolve().parents[1],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            try:
+                time.sleep(1.5)
+                self.assertIsNone(
+                    watchdog.poll(), "primary watchdog should still be running with lock held"
+                )
+                proc = subprocess.run(
+                    [
+                        "bash",
+                        "scripts/fineweb_stage_shard_watchdog.sh",
+                        "--watchdog-log-file",
+                        str(log_b),
+                        "--lock-file",
+                        str(lock_file),
+                        "--check-interval-seconds",
+                        "60",
+                        "--stall-seconds",
+                        "600",
+                        "--hot-parquet-dir",
+                        str(hot),
+                        "--shards-root",
+                        str(shards),
+                        "--processed-file",
+                        str(processed_file),
+                        "--no-cleanup-stale-workers",
+                    ],
+                    cwd=Path(__file__).resolve().parents[1],
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+                self.assertEqual(proc.returncode, 3, msg=proc.stderr)
+                self.assertIn(
+                    "another fineweb_stage_shard_watchdog instance is already running",
+                    proc.stderr,
+                )
+            finally:
+                watchdog.terminate()
+                try:
+                    watchdog.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    watchdog.kill()
+                    watchdog.wait(timeout=5)
+                dummy.terminate()
+                try:
+                    dummy.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    dummy.kill()
+                    dummy.wait(timeout=5)
 
     def test_stage_from_warm_help_lists_lock_and_timeout_options(self) -> None:
         proc = subprocess.run(

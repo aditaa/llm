@@ -300,7 +300,11 @@ bash scripts/fineweb_stage_shard_watchdog.sh \
   --check-interval-seconds 120 \
   --stall-seconds 5400
 ```
-The stage-watchdog now enforces a singleton lock and terminates worker process groups cleanly on restarts.
+The stage-watchdog now enforces a singleton lock in the stage state directory
+(`artifacts/reports/fineweb_stage_shard_loop/watchdog.lock` by default), independent of
+the log filename. It also adopts an already-running stage-loop controller by default so
+watchdog restarts do not leave direct loop runs unmanaged. Use `--no-adopt-existing-loop`
+to force launching a fresh worker process.
 
 3ad. Build tokenizer + token shards directly from FineWeb parquet:
 ```bash

@@ -134,8 +134,9 @@ Keep PR scope narrow; split refactors and features into separate PRs.
 - For long-running 350BT ingestion on limited hot disk, use `scripts/fineweb_stage_shard_loop.sh` for staged processing and automatic hot-space reclaim
 - For unattended long 350BT ingestion, run `scripts/fineweb_stage_shard_watchdog.sh` to auto-restart stage-loop worker exits/stalls
 - For long shard batches, use a higher stage-watchdog stall timeout (for example `--stall-seconds 5400`) to avoid false restarts mid-batch
-- `fineweb_stage_shard_watchdog.sh` enforces a singleton lock and stops worker process groups (not only the parent shell)
+- `fineweb_stage_shard_watchdog.sh` enforces a singleton lock in the stage state dir (`watchdog.lock`) and stops worker process groups (not only the parent shell)
 - `fineweb_stage_shard_watchdog.sh` now also cleans stale stage-loop/shard-worker processes before relaunch so only one controller remains active
+- `fineweb_stage_shard_watchdog.sh` can adopt an already-running stage-loop controller (default) so watchdog restarts do not leave direct loop runs unmanaged; use `--no-adopt-existing-loop` to force fresh worker launch
 - Use `fineweb_stage_shard_loop.sh --hot-queue-min-files <N>` to keep a bounded hot parquet queue and reduce sharder copy stalls
 - `stage_fineweb_from_warm.sh` now uses a per-destination lock so stage-loop and prefetch worker staging calls serialize safely
 - `stage_fineweb_from_warm.sh --lock-wait-seconds 0` (default) skips quickly when another staging call holds the lock; tune if you want blocking behavior

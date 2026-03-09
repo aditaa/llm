@@ -81,6 +81,10 @@ GENERATION_FAIL_BELOW_PASS_RATE=""
 GENERATION_EVERY_CHUNKS=1
 GENERATION_STOP_ON_FAIL=0
 
+DEDUPE_OVERLAP_MANIFESTS=1
+DEDUPE_KEEP="newest"
+DEDUPE_DRY_RUN=0
+
 usage() {
   cat <<'USAGE'
 Usage:
@@ -94,6 +98,10 @@ Core options:
   --step-chunk N               Steps per training cycle before restart (default: 2000)
   --min-manifests N            Wait until at least N manifests exist (default: 1)
   --max-failure-streak N       Stop after N consecutive train failures (0 = never)
+  --no-dedupe-overlap-manifests
+                               Disable manifest overlap dedupe before each train chunk
+  --dedupe-keep MODE           Overlap dedupe strategy: newest|oldest (default: newest)
+  --dedupe-dry-run             Analyze overlap only; do not disable duplicate manifests
 
 Training shape:
   --device NAME                Training device (default: cuda)
@@ -189,6 +197,9 @@ while [[ $# -gt 0 ]]; do
     --step-chunk) STEP_CHUNK="$2"; shift 2 ;;
     --min-manifests) MIN_MANIFESTS="$2"; shift 2 ;;
     --max-failure-streak) MAX_FAILURE_STREAK="$2"; shift 2 ;;
+    --no-dedupe-overlap-manifests) DEDUPE_OVERLAP_MANIFESTS=0; shift ;;
+    --dedupe-keep) DEDUPE_KEEP="$2"; shift 2 ;;
+    --dedupe-dry-run) DEDUPE_DRY_RUN=1; shift ;;
     --device) DEVICE="$2"; shift 2 ;;
     --batch-size) BATCH_SIZE="$2"; shift 2 ;;
     --grad-accum-steps) GRAD_ACCUM_STEPS="$2"; shift 2 ;;
@@ -285,6 +296,10 @@ if [[ "$CHECKPOINT_KEEP_LAST" -lt 0 || "$CHECKPOINT_KEEP_EVERY" -lt 0 ]]; then
 fi
 if [[ "$GENERATION_EVERY_CHUNKS" -le 0 ]]; then
   echo "error: generation-every-chunks must be > 0" >&2
+  exit 1
+fi
+if [[ "$DEDUPE_KEEP" != "newest" && "$DEDUPE_KEEP" != "oldest" ]]; then
+  echo "error: dedupe-keep must be one of: newest, oldest" >&2
   exit 1
 fi
 
@@ -421,6 +436,57 @@ log_has_resume_checkpoint_error() {
 
 manifest_count() {
   find "$SHARDS_PATH" -name manifest.json 2>/dev/null | wc -l | tr -d ' '
+}
+
+run_manifest_dedupe() {
+  if [[ "$DEDUPE_OVERLAP_MANIFESTS" -ne 1 ]]; then
+    return 0
+  fi
+
+  local ts
+  ts="$(date +%Y%m%d_%H%M%S)"
+  local dedupe_report="$STATE_DIR/manifest_dedupe_${ts}.json"
+  local dedupe_log="$STATE_DIR/manifest_dedupe_${ts}.log"
+
+  local -a extra_args=()
+  if [[ "$DEDUPE_DRY_RUN" -eq 1 ]]; then
+    extra_args+=(--dry-run)
+  fi
+
+  set +e
+  PYTHONPATH=src \
+  .venv/bin/python scripts/fineweb_manifest_dedupe.py \
+    --shards-root "$SHARDS_PATH" \
+    --report-output "$dedupe_report" \
+    --keep "$DEDUPE_KEEP" \
+    "${extra_args[@]}" \
+    > "$dedupe_log" 2>&1
+  local rc=$?
+  set -e
+
+  if [[ "$rc" -ne 0 ]]; then
+    log "manifest_dedupe_failed rc=$rc log=$dedupe_log"
+    return 0
+  fi
+
+  local summary
+  summary="$(
+    python3 - <<'PY' "$dedupe_report"
+import json
+import sys
+obj = json.load(open(sys.argv[1], "r", encoding="utf-8"))
+print(
+    obj.get("manifest_total", 0),
+    obj.get("manifest_kept", 0),
+    obj.get("manifest_overlap", 0),
+    obj.get("unique_input_files", 0),
+    len(obj.get("disabled", [])),
+)
+PY
+  )"
+  local total kept overlap unique disabled
+  read -r total kept overlap unique disabled <<< "$summary"
+  log "manifest_dedupe_done total=$total kept=$kept overlap=$overlap unique_inputs=$unique disabled=$disabled dry_run=$DEDUPE_DRY_RUN report=$dedupe_report"
 }
 
 start_gpu_monitor() {
@@ -807,9 +873,10 @@ fi
 failure_streak=0
 successful_chunks=0
 log "supervisor_start shards_path=$SHARDS_PATH output_dir=$OUTPUT_DIR step_chunk=$STEP_CHUNK"
-log "tuning_start batch_size=$BATCH_SIZE grad_accum=$GRAD_ACCUM_STEPS auto_tune=$AUTO_TUNE target_effective_batch=$TARGET_EFFECTIVE_BATCH train_fail_on_eval_regression=$TRAIN_FAIL_ON_EVAL_REGRESSION checkpoint_keep_last=$CHECKPOINT_KEEP_LAST checkpoint_keep_every=$CHECKPOINT_KEEP_EVERY allow_context_extension=$ALLOW_CONTEXT_EXTENSION ema_decay=$EMA_DECAY ema_update_every=$EMA_UPDATE_EVERY ema_start_step=$EMA_START_STEP generation_gate=$GENERATION_GATE generation_every_chunks=$GENERATION_EVERY_CHUNKS generation_stop_on_fail=$GENERATION_STOP_ON_FAIL"
+log "tuning_start batch_size=$BATCH_SIZE grad_accum=$GRAD_ACCUM_STEPS auto_tune=$AUTO_TUNE target_effective_batch=$TARGET_EFFECTIVE_BATCH train_fail_on_eval_regression=$TRAIN_FAIL_ON_EVAL_REGRESSION checkpoint_keep_last=$CHECKPOINT_KEEP_LAST checkpoint_keep_every=$CHECKPOINT_KEEP_EVERY allow_context_extension=$ALLOW_CONTEXT_EXTENSION ema_decay=$EMA_DECAY ema_update_every=$EMA_UPDATE_EVERY ema_start_step=$EMA_START_STEP generation_gate=$GENERATION_GATE generation_every_chunks=$GENERATION_EVERY_CHUNKS generation_stop_on_fail=$GENERATION_STOP_ON_FAIL dedupe_overlap_manifests=$DEDUPE_OVERLAP_MANIFESTS dedupe_keep=$DEDUPE_KEEP dedupe_dry_run=$DEDUPE_DRY_RUN"
 
 while true; do
+  run_manifest_dedupe
   mcount="$(manifest_count)"
   if [[ "$mcount" -lt "$MIN_MANIFESTS" ]]; then
     log "waiting_for_manifests have=$mcount need=$MIN_MANIFESTS sleep=${POLL_SECONDS}s"

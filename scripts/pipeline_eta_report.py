@@ -161,6 +161,50 @@ def _latest_generation_summary(supervisor_state_dir: Path) -> dict[str, Any]:
     }
 
 
+def _manifest_input_coverage(shards_root: Path) -> dict[str, int]:
+    if not shards_root.exists():
+        return {
+            "manifest_count": 0,
+            "unique_input_files": 0,
+            "overlap_input_files": 0,
+            "overlap_manifests": 0,
+            "manifest_parse_errors": 0,
+        }
+
+    manifests = sorted(shards_root.rglob("manifest.json"))
+    file_counts: dict[str, int] = {}
+    per_manifest_files: list[set[str]] = []
+    parse_errors = 0
+    for manifest_path in manifests:
+        try:
+            payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            parse_errors += 1
+            continue
+        raw_files = payload.get("input_files", [])
+        if not isinstance(raw_files, list):
+            parse_errors += 1
+            continue
+        names = {Path(str(raw)).name for raw in raw_files if str(raw).strip()}
+        if not names:
+            continue
+        per_manifest_files.append(names)
+        for name in names:
+            file_counts[name] = file_counts.get(name, 0) + 1
+
+    overlap_input_files = sum(1 for count in file_counts.values() if count > 1)
+    overlap_manifests = sum(
+        1 for names in per_manifest_files if any(file_counts.get(name, 0) > 1 for name in names)
+    )
+    return {
+        "manifest_count": len(manifests),
+        "unique_input_files": len(file_counts),
+        "overlap_input_files": overlap_input_files,
+        "overlap_manifests": overlap_manifests,
+        "manifest_parse_errors": parse_errors,
+    }
+
+
 def _eta_seconds(remaining: float, rate_per_sec: float | None) -> float | None:
     if rate_per_sec is None or rate_per_sec <= 0:
         return None
@@ -228,6 +272,10 @@ def collect_status(args: argparse.Namespace) -> dict[str, Any]:
     warm_incomplete = _count_find(warm_dir, "*.incomplete")
     warm_bytes = _du_bytes(warm_dir)
     manifests = _count_find(shards_root, "manifest.json")
+    manifest_coverage = _manifest_input_coverage(shards_root)
+    manifest_unique_inputs = int(manifest_coverage["unique_input_files"])
+    manifest_overlap_inputs = int(manifest_coverage["overlap_input_files"])
+    manifest_overlap_manifests = int(manifest_coverage["overlap_manifests"])
     sharded_parquet = _count_nonempty_lines(stage_state_dir / "processed_parquet_files.txt")
     train_step = _latest_train_step(sup_dir)
     generation_gate_latest = _latest_generation_summary(sup_dir)
@@ -275,6 +323,7 @@ def collect_status(args: argparse.Namespace) -> dict[str, Any]:
     warm_parquet_rate = None
     sharded_parquet_rate = None
     manifest_rate = None
+    unique_inputs_rate = None
     step_rate = None
     if prev is not None:
         dt = now - float(prev.get("ts", now))
@@ -283,11 +332,13 @@ def collect_status(args: argparse.Namespace) -> dict[str, Any]:
             prev_warm_parquet = int(prev.get("warm_parquet_count", warm_parquet))
             prev_sharded = int(prev.get("sharded_parquet_count", sharded_parquet))
             prev_manifests = int(prev.get("manifest_count", manifests))
+            prev_unique_inputs = int(prev.get("manifest_unique_input_files", manifest_unique_inputs))
             prev_step = int(prev.get("train_step", train_step))
             d_bytes = warm_bytes - prev_bytes
             d_warm_parquet = warm_parquet - prev_warm_parquet
             d_sharded = sharded_parquet - prev_sharded
             d_manifests = manifests - prev_manifests
+            d_unique_inputs = manifest_unique_inputs - prev_unique_inputs
             d_steps = train_step - prev_step
             if d_bytes >= 0:
                 bytes_rate = d_bytes / dt
@@ -297,19 +348,28 @@ def collect_status(args: argparse.Namespace) -> dict[str, Any]:
                 sharded_parquet_rate = d_sharded / dt
             if d_manifests >= 0:
                 manifest_rate = d_manifests / dt
+            if d_unique_inputs >= 0:
+                unique_inputs_rate = d_unique_inputs / dt
             if d_steps >= 0:
                 step_rate = d_steps / dt
 
     rem_bytes = max(0, int(args.expected_bytes) - warm_bytes)
     rem_download_parquet = max(0, int(args.expected_parquet_files) - warm_parquet)
     rem_sharded_parquet = max(0, int(args.expected_parquet_files) - sharded_parquet)
+    rem_unique_inputs = max(0, int(args.expected_parquet_files) - manifest_unique_inputs)
     rem_steps = max(0, int(args.train_target_step) - train_step)
+    coverage_complete = (
+        warm_parquet >= int(args.expected_parquet_files)
+        and sharded_parquet >= int(args.expected_parquet_files)
+        and manifest_unique_inputs >= int(args.expected_parquet_files)
+    )
 
     eta = {
         "download_seconds": _eta_seconds(rem_bytes, bytes_rate),
         "download_parquet_seconds": _eta_seconds(rem_download_parquet, warm_parquet_rate),
         "sharding_seconds": _eta_seconds(rem_sharded_parquet, sharded_parquet_rate),
         "manifests_seconds": _eta_seconds(rem_sharded_parquet, manifest_rate),
+        "manifest_unique_inputs_seconds": _eta_seconds(rem_unique_inputs, unique_inputs_rate),
         "train_seconds": _eta_seconds(rem_steps, step_rate),
     }
 
@@ -320,8 +380,13 @@ def collect_status(args: argparse.Namespace) -> dict[str, Any]:
             "warm_incomplete_count": warm_incomplete,
             "warm_bytes": warm_bytes,
             "manifest_count": manifests,
+            "manifest_unique_input_files": manifest_unique_inputs,
+            "manifest_overlap_input_files": manifest_overlap_inputs,
+            "manifest_overlap_manifests": manifest_overlap_manifests,
+            "manifest_parse_errors": int(manifest_coverage["manifest_parse_errors"]),
             "sharded_parquet_count": sharded_parquet,
             "train_step": train_step,
+            "coverage_complete": coverage_complete,
         },
         "expected": {
             "parquet_files": int(args.expected_parquet_files),
@@ -334,12 +399,14 @@ def collect_status(args: argparse.Namespace) -> dict[str, Any]:
             "download_parquet_per_sec": warm_parquet_rate,
             "sharding_parquet_per_sec": sharded_parquet_rate,
             "manifest_per_sec": manifest_rate,
+            "manifest_unique_inputs_per_sec": unique_inputs_rate,
             "train_steps_per_sec": step_rate,
             "sample_window_seconds": dt,
         },
         "remaining": {
             "download_parquet_files": rem_download_parquet,
             "sharded_parquet_files": rem_sharded_parquet,
+            "manifest_unique_input_files": rem_unique_inputs,
             "bytes": rem_bytes,
             "train_steps": rem_steps,
         },
@@ -348,6 +415,7 @@ def collect_status(args: argparse.Namespace) -> dict[str, Any]:
             "download": _fmt_eta(eta["download_seconds"]),
             "download_parquet": _fmt_eta(eta["download_parquet_seconds"]),
             "sharding": _fmt_eta(eta["sharding_seconds"]),
+            "manifest_unique_inputs": _fmt_eta(eta["manifest_unique_inputs_seconds"]),
             "train": _fmt_eta(eta["train_seconds"]),
         },
         "active_processes": active,
@@ -371,13 +439,15 @@ def write_reports(status: dict[str, Any], output_json: Path, output_text: Path) 
         [
             f"time_utc={status['timestamp_utc']}",
             f"warm_parquet={m['warm_parquet_count']} warm_incomplete={m['warm_incomplete_count']}",
-            f"warm_bytes={m['warm_bytes']} sharded_parquet={m['sharded_parquet_count']} manifests={m['manifest_count']} train_step={m['train_step']}",
+            f"warm_bytes={m['warm_bytes']} sharded_parquet={m['sharded_parquet_count']} manifests={m['manifest_count']} manifest_unique_inputs={m['manifest_unique_input_files']} train_step={m['train_step']}",
             "rates:"
             f" download_mib_per_sec={r['download_mib_per_sec']} download_parquet_per_sec={r['download_parquet_per_sec']}"
             f" sharding_parquet_per_sec={r['sharding_parquet_per_sec']} manifest_per_sec={r['manifest_per_sec']}"
-            f" train_steps_per_sec={r['train_steps_per_sec']}",
+            f" manifest_unique_inputs_per_sec={r['manifest_unique_inputs_per_sec']} train_steps_per_sec={r['train_steps_per_sec']}",
             f"eta: download_bytes={status['eta_human']['download']} download_parquet={status['eta_human']['download_parquet']}"
-            f" sharding={status['eta_human']['sharding']} train={status['eta_human']['train']}",
+            f" sharding={status['eta_human']['sharding']} manifest_unique_inputs={status['eta_human']['manifest_unique_inputs']} train={status['eta_human']['train']}",
+            "coverage:"
+            f" complete={int(m['coverage_complete'])} overlap_input_files={m['manifest_overlap_input_files']} overlap_manifests={m['manifest_overlap_manifests']}",
             "active:"
             f" hf_watchdog={p['hf_watchdog']} download_worker={p['download_worker']} prefetch_worker={p['prefetch_worker']} stage_watchdog={p['stage_watchdog']} stage_loop={p['stage_loop']}"
             f" shard_builder={p['shard_builder']} train_supervisor={p['train_supervisor']}"
@@ -416,6 +486,7 @@ def main() -> int:
             "warm_parquet_count": status["metrics"]["warm_parquet_count"],
             "sharded_parquet_count": status["metrics"]["sharded_parquet_count"],
             "manifest_count": status["metrics"]["manifest_count"],
+            "manifest_unique_input_files": status["metrics"]["manifest_unique_input_files"],
             "train_step": status["metrics"]["train_step"],
         }
         _write_state(state_path, state_snapshot)

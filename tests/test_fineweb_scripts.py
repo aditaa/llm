@@ -217,5 +217,74 @@ class StageFineWebFromWarmTests(unittest.TestCase):
             self.assertEqual(copied, ["a.parquet", "c.parquet"])
 
 
+class FineWebManifestDedupeTests(unittest.TestCase):
+    def test_dedupe_disables_older_overlapping_manifest(self) -> None:
+        repo_root = _repo_root()
+        script = repo_root / "scripts" / "fineweb_manifest_dedupe.py"
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            shards_root = tmp_path / "shards"
+            shards_root.mkdir(parents=True, exist_ok=True)
+
+            old_dir = shards_root / "batch_old"
+            new_dir = shards_root / "batch_new"
+            unique_dir = shards_root / "batch_unique"
+            old_dir.mkdir()
+            new_dir.mkdir()
+            unique_dir.mkdir()
+
+            old_manifest = old_dir / "manifest.json"
+            old_manifest.write_text(
+                json.dumps({"input_files": ["000_00001.parquet", "000_00002.parquet"]}),
+                encoding="utf-8",
+            )
+            new_manifest = new_dir / "manifest.json"
+            new_manifest.write_text(
+                json.dumps({"input_files": ["000_00001.parquet", "000_00002.parquet"]}),
+                encoding="utf-8",
+            )
+            unique_manifest = unique_dir / "manifest.json"
+            unique_manifest.write_text(
+                json.dumps({"input_files": ["000_00003.parquet"]}),
+                encoding="utf-8",
+            )
+
+            now = os.path.getmtime(new_manifest)
+            os.utime(old_manifest, (now - 60, now - 60))
+            os.utime(new_manifest, (now, now))
+
+            report = tmp_path / "dedupe_report.json"
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(script),
+                    "--shards-root",
+                    str(shards_root),
+                    "--report-output",
+                    str(report),
+                    "--keep",
+                    "newest",
+                ],
+                cwd=repo_root,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(proc.returncode, 0, msg=proc.stderr)
+
+            self.assertFalse(old_manifest.exists())
+            self.assertTrue((old_dir / "manifest.duplicate.disabled.json").exists())
+            self.assertTrue(new_manifest.exists())
+            self.assertTrue(unique_manifest.exists())
+
+            payload = json.loads(report.read_text(encoding="utf-8"))
+            self.assertEqual(payload["manifest_total"], 3)
+            self.assertEqual(payload["manifest_kept"], 2)
+            self.assertEqual(payload["manifest_overlap"], 1)
+            self.assertEqual(payload["unique_input_files"], 3)
+            self.assertEqual(len(payload["disabled"]), 1)
+
+
 if __name__ == "__main__":
     unittest.main()

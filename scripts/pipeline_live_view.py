@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import re
 import shutil
@@ -174,6 +175,33 @@ def _latest_generation_summary(supervisor_state_dir: Path) -> tuple[str, str, st
     if len(parts) < 9:
         return ("NA", "NA", "NA")
     return (parts[2], parts[3], parts[8])
+
+
+def _manifest_input_coverage(shards_root: Path) -> tuple[int, int, int]:
+    if not shards_root.exists():
+        return (0, 0, 0)
+    manifests = sorted(shards_root.rglob("manifest.json"))
+    file_counts: dict[str, int] = {}
+    per_manifest: list[set[str]] = []
+    for manifest_path in manifests:
+        try:
+            payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        raw_files = payload.get("input_files", [])
+        if not isinstance(raw_files, list):
+            continue
+        names = {Path(str(raw)).name for raw in raw_files if str(raw).strip()}
+        if not names:
+            continue
+        per_manifest.append(names)
+        for name in names:
+            file_counts[name] = file_counts.get(name, 0) + 1
+    overlap_inputs = sum(1 for count in file_counts.values() if count > 1)
+    overlap_manifests = sum(
+        1 for names in per_manifest if any(file_counts.get(name, 0) > 1 for name in names)
+    )
+    return (len(file_counts), overlap_inputs, overlap_manifests)
 
 
 def _cpu_snapshot() -> tuple[int, int]:
@@ -358,6 +386,9 @@ def _render(
     hot_parquet = _count_find(hot_dir, "*.parquet")
     hot_bytes = _du_bytes(hot_dir)
     manifest_count = _count_find(shards_root, "manifest.json")
+    manifest_unique_inputs, manifest_overlap_inputs, manifest_overlap_manifests = (
+        _manifest_input_coverage(shards_root)
+    )
     processed_parquet = _count_nonempty_lines(stage_state)
     train_step = _latest_train_step(sup_dir)
     gen_rc, gen_pass_rate, gen_regression_pass = _latest_generation_summary(sup_dir)
@@ -408,7 +439,13 @@ def _render(
 
     rem_bytes = max(0, int(args.expected_bytes) - warm_bytes)
     rem_files = max(0, int(args.expected_parquet_files) - warm_parquet)
+    rem_manifest_unique = max(0, int(args.expected_parquet_files) - manifest_unique_inputs)
     rem_steps = max(0, int(args.train_target_step) - train_step)
+    coverage_complete = (
+        warm_parquet >= int(args.expected_parquet_files)
+        and processed_parquet >= int(args.expected_parquet_files)
+        and manifest_unique_inputs >= int(args.expected_parquet_files)
+    )
 
     rate_mib = (download_bps / 1024 / 1024) if download_bps is not None else None
     cpu_text = f"{cpu_usage:.1f}%" if cpu_usage is not None else "warming"
@@ -443,6 +480,11 @@ def _render(
     lines.append(
         f"  Shards:   manifests={manifest_count} "
         f"download_file_eta={_eta(rem_files, download_pps)}"
+    )
+    lines.append(
+        f"  Coverage: manifest_unique={manifest_unique_inputs}/{args.expected_parquet_files} "
+        f"remaining={rem_manifest_unique} overlap_inputs={manifest_overlap_inputs} "
+        f"overlap_manifests={manifest_overlap_manifests} complete={int(coverage_complete)}"
     )
     lines.append(
         f"  Training: step={train_step}/{args.train_target_step} "

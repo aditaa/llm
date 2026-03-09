@@ -61,6 +61,7 @@ make clean-corpus-batch # print batch cleanup command usage
 make dataset-risk-report # print heuristic dataset risk audit command usage
 make pull-hf-rows # print Hugging Face rows API pull helper usage
 make fineweb-parquet-to-shards # print direct FineWeb parquet->token-shards usage
+make fineweb-manifest-dedupe # print overlap-manifest dedupe helper usage
 make stage-fineweb-from-warm # print warm->hot FineWeb chunk staging usage
 make fineweb-prefetch-hot-queue # print hot-queue prefetch worker usage
 make fineweb-stage-shard-loop # print rolling stage->shard->verify->sync->purge usage
@@ -531,6 +532,9 @@ bash scripts/train_supervisor_rtx5070_350bt.sh \
 ```
 For continuous 350BT ingestion/training, keep exactly one stage watchdog and one train supervisor running.
 Avoid launching one-off `llm.cli train --max-steps ...` jobs in parallel with the supervisor.
+Supervisor now runs a manifest overlap dedupe pass before each train chunk launch
+(`scripts/fineweb_manifest_dedupe.py`, keep strategy `newest`) so repeated parquet files are not over-weighted.
+Use `--no-dedupe-overlap-manifests` to disable, or `--dedupe-dry-run` to audit without disabling duplicates.
 Add `--no-train-fail-on-eval-regression` if you want chunk runs to continue even when
 the train-loop held-out perplexity gate is noisy; prompt-suite regression/promotion
 checks still run in the supervisor eval step.
@@ -555,6 +559,7 @@ Outputs:
 - `artifacts/reports/pipeline_status.json`
 - `artifacts/reports/pipeline_status.txt`
 Includes embedded snapshots of `top -b -n1`, `free -h`, `nvidia-smi`, and `df -h`.
+Also reports manifest coverage metrics (`manifest_unique_input_files`, overlap counts, `coverage_complete`).
 
 Live terminal view (single command to watch continuously):
 ```bash
@@ -563,6 +568,7 @@ PYTHONPATH=src .venv/bin/python scripts/pipeline_live_view.py --refresh-seconds 
 This is a live-only monitor (no report/status files written) and includes:
 - system status (CPU, memory, GPU, disk mounts)
 - pipeline progress (download/staging/sharding/training)
+- manifest coverage status (`unique/510`, overlap inputs/manifests, completion flag)
 - running project task states with pid/runtime/cpu/mem summaries
 
 It refreshes in-place (full-screen mode). If your terminal does not handle full-screen

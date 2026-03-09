@@ -140,6 +140,7 @@ Keep PR scope narrow; split refactors and features into separate PRs.
 - For continuously growing shard sets, use `scripts/train_supervisor_rtx5070_350bt.sh` so each resumed chunk re-reads new manifests before training continues
 - For staged 350BT training, set `train_supervisor_rtx5070_350bt.sh --min-unique-input-files <N>` (for example `510`) to avoid starting on too-small shard coverage
 - Supervisor now runs `scripts/fineweb_manifest_dedupe.py` before each train chunk launch to disable exact duplicate manifest file-sets (`keep=newest`) and report partial overlaps; use `--no-dedupe-overlap-manifests` or `--dedupe-dry-run` as needed
+- Use supervisor `--dedupe-report-keep <N>` to cap per-chunk dedupe report/log file growth during long coverage waits
 - For continuous 350BT pipeline runs, keep exactly one `fineweb_stage_shard_watchdog.sh` and one `train_supervisor_rtx5070_350bt.sh` process active; avoid concurrent one-off `llm.cli train` runs against the same checkpoint directory
 - Supervisor resume guardrail validates `last.pt`/`ckpt_step_*.pt` and quarantines invalid checkpoint files before retry
 - Use `--no-train-fail-on-eval-regression` in supervisor when you want train chunks to continue and rely on post-chunk prompt-suite gates

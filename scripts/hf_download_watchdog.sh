@@ -258,7 +258,12 @@ start_worker() {
     cmd+=(--skip-dry-run)
   fi
 
-  "${cmd[@]}" >> "$WATCHDOG_LOG_FILE" 2>&1 &
+  # Launch worker in its own session so stop_worker can terminate the full process group.
+  if command -v setsid >/dev/null 2>&1; then
+    setsid "${cmd[@]}" >> "$WATCHDOG_LOG_FILE" 2>&1 &
+  else
+    "${cmd[@]}" >> "$WATCHDOG_LOG_FILE" 2>&1 &
+  fi
   WORKER_PID="$!"
   log "worker_started pid=$WORKER_PID"
 }
@@ -274,10 +279,10 @@ stop_worker() {
   fi
 
   log "worker_stop pid=$WORKER_PID reason=$reason"
-  kill "$WORKER_PID" 2>/dev/null || true
+  kill -TERM "-$WORKER_PID" 2>/dev/null || kill "$WORKER_PID" 2>/dev/null || true
   sleep 10
   if kill -0 "$WORKER_PID" 2>/dev/null; then
-    kill -9 "$WORKER_PID" 2>/dev/null || true
+    kill -KILL "-$WORKER_PID" 2>/dev/null || kill -9 "$WORKER_PID" 2>/dev/null || true
   fi
   wait "$WORKER_PID" 2>/dev/null || true
   WORKER_PID=""
@@ -287,7 +292,12 @@ stop_worker() {
 cleanup() {
   stop_worker "watchdog_exit"
 }
-trap cleanup EXIT INT TERM
+on_signal() {
+  cleanup
+  exit 0
+}
+trap cleanup EXIT
+trap on_signal INT TERM
 
 start_worker
 last_snapshot="$(progress_snapshot)"

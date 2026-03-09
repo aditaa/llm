@@ -138,7 +138,12 @@ stop_worker() {
 cleanup() {
   stop_worker "watchdog_exit"
 }
-trap cleanup EXIT INT TERM
+on_signal() {
+  cleanup
+  exit 0
+}
+trap cleanup EXIT
+trap on_signal INT TERM
 
 start_worker
 last_snapshot="$(progress_snapshot)"

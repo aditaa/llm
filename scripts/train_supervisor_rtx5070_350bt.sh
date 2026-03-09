@@ -85,6 +85,7 @@ GENERATION_STOP_ON_FAIL=0
 DEDUPE_OVERLAP_MANIFESTS=1
 DEDUPE_KEEP="newest"
 DEDUPE_DRY_RUN=0
+DEDUPE_REPORT_KEEP=240
 
 usage() {
   cat <<'USAGE'
@@ -104,6 +105,7 @@ Core options:
                                Disable manifest overlap dedupe before each train chunk
   --dedupe-keep MODE           Overlap dedupe strategy: newest|oldest (default: newest)
   --dedupe-dry-run             Analyze overlap only; do not disable duplicate manifests
+  --dedupe-report-keep N       Keep latest N manifest dedupe report/log files (default: 240)
 
 Training shape:
   --device NAME                Training device (default: cuda)
@@ -203,6 +205,7 @@ while [[ $# -gt 0 ]]; do
     --no-dedupe-overlap-manifests) DEDUPE_OVERLAP_MANIFESTS=0; shift ;;
     --dedupe-keep) DEDUPE_KEEP="$2"; shift 2 ;;
     --dedupe-dry-run) DEDUPE_DRY_RUN=1; shift ;;
+    --dedupe-report-keep) DEDUPE_REPORT_KEEP="$2"; shift 2 ;;
     --device) DEVICE="$2"; shift 2 ;;
     --batch-size) BATCH_SIZE="$2"; shift 2 ;;
     --grad-accum-steps) GRAD_ACCUM_STEPS="$2"; shift 2 ;;
@@ -311,6 +314,10 @@ if [[ "$GENERATION_EVERY_CHUNKS" -le 0 ]]; then
 fi
 if [[ "$DEDUPE_KEEP" != "newest" && "$DEDUPE_KEEP" != "oldest" ]]; then
   echo "error: dedupe-keep must be one of: newest, oldest" >&2
+  exit 1
+fi
+if ! [[ "$DEDUPE_REPORT_KEEP" =~ ^[0-9]+$ ]]; then
+  echo "error: dedupe-report-keep must be an integer >= 0" >&2
   exit 1
 fi
 
@@ -533,6 +540,39 @@ PY
   local total kept overlap unique disabled
   read -r total kept overlap unique disabled <<< "$summary"
   log "manifest_dedupe_done total=$total kept=$kept overlap=$overlap unique_inputs=$unique disabled=$disabled dry_run=$DEDUPE_DRY_RUN report=$dedupe_report"
+}
+
+prune_manifest_dedupe_artifacts() {
+  local keep="$DEDUPE_REPORT_KEEP"
+  if [[ "$keep" -le 0 ]]; then
+    return
+  fi
+
+  "$PYTHON_BIN" - <<'PY' "$STATE_DIR" "$keep" >> "$SUP_LOG" 2>&1
+from pathlib import Path
+import sys
+
+state_dir = Path(sys.argv[1])
+keep = int(sys.argv[2])
+patterns = ("manifest_dedupe_*.json", "manifest_dedupe_*.log")
+deleted = 0
+
+for pattern in patterns:
+    files = sorted(
+        state_dir.glob(pattern),
+        key=lambda path: path.stat().st_mtime,
+        reverse=True,
+    )
+    for extra in files[keep:]:
+        try:
+            extra.unlink()
+            deleted += 1
+        except OSError:
+            pass
+
+if deleted:
+    print(f"manifest_dedupe_pruned deleted={deleted} keep={keep}")
+PY
 }
 
 start_gpu_monitor() {
@@ -923,6 +963,7 @@ log "tuning_start batch_size=$BATCH_SIZE grad_accum=$GRAD_ACCUM_STEPS auto_tune=
 
 while true; do
   run_manifest_dedupe
+  prune_manifest_dedupe_artifacts
   mcount="$(manifest_count)"
   if [[ "$mcount" -lt "$MIN_MANIFESTS" ]]; then
     log "waiting_for_manifests have=$mcount need=$MIN_MANIFESTS sleep=${POLL_SECONDS}s"

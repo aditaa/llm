@@ -57,6 +57,7 @@ class ScriptTests(unittest.TestCase):
         )
         self.assertEqual(proc.returncode, 0, msg=proc.stderr)
         self.assertIn("--min-unique-input-files", proc.stdout)
+        self.assertIn("--dedupe-report-keep", proc.stdout)
 
     def test_render_eval_trend_dashboard(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

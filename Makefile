@@ -114,7 +114,7 @@ train-350bt-ctx1024:
 
 train-supervisor-350bt:
 	@echo "Usage:"
-	@echo "  bash scripts/train_supervisor_rtx5070_350bt.sh --step-chunk 2000 --poll-seconds 60 --batch-size 12 --target-effective-batch 24 --min-unique-input-files 510 --min-batch-size 6 --max-batch-size 20 --batch-step 2 --checkpoint-keep-last 6 --checkpoint-keep-every 10000 --ema-decay 0.999 --eval-suite configs/eval/standard_prompt_suite_v3.json --generation-suite configs/eval/generation_smoke_suite_v1.json --generation-every-chunks 1 --no-train-fail-on-eval-regression"
+	@echo "  bash scripts/train_supervisor_rtx5070_350bt.sh --step-chunk 2000 --poll-seconds 60 --batch-size 12 --target-effective-batch 24 --min-unique-input-files 510 --min-batch-size 6 --max-batch-size 20 --batch-step 2 --checkpoint-keep-last 6 --checkpoint-keep-every 10000 --ema-decay 0.999 --dedupe-report-keep 240 --eval-suite configs/eval/standard_prompt_suite_v3.json --generation-suite configs/eval/generation_smoke_suite_v1.json --generation-every-chunks 1 --no-train-fail-on-eval-regression"
 
 pipeline-eta:
 	@echo "Usage:"

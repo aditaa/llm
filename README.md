@@ -240,6 +240,8 @@ bash scripts/stage_fineweb_from_warm.sh --max-files 4 --max-gib 8
 ```
 You can pass `--skip-list artifacts/reports/fineweb_stage_shard_loop/bad_parquet_files.txt`
 to avoid restaging files previously flagged as invalid.
+The staging script now copies into `*.parquet.incomplete` first and renames atomically,
+so sharding/preflight never reads partially written parquet files.
 
 3ac. Run rolling warm->hot staging + sharding loop (recommended for 350BT on limited hot disk):
 ```bash
@@ -581,6 +583,7 @@ This is a live-only monitor (no report/status files written) and includes:
 - system status (CPU, memory, GPU, disk mounts)
 - pipeline progress (download/staging/sharding/training)
 - manifest coverage status (`unique/510`, overlap inputs/manifests, completion flag)
+- supervisor gate status (for example waiting on `min_unique_input_files`)
 - running project task states with pid/runtime/cpu/mem summaries
 
 It refreshes in-place (full-screen mode). If your terminal does not handle full-screen

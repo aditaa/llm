@@ -26,6 +26,8 @@ class SampleState:
 
 
 STEP_RE = re.compile(r"step=(\d+)\b")
+WAIT_MANIFESTS_RE = re.compile(r"waiting_for_manifests have=(\d+) need=(\d+)")
+WAIT_UNIQUE_RE = re.compile(r"waiting_for_unique_inputs have=(\d+) need=(\d+)")
 
 
 def parse_args() -> argparse.Namespace:
@@ -176,6 +178,31 @@ def _latest_generation_summary(supervisor_state_dir: Path) -> tuple[str, str, st
     if len(parts) < 9:
         return ("NA", "NA", "NA")
     return (parts[2], parts[3], parts[8])
+
+
+def _latest_supervisor_gate(supervisor_state_dir: Path) -> str:
+    if not supervisor_state_dir.exists():
+        return "unknown"
+    logs = sorted(
+        supervisor_state_dir.glob("supervisor_*.log"),
+        key=lambda p: p.stat().st_mtime,
+        reverse=True,
+    )
+    for log_path in logs[:3]:
+        rc, text = _run_capture(["tail", "-n", "200", str(log_path)], timeout=5)
+        if rc != 0 or not text:
+            continue
+        lines = [line.strip() for line in text.splitlines() if line.strip()]
+        for line in reversed(lines):
+            m = WAIT_UNIQUE_RE.search(line)
+            if m:
+                return f"waiting_unique_inputs {m.group(1)}/{m.group(2)}"
+            m = WAIT_MANIFESTS_RE.search(line)
+            if m:
+                return f"waiting_manifests {m.group(1)}/{m.group(2)}"
+            if "train_launch " in line:
+                return "train_chunk_launching"
+    return "unknown"
 
 
 def _manifest_input_coverage(shards_root: Path) -> tuple[int, int, int]:
@@ -397,6 +424,7 @@ def _render(
     )
     processed_parquet = _count_nonempty_lines(stage_state)
     train_step = _latest_train_step(sup_dir)
+    supervisor_gate = _latest_supervisor_gate(sup_dir)
     gen_rc, gen_pass_rate, gen_regression_pass = _latest_generation_summary(sup_dir)
 
     dt = (now - state.ts) if state.ts is not None else None
@@ -428,7 +456,7 @@ def _render(
         ("hf-download", r"\.venv/bin/hf download HuggingFaceFW/fineweb"),
         ("stage-loop", r"fineweb_stage_shard_loop\.sh"),
         ("shard-builder", r"scripts/fineweb_parquet_to_shards\.py"),
-        ("train-supervisor", r"train_supervisor_rtx5070_350bt\.sh"),
+        ("train-supervisor", r"bash scripts/train_supervisor_rtx5070_350bt\.sh"),
         ("trainer", r"llm\.cli train"),
         ("eval-runner", r"eval_checkpoint_prompts\.py"),
         ("generation-gate", r"eval_checkpoint_prompts\.py .*generation_smoke_suite_v1\.json"),
@@ -498,6 +526,7 @@ def _render(
         f"rate={f'{train_sps:.3f} step/s' if train_sps is not None else 'n/a'} "
         f"eta={_eta(rem_steps, train_sps)}"
     )
+    lines.append(f"  Supervisor: gate={supervisor_gate}")
     lines.append(
         f"  GenGate:  latest_rc={gen_rc} latest_pass_rate={gen_pass_rate} "
         f"latest_regression_pass={gen_regression_pass}"

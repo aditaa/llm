@@ -109,6 +109,7 @@ while IFS= read -r src_path; do
 
   name="$(basename "$src_path")"
   dst_path="$DEST_DIR/$name"
+  tmp_path="$DEST_DIR/${name}.incomplete"
   src_size="$(stat -c%s "$src_path")"
   src_mtime="$(stat -c%Y "$src_path")"
   age="$((now_epoch - src_mtime))"
@@ -148,12 +149,15 @@ while IFS= read -r src_path; do
     continue
   fi
 
-  rsync -ah --partial --inplace "$src_path" "$DEST_DIR/" >> "$log" 2>&1
-  dst_size="$(stat -c%s "$dst_path" || echo -1)"
-  if [[ "$dst_size" -ne "$src_size" ]]; then
-    echo "FAIL size mismatch after copy file=$name src=$src_size dst=$dst_size" | tee -a "$log"
+  # Copy to a temp suffix and atomically rename into place so downstream
+  # consumers never observe partially-written *.parquet files.
+  rsync -ah --partial --inplace "$src_path" "$tmp_path" >> "$log" 2>&1
+  tmp_size="$(stat -c%s "$tmp_path" || echo -1)"
+  if [[ "$tmp_size" -ne "$src_size" ]]; then
+    echo "FAIL size mismatch after temp copy file=$name src=$src_size tmp=$tmp_size" | tee -a "$log"
     exit 1
   fi
+  mv -f "$tmp_path" "$dst_path"
 
   copied_files=$((copied_files + 1))
   copied_bytes=$((copied_bytes + src_size))

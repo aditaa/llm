@@ -123,6 +123,9 @@ bash scripts/fineweb_prefetch_hot_queue.sh \
   --stage-max-files 8 \
   --sleep-seconds 60
 ```
+`scripts/stage_fineweb_from_warm.sh` now stages parquet files via
+`*.parquet.incomplete` temp files and atomically renames on completion, so
+downstream preflight/sharding does not see partially written parquet data.
 
 Auto-resume trainer supervisor for growing shard sets:
 ```bash

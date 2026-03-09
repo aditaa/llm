@@ -216,6 +216,45 @@ class StageFineWebFromWarmTests(unittest.TestCase):
             copied = sorted(p.name for p in dest_dir.glob("*.parquet"))
             self.assertEqual(copied, ["a.parquet", "c.parquet"])
 
+    def test_copy_uses_temp_suffix_and_renames_atomically(self) -> None:
+        repo_root = _repo_root()
+        script = repo_root / "scripts" / "stage_fineweb_from_warm.sh"
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            src_dir = tmp_path / "src"
+            dest_dir = tmp_path / "dest"
+            src_dir.mkdir(parents=True, exist_ok=True)
+            dest_dir.mkdir(parents=True, exist_ok=True)
+
+            payload = b"hello parquet bytes"
+            (src_dir / "a.parquet").write_bytes(payload)
+
+            proc = subprocess.run(
+                [
+                    "bash",
+                    str(script),
+                    "--src-dir",
+                    str(src_dir),
+                    "--dest-dir",
+                    str(dest_dir),
+                    "--max-files",
+                    "10",
+                    "--max-gib",
+                    "0",
+                    "--min-age-seconds",
+                    "0",
+                ],
+                cwd=tmp_path,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(proc.returncode, 0, msg=proc.stderr)
+
+            self.assertEqual((dest_dir / "a.parquet").read_bytes(), payload)
+            self.assertFalse((dest_dir / "a.parquet.incomplete").exists())
+
 
 class FineWebManifestDedupeTests(unittest.TestCase):
     def test_dedupe_disables_older_overlapping_manifest(self) -> None:

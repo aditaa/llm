@@ -67,7 +67,6 @@ make fineweb-prefetch-hot-queue # print hot-queue prefetch worker usage
 make fineweb-revalidate-bad-parquet # print bad parquet revalidate/restage usage
 make fineweb-stage-shard-loop # print rolling stage->shard->verify->sync->purge usage
 make fineweb-stage-shard-watchdog # print auto-restart watchdog usage for stage/shard loop
-make fineweb-hot-queue # print hot parquet queue-oriented stage/shard usage
 make lr-sweep-350bt # print RTX 5070 LR sweep usage for staged 350BT shards
 make train-350bt-v2 # print 350BT long-run launcher usage
 make train-350bt-ctx1024 # print long-context continuation launcher usage
@@ -628,7 +627,7 @@ It refreshes in-place (full-screen mode). If your terminal does not handle full-
 escape codes well, add `--no-alt-screen`.
 
 ## Service Mode (systemd)
-For reboot-safe long runs, install service units for supervisor + prefetch:
+For reboot-safe long runs, install service units for supervisor + stage watchdog:
 
 ```bash
 make install-systemd-services
@@ -636,7 +635,6 @@ make install-systemd-services
 
 Templates:
 - `deploy/systemd/llm-train-supervisor.service`
-- `deploy/systemd/llm-fineweb-prefetch.service`
 - `deploy/systemd/llm-fineweb-stage-shard-loop.service`
 - `deploy/systemd/llm-fineweb-stage-shard-watchdog.service`
 - `deploy/systemd/llm-hf-download-watchdog.service`
@@ -648,6 +646,12 @@ Templates:
 
 Note: prefetch is optional when stage-loop already uses hot-queue staging flags
 (`--hot-queue-min-files`, `--stage-max-files`, `--stage-copy-jobs`, `--stage-min-free-gib`).
+Install/enable the prefetch unit only when you explicitly want separate queue prefetching:
+
+```bash
+bash scripts/install_systemd_services.sh --install-watchdog --install-prefetch
+```
+
 If you run prefetch with stage-loop, keep auto skip enabled so it respects
 processed/bad parquet lists from `artifacts/reports/fineweb_stage_shard_loop/`.
 Prefetch now forwards `--min-free-gib` to `stage_fineweb_from_warm.sh`, so

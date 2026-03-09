@@ -28,7 +28,6 @@ make render-eval-dashboard
 make package-inference-bundle
 make train-tokenizer-global
 make shard-corpus-batch
-make fineweb-prefetch-hot-queue
 make install-systemd-services
 make sync-warm
 make hydrate-warm
@@ -73,13 +72,16 @@ make install-systemd-services
 ```
 Units installed from `deploy/systemd/`:
 - `llm-train-supervisor.service`
-- `llm-fineweb-prefetch.service`
 - `llm-fineweb-stage-shard-loop.service`
 - `llm-fineweb-stage-shard-watchdog.service`
 - `llm-hf-download-watchdog.service` (optional)
 - `llm-checkpoint-offload-prune.service`
 - `llm-checkpoint-offload-prune.timer`
 - `llm-vm-swappiness.service`
+
+Optional prefetch service (only if you want separate prefetch in addition to stage-loop staging):
+- `llm-fineweb-prefetch.service`
+- install with: `bash scripts/install_systemd_services.sh --install-watchdog --install-prefetch`
 
 `deploy/systemd/llm.env.example` includes tuned loop args for this host profile
 (`--hot-queue-min-files 10`, `--stage-copy-jobs 4`, `--stage-min-free-gib 80`,

@@ -8,6 +8,7 @@ ENV_TARGET="/etc/llm/llm.env"
 ENABLE=1
 START=1
 INSTALL_WATCHDOG=0
+INSTALL_PREFETCH=0
 INSTALL_MAINTENANCE=1
 
 usage() {
@@ -16,7 +17,7 @@ Usage:
   bash scripts/install_systemd_services.sh [options]
 
 Install and optionally enable/start systemd service units for long-running
-LLM pipeline workers (supervisor + prefetch + stage/shard watchdog, optional HF watchdog).
+LLM pipeline workers (supervisor + stage/shard watchdog, optional prefetch/HF watchdog).
 Also installs maintenance units (checkpoint offload/prune timer + bad-parquet
 revalidate timer + VM swappiness tune service).
 
@@ -25,6 +26,7 @@ Options:
   --user NAME               Service user (default: current user)
   --systemd-dir DIR         Unit install directory (default: /etc/systemd/system)
   --env-target FILE         Environment file path (default: /etc/llm/llm.env)
+  --install-prefetch        Also install/enable prefetch service unit
   --install-watchdog        Also install/enable HF watchdog service unit
   --no-maintenance          Skip maintenance units (offload/revalidate timers + VM tuning)
   --no-enable               Do not run systemctl enable
@@ -33,7 +35,7 @@ Options:
 
 Examples:
   bash scripts/install_systemd_services.sh
-  bash scripts/install_systemd_services.sh --install-watchdog
+  bash scripts/install_systemd_services.sh --install-watchdog --install-prefetch
   bash scripts/install_systemd_services.sh --no-maintenance
 USAGE
 }
@@ -58,6 +60,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --install-watchdog)
       INSTALL_WATCHDOG=1
+      shift
+      ;;
+    --install-prefetch)
+      INSTALL_PREFETCH=1
       shift
       ;;
     --no-maintenance)
@@ -118,9 +124,11 @@ install_unit() {
 }
 
 install_unit "llm-train-supervisor.service" "llm-train-supervisor.service"
-install_unit "llm-fineweb-prefetch.service" "llm-fineweb-prefetch.service"
 install_unit "llm-fineweb-stage-shard-loop.service" "llm-fineweb-stage-shard-loop.service"
 install_unit "llm-fineweb-stage-shard-watchdog.service" "llm-fineweb-stage-shard-watchdog.service"
+if [[ "$INSTALL_PREFETCH" -eq 1 ]]; then
+  install_unit "llm-fineweb-prefetch.service" "llm-fineweb-prefetch.service"
+fi
 if [[ "$INSTALL_WATCHDOG" -eq 1 ]]; then
   install_unit "llm-hf-download-watchdog.service" "llm-hf-download-watchdog.service"
 fi
@@ -143,10 +151,12 @@ $SUDO systemctl daemon-reload
 
 units=(
   llm-train-supervisor.service
-  llm-fineweb-prefetch.service
   llm-fineweb-stage-shard-watchdog.service
 )
 timer_units=()
+if [[ "$INSTALL_PREFETCH" -eq 1 ]]; then
+  units+=(llm-fineweb-prefetch.service)
+fi
 if [[ "$INSTALL_WATCHDOG" -eq 1 ]]; then
   units+=(llm-hf-download-watchdog.service)
 fi

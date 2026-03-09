@@ -43,7 +43,6 @@ Use the `Makefile` as the source of truth:
 - `make fineweb-revalidate-bad-parquet`: usage helper for revalidating/restaging bad parquet entries
 - `make fineweb-stage-shard-loop`: usage helper for rolling warm->hot stage + shard + verify + sync + purge
 - `make fineweb-stage-shard-watchdog`: usage helper for auto-restart watchdog around the stage/shard loop
-- `make fineweb-hot-queue`: usage helper for hot parquet queue-oriented stage + shard flow
 - `make lr-sweep-350bt`: usage helper for RTX 5070 LR sweep on staged 350BT shards (`2e-4..4e-4`, ctx 512)
 - `make train-350bt-v2`: usage helper for the 350BT long-run launcher profile
 - `make train-350bt-ctx1024`: usage helper for context-extension continuation stage

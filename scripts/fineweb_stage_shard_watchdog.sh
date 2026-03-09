@@ -22,7 +22,7 @@ Options:
 USAGE
 }
 
-WORKER_ARGS="--hot-queue-min-files 12 --stage-max-files 10 --stage-copy-jobs 1 --process-max-files 10 --shard-jobs 1 --tokenizer-threads 10 --encode-batch-size 1024 --sleep-seconds 60 --shard-min-batch-size 512"
+WORKER_ARGS="--hot-queue-min-files 12 --stage-max-files 10 --stage-copy-jobs 2 --stage-min-free-gib 80 --process-max-files 10 --shard-jobs 2 --auto-tune-shard-jobs --auto-tune-min-shard-jobs 1 --auto-tune-max-shard-jobs 4 --auto-tune-min-batch-seconds 300 --tokenizer-threads 10 --encode-batch-size 1024 --sleep-seconds 60 --shard-min-batch-size 512"
 WATCHDOG_LOG_FILE="artifacts/reports/fineweb_stage_shard_loop/watchdog.log"
 CHECK_INTERVAL_SECONDS=120
 STALL_SECONDS=1800

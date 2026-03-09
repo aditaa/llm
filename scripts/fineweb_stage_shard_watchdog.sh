@@ -107,11 +107,15 @@ WORKER_PID=""
 
 start_worker() {
   # Launch worker in its own session so stop_worker can terminate the full process group.
-  if command -v setsid >/dev/null 2>&1; then
-    setsid bash scripts/fineweb_stage_shard_loop.sh $WORKER_ARGS >> "$WATCHDOG_LOG_FILE" 2>&1 &
-  else
-    bash scripts/fineweb_stage_shard_loop.sh $WORKER_ARGS >> "$WATCHDOG_LOG_FILE" 2>&1 &
-  fi
+  (
+    # Prevent watchdog lock FD from being inherited by worker descendants.
+    exec 8>&-
+    if command -v setsid >/dev/null 2>&1; then
+      exec setsid bash scripts/fineweb_stage_shard_loop.sh $WORKER_ARGS >> "$WATCHDOG_LOG_FILE" 2>&1
+    else
+      exec bash scripts/fineweb_stage_shard_loop.sh $WORKER_ARGS >> "$WATCHDOG_LOG_FILE" 2>&1
+    fi
+  ) &
   WORKER_PID="$!"
   log "worker_started pid=$WORKER_PID args=\"$WORKER_ARGS\""
 }

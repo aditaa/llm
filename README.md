@@ -584,7 +584,7 @@ PYTHONPATH=src .venv/bin/python scripts/pipeline_live_view.py --refresh-seconds 
 This is a live-only monitor (no report/status files written) and includes:
 - system status (CPU, memory, GPU, disk mounts)
 - pipeline progress (download/staging/sharding/training)
-- manifest coverage status (`unique/510`, overlap inputs/manifests, completion flag)
+- manifest coverage status (`unique/510`, overlap inputs/manifests, coverage rate + ETA, completion flag)
 - supervisor gate status (for example waiting on `min_unique_input_files`)
 - running project task states with pid/runtime/cpu/mem summaries
 

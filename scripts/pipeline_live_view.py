@@ -22,6 +22,7 @@ class SampleState:
     warm_bytes: int | None = None
     warm_parquet: int | None = None
     processed_parquet: int | None = None
+    manifest_unique_inputs: int | None = None
     train_step: int | None = None
 
 
@@ -351,7 +352,34 @@ def _task_status(pattern: str) -> tuple[int, list[str]]:
     if not pids:
         return 0, []
 
-    pid_csv = ",".join(str(pid) for pid in pids)
+    pid_set = set(pids)
+    root_pids: list[int] = []
+    ppids: dict[int, int] = {}
+    rc_tree, tree_text = _run_capture(
+        ["ps", "-o", "pid=,ppid=", "-p", ",".join(str(pid) for pid in pids)],
+        timeout=5,
+    )
+    if rc_tree == 0 and tree_text:
+        for raw in tree_text.splitlines():
+            parts = raw.split()
+            if len(parts) != 2:
+                continue
+            if not parts[0].isdigit() or not parts[1].isdigit():
+                continue
+            pid = int(parts[0])
+            ppid = int(parts[1])
+            ppids[pid] = ppid
+    if ppids:
+        for pid in pids:
+            ppid = ppids.get(pid)
+            if ppid is None or ppid not in pid_set:
+                root_pids.append(pid)
+    else:
+        root_pids = pids[:]
+    if not root_pids:
+        root_pids = pids[:]
+
+    pid_csv = ",".join(str(pid) for pid in root_pids)
     rc_ps, ps_text = _run_capture(
         ["ps", "-o", "pid=,etime=,pcpu=,pmem=,comm=", "-p", pid_csv],
         timeout=5,
@@ -361,7 +389,7 @@ def _task_status(pattern: str) -> tuple[int, list[str]]:
         for raw in ps_text.splitlines():
             entry = " ".join(raw.split())
             rows.append(entry)
-    return len(pids), rows
+    return len(root_pids), rows
 
 
 def _top_cpu_processes(limit: int) -> list[str]:
@@ -431,12 +459,14 @@ def _render(
     download_bps = _rate(warm_bytes, state.warm_bytes, dt)
     download_pps = _rate(warm_parquet, state.warm_parquet, dt)
     shard_pps = _rate(processed_parquet, state.processed_parquet, dt)
+    coverage_pps = _rate(manifest_unique_inputs, state.manifest_unique_inputs, dt)
     train_sps = _rate(train_step, state.train_step, dt)
 
     state.ts = now
     state.warm_bytes = warm_bytes
     state.warm_parquet = warm_parquet
     state.processed_parquet = processed_parquet
+    state.manifest_unique_inputs = manifest_unique_inputs
     state.train_step = train_step
 
     cpu_usage = _cpu_usage(cpu_prev, cpu_curr)
@@ -519,7 +549,10 @@ def _render(
     lines.append(
         f"  Coverage: manifest_unique={manifest_unique_inputs}/{args.expected_parquet_files} "
         f"remaining={rem_manifest_unique} overlap_inputs={manifest_overlap_inputs} "
-        f"overlap_manifests={manifest_overlap_manifests} complete={int(coverage_complete)}"
+        f"overlap_manifests={manifest_overlap_manifests} "
+        f"rate={f'{coverage_pps:.3f} files/s' if coverage_pps is not None else 'n/a'} "
+        f"eta={_eta(rem_manifest_unique, coverage_pps)} "
+        f"complete={int(coverage_complete)}"
     )
     lines.append(
         f"  Training: step={train_step}/{args.train_target_step} "

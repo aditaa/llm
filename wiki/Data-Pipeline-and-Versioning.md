@@ -86,6 +86,7 @@ This loop:
 - quarantines bad hot parquet files and tracks them in `artifacts/reports/fineweb_stage_shard_loop/bad_parquet_files.txt`
 - marks files processed only after post-batch guardrails pass (valid report+manifest, non-empty shard files)
 - on 20-core hosts, two shard jobs with tokenizer batch encoding is the current higher-throughput profile
+- reconciles bad parquet basenames against warm-source validity on startup, so transient hot-copy failures can be retried
 
 Optional watchdog for stage/shard loop auto-restart:
 ```bash
@@ -94,6 +95,7 @@ bash scripts/fineweb_stage_shard_watchdog.sh \
   --check-interval-seconds 120 \
   --stall-seconds 5400
 ```
+The stage watchdog enforces a singleton lock and stops worker process groups cleanly during restarts.
 
 Optional watchdog for large FineWeb downloads:
 ```bash

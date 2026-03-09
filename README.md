@@ -262,6 +262,8 @@ quarantines failing hot files, and records their basenames in
 It also bootstraps processed parquet basenames from existing shard manifests on startup,
 builds a combined stage skip list (`processed + bad`), and removes already-known files from hot storage,
 so restarted loops continue forward instead of re-staging the earliest parquet files.
+It also reconciles `bad_parquet_files.txt` against warm-source parquet validity on startup, so
+transient hot-copy failures do not permanently blacklist valid warm files.
 `--hot-queue-min-files` keeps a small parquet queue staged locally so shard building is less likely to idle on copy waits.
 If a shard build fails with OOM-like errors, the loop retries automatically with a smaller batch size.
 Batch guardrails now require valid report/manifest + non-empty shard outputs before files are marked
@@ -277,6 +279,7 @@ bash scripts/fineweb_stage_shard_watchdog.sh \
   --check-interval-seconds 120 \
   --stall-seconds 5400
 ```
+The stage-watchdog now enforces a singleton lock and terminates worker process groups cleanly on restarts.
 
 3ad. Build tokenizer + token shards directly from FineWeb parquet:
 ```bash

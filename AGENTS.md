@@ -121,14 +121,17 @@ Keep PR scope narrow; split refactors and features into separate PRs.
 - For long-running Hugging Face parquet pulls, use `scripts/hf_download_resumable.sh` instead of one-shot `hf download` (prefer `--enable-hf-transfer`, `--max-workers 6`, `--skip-dry-run`, and `--attempt-timeout-seconds` for 350BT-scale pulls)
 - For unattended long pulls, prefer `scripts/hf_download_watchdog.sh` to restart stalled/exited resumable workers based on progress checks (`--stall-seconds`, `--check-interval-seconds`)
 - For watchdog runs, set `--exit-on-complete` with `--expected-parquet-files` and/or `--expected-bytes` so completed pulls do not restart indefinitely
+- `hf_download_watchdog.sh` enforces a singleton lock (`.hf_download_watchdog.lock`) in the target local-dir
 - For parquet-based FineWeb workflows, use `scripts/stage_fineweb_from_warm.sh` to copy bounded warm chunks into hot storage
 - Use `stage_fineweb_from_warm.sh --skip-list <bad_file_list>` to avoid re-staging known-bad parquet basenames
 - For long-running 350BT ingestion on limited hot disk, use `scripts/fineweb_stage_shard_loop.sh` for staged processing and automatic hot-space reclaim
 - For unattended long 350BT ingestion, run `scripts/fineweb_stage_shard_watchdog.sh` to auto-restart stage-loop worker exits/stalls
 - For long shard batches, use a higher stage-watchdog stall timeout (for example `--stall-seconds 5400`) to avoid false restarts mid-batch
+- `fineweb_stage_shard_watchdog.sh` enforces a singleton lock and stops worker process groups (not only the parent shell)
 - Use `fineweb_stage_shard_loop.sh --hot-queue-min-files <N>` to keep a bounded hot parquet queue and reduce sharder copy stalls
 - `fineweb_stage_shard_loop.sh` now preflights selected parquet files and quarantines failures into `artifacts/reports/fineweb_stage_shard_loop/quarantine_bad_parquet/`
 - Known-bad parquet basenames are tracked in `artifacts/reports/fineweb_stage_shard_loop/bad_parquet_files.txt` and skipped in future stage cycles
+- On startup, `fineweb_stage_shard_loop.sh` reconciles bad parquet entries against warm-source validity to avoid permanent false-positive skips
 - `fineweb_stage_shard_loop.sh` now bootstraps processed parquet basenames from existing manifests at startup, merges `processed + bad` into a stage skip list, and removes known files from hot storage before staging
 - Stage-loop batch guardrails now require valid report + manifest + non-empty shard files before marking files as processed/purging hot copies
 - Guardrail validation logic is centralized in `src/llm/fineweb_guardrails.py`; keep it covered by unit tests

@@ -395,6 +395,32 @@ mark_bad_parquet() {
   fi
 }
 
+reconcile_bad_parquet_from_warm() {
+  if [[ ! -s "$BAD_PARQUET_FILE" ]]; then
+    return
+  fi
+
+  local tmp_file
+  tmp_file="$(mktemp)"
+  local name
+  local retained=0
+  local reinstated=0
+  while IFS= read -r name; do
+    [[ -z "$name" ]] && continue
+    local warm_path="$WARM_PARQUET_DIR/$name"
+    if [[ -f "$warm_path" ]] && validate_parquet_file "$warm_path" "$FIELD" >> "$LOG_FILE" 2>&1; then
+      log "bad_parquet_reinstated file=$name reason=warm_source_valid"
+      reinstated=$((reinstated + 1))
+      continue
+    fi
+    printf '%s\n' "$name" >> "$tmp_file"
+    retained=$((retained + 1))
+  done < "$BAD_PARQUET_FILE"
+  sort -u "$tmp_file" -o "$tmp_file"
+  mv "$tmp_file" "$BAD_PARQUET_FILE"
+  log "bad_parquet_reconcile retained=$retained reinstated=$reinstated"
+}
+
 validate_parquet_file() {
   local parquet_path="$1"
   local field_name="$2"
@@ -785,6 +811,7 @@ process_batch() {
 
 log "loop_start warm_parquet_dir=$WARM_PARQUET_DIR hot_parquet_dir=$HOT_PARQUET_DIR"
 log "loop_config shards_root=$SHARDS_ROOT tokenizer_path=$TOKENIZER_PATH iterations=$ITERATIONS hot_queue_min_files=$HOT_QUEUE_MIN_FILES bad_parquet_file=$BAD_PARQUET_FILE quarantine_dir=$QUARANTINE_DIR"
+reconcile_bad_parquet_from_warm
 bootstrap_processed_from_manifests
 refresh_stage_skip_list
 

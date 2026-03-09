@@ -73,6 +73,17 @@ while [[ $# -gt 0 ]]; do
 done
 
 mkdir -p "$(dirname "$WATCHDOG_LOG_FILE")"
+if ! command -v flock >/dev/null 2>&1; then
+  echo "error: required command not found: flock" >&2
+  exit 1
+fi
+
+LOCK_FILE="${WATCHDOG_LOG_FILE}.lock"
+exec 8>"$LOCK_FILE"
+if ! flock -n 8; then
+  echo "error: another fineweb_stage_shard_watchdog instance is already running" >&2
+  exit 3
+fi
 
 log() {
   local ts

@@ -178,11 +178,19 @@ fi
 require_cmd awk
 require_cmd date
 require_cmd find
+require_cmd flock
 require_cmd kill
 require_cmd mkdir
 require_cmd sleep
 
 mkdir -p "$LOCAL_DIR" "$(dirname "$WORKER_LOG_FILE")" "$(dirname "$WATCHDOG_LOG_FILE")"
+
+WATCHDOG_LOCK_FILE="$LOCAL_DIR/.hf_download_watchdog.lock"
+exec 8>"$WATCHDOG_LOCK_FILE"
+if ! flock -n 8; then
+  echo "error: another hf_download_watchdog instance is already running" >&2
+  exit 3
+fi
 
 log() {
   local ts

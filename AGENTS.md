@@ -126,11 +126,13 @@ Keep PR scope narrow; split refactors and features into separate PRs.
 - Use `fineweb_stage_shard_loop.sh --hot-queue-min-files <N>` to keep a bounded hot parquet queue and reduce sharder copy stalls
 - `fineweb_stage_shard_loop.sh` now preflights selected parquet files and quarantines failures into `artifacts/reports/fineweb_stage_shard_loop/quarantine_bad_parquet/`
 - Known-bad parquet basenames are tracked in `artifacts/reports/fineweb_stage_shard_loop/bad_parquet_files.txt` and skipped in future stage cycles
+- `fineweb_stage_shard_loop.sh` now bootstraps processed parquet basenames from existing manifests at startup, merges `processed + bad` into a stage skip list, and removes known files from hot storage before staging
 - Stage-loop batch guardrails now require valid report + manifest + non-empty shard files before marking files as processed/purging hot copies
 - Guardrail validation logic is centralized in `src/llm/fineweb_guardrails.py`; keep it covered by unit tests
 - For higher CPU throughput on this 20-core host, prefer `--shard-jobs 2 --tokenizer-threads 10 --encode-batch-size 1024`
 - Keep stage-loop OOM retry enabled (default) so shard builds back off to smaller `--batch-size` automatically
 - For continuously growing shard sets, use `scripts/train_supervisor_rtx5070_350bt.sh` so each resumed chunk re-reads new manifests before training continues
+- For continuous 350BT pipeline runs, keep exactly one `fineweb_stage_shard_watchdog.sh` and one `train_supervisor_rtx5070_350bt.sh` process active; avoid concurrent one-off `llm.cli train` runs against the same checkpoint directory
 - Supervisor resume guardrail validates `last.pt`/`ckpt_step_*.pt` and quarantines invalid checkpoint files before retry
 - Use `--no-train-fail-on-eval-regression` in supervisor when you want train chunks to continue and rely on post-chunk prompt-suite gates
 - On 12 GB RTX 5070 profiles, start supervisor with `--batch-size 12 --target-effective-batch 24 --min-batch-size 6 --max-batch-size 20 --batch-step 2` to avoid early OOM churn

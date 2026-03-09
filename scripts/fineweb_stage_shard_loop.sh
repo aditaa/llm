@@ -251,6 +251,8 @@ fi
 mkdir -p "$HOT_PARQUET_DIR" "$SHARDS_ROOT" "$STATE_DIR"
 PROCESSED_FILE="$STATE_DIR/processed_parquet_files.txt"
 touch "$PROCESSED_FILE"
+STAGE_SKIP_FILE="$STATE_DIR/stage_skip_list.txt"
+touch "$STAGE_SKIP_FILE"
 
 if [[ -z "$BAD_PARQUET_FILE" ]]; then
   BAD_PARQUET_FILE="$STATE_DIR/bad_parquet_files.txt"
@@ -280,6 +282,98 @@ warm_reports_dir="$WARM_ROOT/reports/fineweb_stage_shard_loop"
 is_bad_parquet_name() {
   local name="$1"
   grep -Fqx "$name" "$BAD_PARQUET_FILE"
+}
+
+is_processed_parquet_name() {
+  local name="$1"
+  grep -Fqx "$name" "$PROCESSED_FILE"
+}
+
+refresh_stage_skip_list() {
+  : > "$STAGE_SKIP_FILE"
+  if [[ -s "$BAD_PARQUET_FILE" ]]; then
+    cat "$BAD_PARQUET_FILE" >> "$STAGE_SKIP_FILE"
+  fi
+  if [[ -s "$PROCESSED_FILE" ]]; then
+    cat "$PROCESSED_FILE" >> "$STAGE_SKIP_FILE"
+  fi
+  if [[ -s "$STAGE_SKIP_FILE" ]]; then
+    sort -u "$STAGE_SKIP_FILE" -o "$STAGE_SKIP_FILE"
+  fi
+}
+
+bootstrap_processed_from_manifests() {
+  local before_count
+  before_count="$(awk 'NF {c+=1} END {print c+0}' "$PROCESSED_FILE")"
+  PYTHONPATH=src .venv/bin/python - "$SHARDS_ROOT" "$PROCESSED_FILE" <<'PY' >> "$LOG_FILE" 2>&1
+import json
+import sys
+from pathlib import Path
+
+shards_root = Path(sys.argv[1])
+processed_path = Path(sys.argv[2])
+
+names: set[str] = set()
+if processed_path.exists():
+    for raw in processed_path.read_text(encoding="utf-8", errors="replace").splitlines():
+        value = raw.strip()
+        if value:
+            names.add(value)
+
+for manifest_path in sorted(shards_root.rglob("manifest.json")):
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except Exception:
+        continue
+    for raw in manifest.get("input_files", []):
+        name = Path(str(raw)).name
+        if name:
+            names.add(name)
+
+processed_path.parent.mkdir(parents=True, exist_ok=True)
+processed_path.write_text(
+    "".join(f"{name}\n" for name in sorted(names)),
+    encoding="utf-8",
+)
+print(f"bootstrap_processed total={len(names)}")
+PY
+  local after_count
+  after_count="$(awk 'NF {c+=1} END {print c+0}' "$PROCESSED_FILE")"
+  local added=$((after_count - before_count))
+  if [[ "$added" -gt 0 ]]; then
+    log "processed_bootstrap_from_manifests added=$added total=$after_count"
+  else
+    log "processed_bootstrap_from_manifests added=0 total=$after_count"
+  fi
+}
+
+purge_hot_known_files() {
+  local removed=0
+  mapfile -t hot_files < <(find "$HOT_PARQUET_DIR" -maxdepth 1 -type f -name '*.parquet' -printf '%f\n' | sort)
+  for name in "${hot_files[@]}"; do
+    if is_bad_parquet_name "$name" || is_processed_parquet_name "$name"; then
+      local hot_file="$HOT_PARQUET_DIR/$name"
+      if [[ -f "$hot_file" ]]; then
+        rm -f "$hot_file"
+        removed=$((removed + 1))
+      fi
+    fi
+  done
+  if [[ "$removed" -gt 0 ]]; then
+    log "hot_cleanup_removed_known_files removed=$removed"
+  fi
+}
+
+count_hot_eligible_files() {
+  local count=0
+  mapfile -t hot_files < <(find "$HOT_PARQUET_DIR" -maxdepth 1 -type f -name '*.parquet' -printf '%f\n' | sort)
+  for name in "${hot_files[@]}"; do
+    if is_bad_parquet_name "$name" || is_processed_parquet_name "$name"; then
+      continue
+    fi
+    count=$((count + 1))
+  done
+  echo "$count"
 }
 
 mark_bad_parquet() {
@@ -386,28 +480,32 @@ validate_batch_guardrails() {
 }
 
 stage_once() {
+  refresh_stage_skip_list
+
   local hot_count
+  local eligible_hot_count
   hot_count="$(find "$HOT_PARQUET_DIR" -maxdepth 1 -type f -name '*.parquet' | wc -l | tr -d ' ')"
+  eligible_hot_count="$(count_hot_eligible_files)"
   local stage_files="$STAGE_MAX_FILES"
 
   if [[ "$HOT_QUEUE_MIN_FILES" -gt 0 ]]; then
-    if [[ "$hot_count" -ge "$HOT_QUEUE_MIN_FILES" ]]; then
-      log "stage_skip reason=queue_satisfied hot_count=$hot_count queue_min=$HOT_QUEUE_MIN_FILES"
+    if [[ "$eligible_hot_count" -ge "$HOT_QUEUE_MIN_FILES" ]]; then
+      log "stage_skip reason=queue_satisfied hot_count=$hot_count eligible_hot_count=$eligible_hot_count queue_min=$HOT_QUEUE_MIN_FILES"
       return 0
     fi
     local needed
-    needed=$((HOT_QUEUE_MIN_FILES - hot_count))
+    needed=$((HOT_QUEUE_MIN_FILES - eligible_hot_count))
     if [[ "$stage_files" -le 0 || "$needed" -lt "$stage_files" ]]; then
       stage_files="$needed"
     fi
   fi
 
   if [[ "$stage_files" -le 0 ]]; then
-    log "stage_skip reason=stage_files_nonpositive hot_count=$hot_count queue_min=$HOT_QUEUE_MIN_FILES"
+    log "stage_skip reason=stage_files_nonpositive hot_count=$hot_count eligible_hot_count=$eligible_hot_count queue_min=$HOT_QUEUE_MIN_FILES"
     return 0
   fi
 
-  log "stage_start max_files=$stage_files max_gib=$STAGE_MAX_GIB hot_count=$hot_count queue_min=$HOT_QUEUE_MIN_FILES"
+  log "stage_start max_files=$stage_files max_gib=$STAGE_MAX_GIB hot_count=$hot_count eligible_hot_count=$eligible_hot_count queue_min=$HOT_QUEUE_MIN_FILES"
   if [[ "$DRY_RUN" -eq 1 ]]; then
     bash scripts/stage_fineweb_from_warm.sh \
       --src-dir "$WARM_PARQUET_DIR" \
@@ -415,7 +513,7 @@ stage_once() {
       --max-files "$stage_files" \
       --max-gib "$STAGE_MAX_GIB" \
       --min-age-seconds "$STAGE_MIN_AGE_SECONDS" \
-      --skip-list "$BAD_PARQUET_FILE" \
+      --skip-list "$STAGE_SKIP_FILE" \
       --dry-run | tee -a "$LOG_FILE"
   else
     bash scripts/stage_fineweb_from_warm.sh \
@@ -424,7 +522,7 @@ stage_once() {
       --max-files "$stage_files" \
       --max-gib "$STAGE_MAX_GIB" \
       --min-age-seconds "$STAGE_MIN_AGE_SECONDS" \
-      --skip-list "$BAD_PARQUET_FILE" | tee -a "$LOG_FILE"
+      --skip-list "$STAGE_SKIP_FILE" | tee -a "$LOG_FILE"
   fi
   log "stage_done"
 }
@@ -642,6 +740,7 @@ process_batch() {
     printf '%s\n' "$name" >> "$PROCESSED_FILE"
   done
   sort -u "$PROCESSED_FILE" -o "$PROCESSED_FILE"
+  refresh_stage_skip_list
 
   if [[ "$PURGE_HOT" -eq 1 ]]; then
     for name in "${files[@]}"; do
@@ -658,9 +757,12 @@ process_batch() {
 
 log "loop_start warm_parquet_dir=$WARM_PARQUET_DIR hot_parquet_dir=$HOT_PARQUET_DIR"
 log "loop_config shards_root=$SHARDS_ROOT tokenizer_path=$TOKENIZER_PATH iterations=$ITERATIONS hot_queue_min_files=$HOT_QUEUE_MIN_FILES bad_parquet_file=$BAD_PARQUET_FILE quarantine_dir=$QUARANTINE_DIR"
+bootstrap_processed_from_manifests
+refresh_stage_skip_list
 
 completed_batches=0
 while true; do
+  purge_hot_known_files
   selected=()
   select_unprocessed_files selected
 

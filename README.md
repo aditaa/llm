@@ -253,6 +253,9 @@ and purges processed hot parquet files.
 Before sharding each batch, the loop now runs a parquet preflight check (row groups/rows/field),
 quarantines failing hot files, and records their basenames in
 `artifacts/reports/fineweb_stage_shard_loop/bad_parquet_files.txt` so they are skipped in future staging.
+It also bootstraps processed parquet basenames from existing shard manifests on startup,
+builds a combined stage skip list (`processed + bad`), and removes already-known files from hot storage,
+so restarted loops continue forward instead of re-staging the earliest parquet files.
 `--hot-queue-min-files` keeps a small parquet queue staged locally so shard building is less likely to idle on copy waits.
 If a shard build fails with OOM-like errors, the loop retries automatically with a smaller batch size.
 Batch guardrails now require valid report/manifest + non-empty shard outputs before files are marked
@@ -526,6 +529,8 @@ bash scripts/train_supervisor_rtx5070_350bt.sh \
   --generation-suite configs/eval/generation_smoke_suite_v1.json \
   --generation-every-chunks 1
 ```
+For continuous 350BT ingestion/training, keep exactly one stage watchdog and one train supervisor running.
+Avoid launching one-off `llm.cli train --max-steps ...` jobs in parallel with the supervisor.
 Add `--no-train-fail-on-eval-regression` if you want chunk runs to continue even when
 the train-loop held-out perplexity gate is noisy; prompt-suite regression/promotion
 checks still run in the supervisor eval step.

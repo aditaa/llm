@@ -82,7 +82,7 @@ fineweb-manifest-dedupe:
 
 stage-fineweb-from-warm:
 	@echo "Usage:"
-	@echo "  bash scripts/stage_fineweb_from_warm.sh --max-files 4 --max-gib 8"
+	@echo "  bash scripts/stage_fineweb_from_warm.sh --max-files 4 --max-gib 8 --copy-jobs 2"
 
 fineweb-prefetch-hot-queue:
 	@echo "Usage:"
@@ -90,15 +90,15 @@ fineweb-prefetch-hot-queue:
 
 fineweb-stage-shard-loop:
 	@echo "Usage:"
-	@echo "  bash scripts/fineweb_stage_shard_loop.sh --hot-queue-min-files 18 --stage-max-files 12 --process-max-files 12 --shard-jobs 2 --tokenizer-threads 10 --encode-batch-size 1024 --sleep-seconds 60 --shard-min-batch-size 512"
+	@echo "  bash scripts/fineweb_stage_shard_loop.sh --hot-queue-min-files 18 --stage-max-files 12 --stage-copy-jobs 2 --process-max-files 12 --shard-jobs 2 --tokenizer-threads 10 --encode-batch-size 1024 --sleep-seconds 60 --shard-min-batch-size 512"
 
 fineweb-stage-shard-watchdog:
 	@echo "Usage:"
-	@echo "  bash scripts/fineweb_stage_shard_watchdog.sh --worker-args \"--hot-queue-min-files 18 --stage-max-files 12 --process-max-files 12 --shard-jobs 2 --tokenizer-threads 10 --encode-batch-size 1024 --sleep-seconds 60 --shard-min-batch-size 512\" --check-interval-seconds 120 --stall-seconds 5400"
+	@echo "  bash scripts/fineweb_stage_shard_watchdog.sh --worker-args \"--hot-queue-min-files 18 --stage-max-files 12 --stage-copy-jobs 2 --process-max-files 12 --shard-jobs 2 --tokenizer-threads 10 --encode-batch-size 1024 --sleep-seconds 60 --shard-min-batch-size 512\" --check-interval-seconds 120 --stall-seconds 5400"
 
 fineweb-hot-queue:
 	@echo "Usage:"
-	@echo "  bash scripts/fineweb_stage_shard_loop.sh --hot-queue-min-files 18 --stage-max-files 12 --process-max-files 12 --shard-jobs 2 --tokenizer-threads 10 --encode-batch-size 1024 --sleep-seconds 60"
+	@echo "  bash scripts/fineweb_stage_shard_loop.sh --hot-queue-min-files 18 --stage-max-files 12 --stage-copy-jobs 2 --process-max-files 12 --shard-jobs 2 --tokenizer-threads 10 --encode-batch-size 1024 --sleep-seconds 60"
 
 lr-sweep-350bt:
 	@echo "Usage:"

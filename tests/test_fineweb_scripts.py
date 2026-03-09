@@ -203,6 +203,8 @@ class StageFineWebFromWarmTests(unittest.TestCase):
                     "0",
                     "--min-age-seconds",
                     "0",
+                    "--copy-jobs",
+                    "2",
                     "--skip-list",
                     str(skip_list),
                 ],
@@ -244,6 +246,8 @@ class StageFineWebFromWarmTests(unittest.TestCase):
                     "0",
                     "--min-age-seconds",
                     "0",
+                    "--copy-jobs",
+                    "2",
                 ],
                 cwd=tmp_path,
                 capture_output=True,
@@ -254,6 +258,37 @@ class StageFineWebFromWarmTests(unittest.TestCase):
 
             self.assertEqual((dest_dir / "a.parquet").read_bytes(), payload)
             self.assertFalse((dest_dir / "a.parquet.incomplete").exists())
+
+    def test_copy_jobs_requires_positive_integer(self) -> None:
+        repo_root = _repo_root()
+        script = repo_root / "scripts" / "stage_fineweb_from_warm.sh"
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            src_dir = tmp_path / "src"
+            dest_dir = tmp_path / "dest"
+            src_dir.mkdir(parents=True, exist_ok=True)
+            dest_dir.mkdir(parents=True, exist_ok=True)
+            (src_dir / "a.parquet").write_bytes(b"A")
+
+            proc = subprocess.run(
+                [
+                    "bash",
+                    str(script),
+                    "--src-dir",
+                    str(src_dir),
+                    "--dest-dir",
+                    str(dest_dir),
+                    "--copy-jobs",
+                    "0",
+                ],
+                cwd=tmp_path,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(proc.returncode, 2)
+            self.assertIn("copy-jobs must be a positive integer", proc.stderr)
 
 
 class FineWebManifestDedupeTests(unittest.TestCase):

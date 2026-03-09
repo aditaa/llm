@@ -6,6 +6,7 @@ DEST_DIR="data/fineweb/sample-350BT/sample/350BT"
 MAX_FILES=10
 MAX_GIB=0
 MIN_AGE_SECONDS=180
+COPY_JOBS=1
 SKIP_LIST=""
 DRY_RUN=0
 
@@ -27,12 +28,13 @@ Options:
   --max-gib N              Max total GiB to copy this run (default: 0 = unlimited)
   --min-age-seconds N      Ignore source files modified more recently than this
                            (default: 180)
+  --copy-jobs N            Parallel copy workers for selected files (default: 1)
   --skip-list FILE         Optional newline-separated parquet basenames to skip
   --dry-run                Print what would be copied without copying
   -h, --help               Show this help
 
 Example:
-  bash scripts/stage_fineweb_from_warm.sh --max-files 4 --max-gib 8
+  bash scripts/stage_fineweb_from_warm.sh --max-files 4 --max-gib 8 --copy-jobs 2
 USAGE
 }
 
@@ -56,6 +58,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --min-age-seconds)
       MIN_AGE_SECONDS="$2"
+      shift 2
+      ;;
+    --copy-jobs)
+      COPY_JOBS="$2"
       shift 2
       ;;
     --skip-list)
@@ -94,6 +100,10 @@ if [[ -n "$SKIP_LIST" && ! -f "$SKIP_LIST" ]]; then
   echo "skip-list not found: $SKIP_LIST" >&2
   exit 1
 fi
+if ! [[ "$COPY_JOBS" =~ ^[1-9][0-9]*$ ]]; then
+  echo "copy-jobs must be a positive integer: $COPY_JOBS" >&2
+  exit 2
+fi
 
 now_epoch="$(date +%s)"
 copied_files=0
@@ -102,6 +112,33 @@ skipped_recent=0
 skipped_existing=0
 skipped_blocklist=0
 considered=0
+selected_entries=()
+
+copy_one() {
+  local src_path="$1"
+  local name="$2"
+  local src_size="$3"
+  local dst_path="$DEST_DIR/$name"
+  local tmp_path="$DEST_DIR/${name}.incomplete"
+  local tmp_size
+
+  rm -f "$tmp_path"
+  if ! rsync -ah --partial --inplace "$src_path" "$tmp_path" >> "$log" 2>&1; then
+    rm -f "$tmp_path"
+    echo "FAIL copy error file=$name" | tee -a "$log"
+    return 1
+  fi
+
+  tmp_size="$(stat -c%s "$tmp_path" || echo -1)"
+  if [[ "$tmp_size" -ne "$src_size" ]]; then
+    rm -f "$tmp_path"
+    echo "FAIL size mismatch after temp copy file=$name src=$src_size tmp=$tmp_size" | tee -a "$log"
+    return 1
+  fi
+
+  mv -f "$tmp_path" "$dst_path"
+  echo "COPY ok $name size_bytes=$src_size" | tee -a "$log"
+}
 
 while IFS= read -r src_path; do
   [[ -z "$src_path" ]] && continue
@@ -109,7 +146,6 @@ while IFS= read -r src_path; do
 
   name="$(basename "$src_path")"
   dst_path="$DEST_DIR/$name"
-  tmp_path="$DEST_DIR/${name}.incomplete"
   src_size="$(stat -c%s "$src_path")"
   src_mtime="$(stat -c%Y "$src_path")"
   age="$((now_epoch - src_mtime))"
@@ -149,20 +185,49 @@ while IFS= read -r src_path; do
     continue
   fi
 
-  # Copy to a temp suffix and atomically rename into place so downstream
-  # consumers never observe partially-written *.parquet files.
-  rsync -ah --partial --inplace "$src_path" "$tmp_path" >> "$log" 2>&1
-  tmp_size="$(stat -c%s "$tmp_path" || echo -1)"
-  if [[ "$tmp_size" -ne "$src_size" ]]; then
-    echo "FAIL size mismatch after temp copy file=$name src=$src_size tmp=$tmp_size" | tee -a "$log"
-    exit 1
-  fi
-  mv -f "$tmp_path" "$dst_path"
-
   copied_files=$((copied_files + 1))
   copied_bytes=$((copied_bytes + src_size))
-  echo "COPY ok $name size_bytes=$src_size" | tee -a "$log"
+  selected_entries+=("$src_path"$'\t'"$name"$'\t'"$src_size")
 done < <(find "$SRC_DIR" -maxdepth 1 -type f -name '*.parquet' | sort)
+
+if [[ "$DRY_RUN" -ne 1 && "$copied_files" -gt 0 ]]; then
+  running=0
+  failed=0
+  for entry in "${selected_entries[@]}"; do
+    IFS=$'\t' read -r src_path name src_size <<< "$entry"
+    copy_one "$src_path" "$name" "$src_size" &
+    running=$((running + 1))
+    if [[ "$running" -ge "$COPY_JOBS" ]]; then
+      if ! wait -n; then
+        failed=1
+      fi
+      running=$((running - 1))
+      if [[ "$failed" -ne 0 ]]; then
+        break
+      fi
+    fi
+  done
+
+  if [[ "$failed" -ne 0 ]]; then
+    kill $(jobs -p) 2>/dev/null || true
+    while [[ "$running" -gt 0 ]]; do
+      wait -n || true
+      running=$((running - 1))
+    done
+    exit 1
+  fi
+
+  while [[ "$running" -gt 0 ]]; do
+    if ! wait -n; then
+      failed=1
+    fi
+    running=$((running - 1))
+  done
+
+  if [[ "$failed" -ne 0 ]]; then
+    exit 1
+  fi
+fi
 
 copied_gib="$(awk -v b="$copied_bytes" 'BEGIN { printf "%.2f", b/1024/1024/1024 }')"
 echo "[$(date -Iseconds)] considered=$considered copied_files=$copied_files copied_gib=$copied_gib skipped_recent=$skipped_recent skipped_existing=$skipped_existing skipped_blocklist=$skipped_blocklist" | tee -a "$log"

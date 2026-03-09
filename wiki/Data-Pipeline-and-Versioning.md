@@ -68,6 +68,7 @@ Rolling FineWeb 350BT ingestion on limited hot disk:
 bash scripts/fineweb_stage_shard_loop.sh \
   --hot-queue-min-files 18 \
   --stage-max-files 12 \
+  --stage-copy-jobs 2 \
   --process-max-files 12 \
   --shard-jobs 2 \
   --tokenizer-threads 10 \
@@ -91,7 +92,7 @@ This loop:
 Optional watchdog for stage/shard loop auto-restart:
 ```bash
 bash scripts/fineweb_stage_shard_watchdog.sh \
-  --worker-args "--hot-queue-min-files 18 --stage-max-files 12 --process-max-files 12 --shard-jobs 2 --tokenizer-threads 10 --encode-batch-size 1024 --sleep-seconds 60 --shard-min-batch-size 512" \
+  --worker-args "--hot-queue-min-files 18 --stage-max-files 12 --stage-copy-jobs 2 --process-max-files 12 --shard-jobs 2 --tokenizer-threads 10 --encode-batch-size 1024 --sleep-seconds 60 --shard-min-batch-size 512" \
   --check-interval-seconds 120 \
   --stall-seconds 5400
 ```
@@ -126,6 +127,7 @@ bash scripts/fineweb_prefetch_hot_queue.sh \
 `scripts/stage_fineweb_from_warm.sh` now stages parquet files via
 `*.parquet.incomplete` temp files and atomically renames on completion, so
 downstream preflight/sharding does not see partially written parquet data.
+Use `--copy-jobs <N>` on stage commands to parallelize warm->hot copies.
 
 Auto-resume trainer supervisor for growing shard sets:
 ```bash

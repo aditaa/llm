@@ -59,6 +59,17 @@ class ScriptTests(unittest.TestCase):
         self.assertIn("--min-unique-input-files", proc.stdout)
         self.assertIn("--dedupe-report-keep", proc.stdout)
 
+    def test_stage_loop_help_lists_stage_copy_jobs(self) -> None:
+        proc = subprocess.run(
+            ["bash", "scripts/fineweb_stage_shard_loop.sh", "--help"],
+            cwd=Path(__file__).resolve().parents[1],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(proc.returncode, 0, msg=proc.stderr)
+        self.assertIn("--stage-copy-jobs", proc.stdout)
+
     def test_render_eval_trend_dashboard(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

@@ -27,6 +27,7 @@ MAX_ROWS_PER_FILE=0
 STAGE_MAX_FILES=10
 STAGE_MAX_GIB=0
 STAGE_MIN_AGE_SECONDS=180
+STAGE_COPY_JOBS=1
 HOT_QUEUE_MIN_FILES=8
 PROCESS_MAX_FILES=10
 
@@ -60,6 +61,7 @@ Options:
   --stage-max-files N         Max parquet files to stage per cycle (default: 10)
   --stage-max-gib N           Max GiB to stage per cycle (default: 0 unlimited)
   --stage-min-age-seconds N   Skip recently modified source files (default: 180)
+  --stage-copy-jobs N         Parallel warm->hot staging copy workers (default: 1)
   --hot-queue-min-files N     Try to keep at least N parquet files staged on hot disk
                               (default: 8)
   --process-max-files N       Max staged files to shard per batch (default: 10)
@@ -88,6 +90,7 @@ Options:
 Example:
   bash scripts/fineweb_stage_shard_loop.sh \
     --stage-max-files 8 \
+    --stage-copy-jobs 2 \
     --process-max-files 8 \
     --sleep-seconds 90
 USAGE
@@ -137,6 +140,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --stage-min-age-seconds)
       STAGE_MIN_AGE_SECONDS="$2"
+      shift 2
+      ;;
+    --stage-copy-jobs)
+      STAGE_COPY_JOBS="$2"
       shift 2
       ;;
     --hot-queue-min-files)
@@ -494,7 +501,10 @@ validate_batch_guardrails() {
   local failed=0
   local idx
   for ((idx = 0; idx < ${#ids_ref[@]}; idx++)); do
-    if ! validate_job_artifacts "${ids_ref[$idx]}" "${lists_ref[$idx]}" | tee -a "$LOG_FILE"; then
+    if ! (
+      exec 9>&-
+      validate_job_artifacts "${ids_ref[$idx]}" "${lists_ref[$idx]}" | tee -a "$LOG_FILE"
+    ); then
       failed=1
     fi
   done
@@ -531,10 +541,10 @@ stage_once() {
     return 0
   fi
 
-  log "stage_start max_files=$stage_files max_gib=$STAGE_MAX_GIB hot_count=$hot_count eligible_hot_count=$eligible_hot_count queue_min=$HOT_QUEUE_MIN_FILES"
+  log "stage_start max_files=$stage_files max_gib=$STAGE_MAX_GIB copy_jobs=$STAGE_COPY_JOBS hot_count=$hot_count eligible_hot_count=$eligible_hot_count queue_min=$HOT_QUEUE_MIN_FILES"
   if [[ "$DRY_RUN" -eq 1 ]]; then
     (
-      # Prevent staging subprocess from inheriting the loop lock FD.
+      # Prevent staging subprocesses (including tee) from inheriting the loop lock FD.
       exec 9>&-
       bash scripts/stage_fineweb_from_warm.sh \
         --src-dir "$WARM_PARQUET_DIR" \
@@ -542,12 +552,13 @@ stage_once() {
         --max-files "$stage_files" \
         --max-gib "$STAGE_MAX_GIB" \
         --min-age-seconds "$STAGE_MIN_AGE_SECONDS" \
+        --copy-jobs "$STAGE_COPY_JOBS" \
         --skip-list "$STAGE_SKIP_FILE" \
-        --dry-run
-    ) | tee -a "$LOG_FILE"
+        --dry-run | tee -a "$LOG_FILE"
+    )
   else
     (
-      # Prevent staging subprocess from inheriting the loop lock FD.
+      # Prevent staging subprocesses (including tee) from inheriting the loop lock FD.
       exec 9>&-
       bash scripts/stage_fineweb_from_warm.sh \
         --src-dir "$WARM_PARQUET_DIR" \
@@ -555,8 +566,9 @@ stage_once() {
         --max-files "$stage_files" \
         --max-gib "$STAGE_MAX_GIB" \
         --min-age-seconds "$STAGE_MIN_AGE_SECONDS" \
-        --skip-list "$STAGE_SKIP_FILE"
-    ) | tee -a "$LOG_FILE"
+        --copy-jobs "$STAGE_COPY_JOBS" \
+        --skip-list "$STAGE_SKIP_FILE" | tee -a "$LOG_FILE"
+    )
   fi
   log "stage_done"
 }
@@ -611,6 +623,11 @@ run_shard_job() {
   local report_json="$STATE_DIR/${job_id}.report.json"
   local output_dir="$SHARDS_ROOT/$job_id"
 
+  # Background run_shard_job subshells must not retain the loop lock FD.
+  if [[ "${BASH_SUBSHELL:-0}" -gt 0 ]]; then
+    exec 9>&- || true
+  fi
+
   if [[ "$DRY_RUN" -eq 1 ]]; then
     log "dry_run_shard_build id=$job_id output_dir=$output_dir files_list=$files_list"
     return 0
@@ -626,7 +643,7 @@ run_shard_job() {
 
     set +e
     (
-      # Prevent shard subprocesses from inheriting the loop lock FD.
+      # Prevent shard subprocesses (including tee) from inheriting the loop lock FD.
       exec 9>&-
       TOKENIZERS_PARALLELISM=true RAYON_NUM_THREADS="$TOKENIZER_THREADS" PYTHONPATH=src .venv/bin/python scripts/fineweb_parquet_to_shards.py \
         --input-dir "$HOT_PARQUET_DIR" \
@@ -642,9 +659,9 @@ run_shard_job() {
         --min-chars "$MIN_CHARS" \
         --max-chars "$MAX_CHARS" \
         --max-rows-per-file "$MAX_ROWS_PER_FILE" \
-        --report-output "$report_json"
-    ) 2>&1 | tee -a "$LOG_FILE" "$shard_attempt_log"
-    shard_rc=${PIPESTATUS[0]}
+        --report-output "$report_json" 2>&1 | tee -a "$LOG_FILE" "$shard_attempt_log"
+    )
+    shard_rc=$?
     set -e
 
     if [[ "$shard_rc" -eq 0 ]]; then
@@ -682,11 +699,11 @@ run_shard_job() {
   done
 
   (
-    # Prevent verify subprocess from inheriting the loop lock FD.
+    # Prevent verify subprocesses (including tee) from inheriting the loop lock FD.
     exec 9>&-
     PYTHONPATH=src .venv/bin/python -m llm.cli verify-shards \
-      --path "$output_dir"
-  ) | tee -a "$LOG_FILE"
+      --path "$output_dir" | tee -a "$LOG_FILE"
+  )
 
   if [[ "$SYNC_TO_WARM" -eq 1 ]]; then
     sync_batch_to_warm "$output_dir" "$report_json"
@@ -810,7 +827,7 @@ process_batch() {
 }
 
 log "loop_start warm_parquet_dir=$WARM_PARQUET_DIR hot_parquet_dir=$HOT_PARQUET_DIR"
-log "loop_config shards_root=$SHARDS_ROOT tokenizer_path=$TOKENIZER_PATH iterations=$ITERATIONS hot_queue_min_files=$HOT_QUEUE_MIN_FILES bad_parquet_file=$BAD_PARQUET_FILE quarantine_dir=$QUARANTINE_DIR"
+log "loop_config shards_root=$SHARDS_ROOT tokenizer_path=$TOKENIZER_PATH iterations=$ITERATIONS hot_queue_min_files=$HOT_QUEUE_MIN_FILES stage_copy_jobs=$STAGE_COPY_JOBS bad_parquet_file=$BAD_PARQUET_FILE quarantine_dir=$QUARANTINE_DIR"
 reconcile_bad_parquet_from_warm
 bootstrap_processed_from_manifests
 refresh_stage_skip_list

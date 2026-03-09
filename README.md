@@ -618,6 +618,9 @@ This is a live-only monitor (no report/status files written) and includes:
 - explicit stop reasons for tasks that are not running
 - alert rows for stage-controller health and shard-manifest stall conditions
 
+Coverage ETA/rate now falls back to sharding throughput when manifest overlap is zero, so
+ETA remains visible between manifest update bursts.
+
 It refreshes in-place (full-screen mode). If your terminal does not handle full-screen
 escape codes well, add `--no-alt-screen`.
 

@@ -366,6 +366,77 @@ class ScriptTests(unittest.TestCase):
             self.assertEqual(proc.returncode, 0, msg=proc.stderr)
             self.assertIn("Supervisor: gate=waiting_unique_inputs 27/510", proc.stdout)
 
+    def test_pipeline_live_view_coverage_eta_from_history(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            warm = root / "warm"
+            hot = root / "hot"
+            shards = root / "shards"
+            stage_dir = root / "stage"
+            sup_dir = root / "supervisor"
+            for path in [warm, hot, shards, stage_dir, sup_dir]:
+                path.mkdir(parents=True, exist_ok=True)
+
+            (stage_dir / "processed_parquet_files.txt").write_text(
+                "000_00001.parquet\n000_00002.parquet\n",
+                encoding="utf-8",
+            )
+            (shards / "batch_0001").mkdir(parents=True, exist_ok=True)
+            (shards / "batch_0001" / "manifest.json").write_text(
+                json.dumps({"input_files": ["000_00001.parquet", "000_00002.parquet"]}),
+                encoding="utf-8",
+            )
+            (stage_dir / "loop_20260309_100000.log").write_text(
+                "\n".join(
+                    [
+                        (
+                            "[2026-03-09T10:00:00-05:00] batch_start id=fw_a files=4 "
+                            "tokenizer_arg=--tokenizer-in shard_jobs=2"
+                        ),
+                        "[2026-03-09T10:02:00-05:00] batch_done id=fw_a",
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    "scripts/pipeline_live_view.py",
+                    "--once",
+                    "--no-alt-screen",
+                    "--refresh-seconds",
+                    "0.1",
+                    "--warm-dir",
+                    str(warm),
+                    "--hot-dir",
+                    str(hot),
+                    "--shards-root",
+                    str(shards),
+                    "--stage-state-dir",
+                    str(stage_dir),
+                    "--supervisor-state-dir",
+                    str(sup_dir),
+                    "--expected-parquet-files",
+                    "10",
+                    "--expected-bytes",
+                    "100",
+                ],
+                cwd=Path(__file__).resolve().parents[1],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(proc.returncode, 0, msg=proc.stderr)
+            self.assertIn("Coverage: manifest_unique=2/10", proc.stdout)
+            self.assertIn("from history", proc.stdout)
+            coverage_line = next(
+                line for line in proc.stdout.splitlines() if line.strip().startswith("Coverage:")
+            )
+            self.assertIn("eta=", coverage_line)
+            self.assertNotIn("eta=unknown", coverage_line)
+
     def test_pipeline_live_view_reports_train_token_gate(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -545,6 +616,101 @@ class ScriptTests(unittest.TestCase):
             self.assertEqual(payload["metrics"]["train_step"], 139900)
             self.assertEqual(payload["expected"]["train_target_step"], 140000)
             self.assertEqual(payload["remaining"]["train_steps"], 100)
+
+    def test_pipeline_eta_report_uses_coverage_fallback_rate(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            warm = root / "warm"
+            shards = root / "shards"
+            stage_dir = root / "stage"
+            sup_dir = root / "supervisor"
+            for path in [warm, shards, stage_dir, sup_dir]:
+                path.mkdir(parents=True, exist_ok=True)
+
+            (shards / "batch_0001").mkdir(parents=True, exist_ok=True)
+            (shards / "batch_0001" / "manifest.json").write_text(
+                json.dumps(
+                    {
+                        "input_files": [
+                            "000_00001.parquet",
+                            "000_00002.parquet",
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            processed = stage_dir / "processed_parquet_files.txt"
+            processed.write_text(
+                "\n".join(
+                    [
+                        "000_00001.parquet",
+                        "000_00002.parquet",
+                        "000_00003.parquet",
+                        "000_00004.parquet",
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            out_json = root / "status.json"
+            out_txt = root / "status.txt"
+            state_json = root / "state.json"
+            now = time.time()
+            state_json.write_text(
+                json.dumps(
+                    {
+                        "ts": now - 10.0,
+                        "warm_bytes": 0,
+                        "warm_parquet_count": 0,
+                        "sharded_parquet_count": 1,
+                        "manifest_count": 1,
+                        "manifest_unique_input_files": 2,
+                        "train_step": 0,
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    "scripts/pipeline_eta_report.py",
+                    "--warm-dir",
+                    str(warm),
+                    "--shards-root",
+                    str(shards),
+                    "--stage-state-dir",
+                    str(stage_dir),
+                    "--supervisor-state-dir",
+                    str(sup_dir),
+                    "--expected-parquet-files",
+                    "10",
+                    "--expected-bytes",
+                    "100",
+                    "--output-json",
+                    str(out_json),
+                    "--output-text",
+                    str(out_txt),
+                    "--state-file",
+                    str(state_json),
+                ],
+                cwd=Path(__file__).resolve().parents[1],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(proc.returncode, 0, msg=proc.stderr)
+            payload = json.loads(out_json.read_text(encoding="utf-8"))
+            rate = payload["rates"]["manifest_unique_inputs_per_sec"]
+            self.assertIsNotNone(rate)
+            self.assertGreater(rate, 0)
+            self.assertEqual(
+                payload["rates"]["manifest_unique_inputs_rate_source"],
+                "sharding_fallback_no_overlap",
+            )
+            self.assertNotEqual(payload["eta_human"]["manifest_unique_inputs"], "unknown")
 
     def test_pipeline_live_view_alerts_when_stage_controller_missing(self) -> None:
         if (

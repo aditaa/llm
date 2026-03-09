@@ -569,12 +569,24 @@ def collect_status(args: argparse.Namespace) -> dict[str, Any]:
         )
         task_status[task_name] = {"state": "STOP", "count": 0, "reason": reason}
 
+    coverage_rate_source = "manifest_unique_inputs"
+    coverage_rate = unique_inputs_rate
+    if (
+        (coverage_rate is None or coverage_rate <= 0)
+        and manifest_overlap_inputs == 0
+        and sharded_parquet_rate is not None
+        and sharded_parquet_rate > 0
+        and sharded_parquet >= manifest_unique_inputs
+    ):
+        coverage_rate = sharded_parquet_rate
+        coverage_rate_source = "sharding_fallback_no_overlap"
+
     eta = {
         "download_seconds": _eta_seconds(rem_bytes, bytes_rate),
         "download_parquet_seconds": _eta_seconds(rem_download_parquet, warm_parquet_rate),
         "sharding_seconds": _eta_seconds(rem_sharded_parquet, sharded_parquet_rate),
         "manifests_seconds": _eta_seconds(rem_sharded_parquet, manifest_rate),
-        "manifest_unique_inputs_seconds": _eta_seconds(rem_unique_inputs, unique_inputs_rate),
+        "manifest_unique_inputs_seconds": _eta_seconds(rem_unique_inputs, coverage_rate),
         "train_seconds": _eta_seconds(rem_steps, step_rate),
     }
 
@@ -605,7 +617,8 @@ def collect_status(args: argparse.Namespace) -> dict[str, Any]:
             "download_parquet_per_sec": warm_parquet_rate,
             "sharding_parquet_per_sec": sharded_parquet_rate,
             "manifest_per_sec": manifest_rate,
-            "manifest_unique_inputs_per_sec": unique_inputs_rate,
+            "manifest_unique_inputs_per_sec": coverage_rate,
+            "manifest_unique_inputs_rate_source": coverage_rate_source,
             "train_steps_per_sec": step_rate,
             "sample_window_seconds": dt,
         },

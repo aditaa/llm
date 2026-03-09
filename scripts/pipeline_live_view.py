@@ -28,6 +28,11 @@ class SampleState:
     train_step_change_ts: float | None = None
     train_step_change_value: int | None = None
     train_sps_estimate: float | None = None
+    coverage_change_ts: float | None = None
+    coverage_change_value: int | None = None
+    coverage_pps_estimate: float | None = None
+    coverage_history_rate: float | None = None
+    coverage_history_ts: float | None = None
 
 
 STEP_RE = re.compile(r"step=(\d+)\b")
@@ -36,6 +41,8 @@ MAX_STEPS_RE = re.compile(r"--max-steps(?:=|\s+)(\d+)\b")
 WAIT_MANIFESTS_RE = re.compile(r"waiting_for_manifests have=(\d+) need=(\d+)")
 WAIT_UNIQUE_RE = re.compile(r"waiting_for_unique_inputs have=(\d+) need=(\d+)")
 WAIT_TRAIN_TOKENS_RE = re.compile(r"waiting_for_train_tokens have_tokens=(\d+) need_tokens=(\d+)")
+BATCH_START_RE = re.compile(r"^\[([^\]]+)\]\s+batch_start id=(\S+)\s+files=(\d+)\b")
+BATCH_DONE_RE = re.compile(r"^\[([^\]]+)\]\s+batch_done id=(\S+)\b")
 
 
 def parse_args() -> argparse.Namespace:
@@ -173,6 +180,72 @@ def _latest_manifest_mtime(shards_root: Path) -> float | None:
         if latest is None or mtime > latest:
             latest = mtime
     return latest
+
+
+def _parse_iso_ts(ts_text: str) -> float | None:
+    try:
+        return datetime.fromisoformat(ts_text).timestamp()
+    except ValueError:
+        return None
+
+
+def _coverage_rate_from_stage_logs(
+    stage_state_dir: Path,
+    *,
+    max_logs: int = 5,
+    max_batches: int = 6,
+) -> float | None:
+    if not stage_state_dir.exists():
+        return None
+
+    logs = sorted(
+        stage_state_dir.glob("loop_*.log"),
+        key=lambda p: p.stat().st_mtime,
+        reverse=True,
+    )[:max_logs]
+    if not logs:
+        return None
+
+    starts: dict[str, tuple[float, int]] = {}
+    finished: list[tuple[float, int, float]] = []
+
+    for log_path in reversed(logs):
+        try:
+            text = log_path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        for line in text.splitlines():
+            start = BATCH_START_RE.match(line)
+            if start:
+                ts = _parse_iso_ts(start.group(1))
+                batch_id = start.group(2)
+                files = int(start.group(3))
+                if ts is not None and files > 0:
+                    starts[batch_id] = (ts, files)
+                continue
+
+            done = BATCH_DONE_RE.match(line)
+            if done:
+                ts = _parse_iso_ts(done.group(1))
+                batch_id = done.group(2)
+                start_row = starts.pop(batch_id, None)
+                if ts is None or start_row is None:
+                    continue
+                start_ts, files = start_row
+                elapsed = ts - start_ts
+                if elapsed > 0 and files > 0:
+                    finished.append((ts, files, elapsed))
+
+    if not finished:
+        return None
+
+    finished.sort(key=lambda row: row[0], reverse=True)
+    recent = finished[:max_batches]
+    total_files = sum(row[1] for row in recent)
+    total_elapsed = sum(row[2] for row in recent)
+    if total_files <= 0 or total_elapsed <= 0:
+        return None
+    return total_files / total_elapsed
 
 
 def _file_mtime(path: Path) -> float | None:
@@ -610,7 +683,8 @@ def _render(
     warm_dir = Path(args.warm_dir)
     hot_dir = Path(args.hot_dir)
     shards_root = Path(args.shards_root)
-    stage_state = Path(args.stage_state_dir) / "processed_parquet_files.txt"
+    stage_state_dir = Path(args.stage_state_dir)
+    stage_state = stage_state_dir / "processed_parquet_files.txt"
     sup_dir = Path(args.supervisor_state_dir)
 
     warm_parquet = _count_find(warm_dir, "*.parquet")
@@ -651,6 +725,44 @@ def _render(
             state.train_step_change_ts = now
             state.train_sps_estimate = None
         train_sps = state.train_sps_estimate
+
+    if coverage_pps is None:
+        if state.coverage_change_value is None:
+            state.coverage_change_value = manifest_unique_inputs
+            state.coverage_change_ts = now
+        elif manifest_unique_inputs > state.coverage_change_value:
+            if state.coverage_change_ts is not None:
+                d_cov = manifest_unique_inputs - state.coverage_change_value
+                d_secs = now - state.coverage_change_ts
+                if d_cov > 0 and d_secs > 0:
+                    state.coverage_pps_estimate = d_cov / d_secs
+            state.coverage_change_value = manifest_unique_inputs
+            state.coverage_change_ts = now
+        elif manifest_unique_inputs < state.coverage_change_value:
+            state.coverage_change_value = manifest_unique_inputs
+            state.coverage_change_ts = now
+            state.coverage_pps_estimate = None
+        coverage_pps = state.coverage_pps_estimate
+
+    # Coverage usually follows processed parquet when overlap is zero, so use sharding
+    # throughput as a fallback estimator between manifest update bursts.
+    coverage_rate_note = ""
+    if (
+        (coverage_pps is None or coverage_pps <= 0)
+        and manifest_overlap_inputs == 0
+        and shard_pps is not None
+        and shard_pps > 0
+        and processed_parquet >= manifest_unique_inputs
+    ):
+        coverage_pps = shard_pps
+        coverage_rate_note = " (from sharding)"
+    if (coverage_pps is None or coverage_pps <= 0) and manifest_overlap_inputs == 0:
+        if state.coverage_history_ts is None or (now - state.coverage_history_ts) >= 60.0:
+            state.coverage_history_rate = _coverage_rate_from_stage_logs(stage_state_dir)
+            state.coverage_history_ts = now
+        if state.coverage_history_rate is not None and state.coverage_history_rate > 0:
+            coverage_pps = state.coverage_history_rate
+            coverage_rate_note = " (from history)"
 
     latest_manifest_mtime = _latest_manifest_mtime(shards_root)
     manifest_stall_age = (
@@ -733,6 +845,11 @@ def _render(
     else:
         rem_steps = max(0, int(train_target_step) - train_step)
     rate_mib = (download_bps / 1024 / 1024) if download_bps is not None else None
+    coverage_rate_text = (
+        f"{coverage_pps:.3f} files/s{coverage_rate_note}"
+        if coverage_pps is not None
+        else "n/a"
+    )
     cpu_text = f"{cpu_usage:.1f}%" if cpu_usage is not None else "warming"
     mem_pct = (100.0 * mem_used / mem_total) if mem_total > 0 else 0.0
     swap_pct = (100.0 * swap_used / swap_total) if swap_total > 0 else 0.0
@@ -796,7 +913,7 @@ def _render(
         f"  Coverage: manifest_unique={manifest_unique_inputs}/{args.expected_parquet_files} "
         f"remaining={rem_manifest_unique} overlap_inputs={manifest_overlap_inputs} "
         f"overlap_manifests={manifest_overlap_manifests} "
-        f"rate={f'{coverage_pps:.3f} files/s' if coverage_pps is not None else 'n/a'} "
+        f"rate={coverage_rate_text} "
         f"eta={_eta(rem_manifest_unique, coverage_pps)} "
         f"complete={int(coverage_complete)}"
     )

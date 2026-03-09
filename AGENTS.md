@@ -178,6 +178,7 @@ Keep PR scope narrow; split refactors and features into separate PRs.
 - `pipeline_live_view.py` includes manifest coverage line (`unique/510`, overlap inputs/manifests, completion flag)
 - `pipeline_live_view.py` includes manifest coverage rate/ETA to gauge when coverage gates will clear
 - `pipeline_live_view.py` also shows supervisor gate state (for example `waiting_unique_inputs <have>/<need>` or `waiting_train_tokens <have_tokens>/<need_tokens>`)
+- `pipeline_live_view.py` coverage ETA/rate falls back to sharding throughput when manifest overlap is zero, so ETA remains visible between manifest-update bursts
 - `pipeline_live_view.py` shows `STOP | <reason>` for non-running tasks (for example `staging handled by stage-loop` for prefetch when stage-loop queue staging is enabled)
 - `fineweb_prefetch_hot_queue.sh` can auto-read stage-loop skip data (`--auto-skip-state-dir artifacts/reports/fineweb_stage_shard_loop`) so it avoids restaging processed/bad parquet files
 - `fineweb_prefetch_hot_queue.sh` forwards `--min-free-gib` into stage calls so prefetch and stage-loop share the same hot-space floor

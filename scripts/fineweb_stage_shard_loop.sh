@@ -28,14 +28,26 @@ STAGE_MAX_FILES=10
 STAGE_MAX_GIB=0
 STAGE_MIN_AGE_SECONDS=180
 STAGE_COPY_JOBS=1
+STAGE_MIN_FREE_GIB=0
 HOT_QUEUE_MIN_FILES=8
 PROCESS_MAX_FILES=10
+
+AUTO_TUNE_SHARD_JOBS=0
+AUTO_TUNE_MIN_SHARD_JOBS=1
+AUTO_TUNE_MAX_SHARD_JOBS=4
+AUTO_TUNE_EVERY_BATCHES=1
+AUTO_TUNE_MIN_BATCH_SECONDS=300
+AUTO_TUNE_CORE_BUDGET=0
+AUTO_TUNE_LOW_LOAD_PCT=65
+AUTO_TUNE_HIGH_LOAD_PCT=90
 
 SLEEP_SECONDS=120
 ITERATIONS=0
 SYNC_TO_WARM=1
 PURGE_HOT=1
 DRY_RUN=0
+CPU_CORES=1
+LAST_BATCH_SECONDS=0
 
 usage() {
   cat <<'USAGE'
@@ -62,6 +74,8 @@ Options:
   --stage-max-gib N           Max GiB to stage per cycle (default: 0 unlimited)
   --stage-min-age-seconds N   Skip recently modified source files (default: 180)
   --stage-copy-jobs N         Parallel warm->hot staging copy workers (default: 1)
+  --stage-min-free-gib N      Keep at least N GiB free on hot disk after staging
+                              (default: 0 disabled)
   --hot-queue-min-files N     Try to keep at least N parquet files staged on hot disk
                               (default: 8)
   --process-max-files N       Max staged files to shard per batch (default: 10)
@@ -71,6 +85,24 @@ Options:
   --encode-batch-size N       Tokenizer encode batch size (default: 1024)
   --tokenizer-threads N       Tokenizer worker threads via RAYON_NUM_THREADS (default: 10)
   --shard-jobs N              Parallel shard jobs per batch (default: 1)
+  --auto-tune-shard-jobs      Auto-adjust shard-jobs/tokenizer-threads using
+                              CPU load and per-batch runtime
+  --auto-tune-min-shard-jobs N
+                              Lower shard-jobs bound when auto-tune is enabled
+                              (default: 1)
+  --auto-tune-max-shard-jobs N
+                              Upper shard-jobs bound when auto-tune is enabled
+                              (default: 4)
+  --auto-tune-every-batches N Evaluate auto-tune every N completed batches
+                              (default: 1)
+  --auto-tune-min-batch-seconds N
+                              Ignore auto-tune for shorter batches (default: 300)
+  --auto-tune-core-budget N   Total CPU-thread budget across shard workers
+                              (default: 0 = auto from nproc)
+  --auto-tune-low-load-pct N  Increase shard-jobs when load1 <= N% of cores
+                              (default: 65)
+  --auto-tune-high-load-pct N Decrease shard-jobs when load1 >= N% of cores
+                              (default: 90)
   --no-shard-retry-on-oom     Disable automatic shard build retry on OOM/memory errors
   --shard-min-batch-size N    Lower bound for batch-size backoff on OOM (default: 512)
   --shard-size-tokens N       Tokens per output shard (default: 5000000)
@@ -91,6 +123,7 @@ Example:
   bash scripts/fineweb_stage_shard_loop.sh \
     --stage-max-files 8 \
     --stage-copy-jobs 2 \
+    --stage-min-free-gib 80 \
     --process-max-files 8 \
     --sleep-seconds 90
 USAGE
@@ -146,6 +179,10 @@ while [[ $# -gt 0 ]]; do
       STAGE_COPY_JOBS="$2"
       shift 2
       ;;
+    --stage-min-free-gib)
+      STAGE_MIN_FREE_GIB="$2"
+      shift 2
+      ;;
     --hot-queue-min-files)
       HOT_QUEUE_MIN_FILES="$2"
       shift 2
@@ -172,6 +209,38 @@ while [[ $# -gt 0 ]]; do
       ;;
     --shard-jobs)
       SHARD_JOBS="$2"
+      shift 2
+      ;;
+    --auto-tune-shard-jobs)
+      AUTO_TUNE_SHARD_JOBS=1
+      shift
+      ;;
+    --auto-tune-min-shard-jobs)
+      AUTO_TUNE_MIN_SHARD_JOBS="$2"
+      shift 2
+      ;;
+    --auto-tune-max-shard-jobs)
+      AUTO_TUNE_MAX_SHARD_JOBS="$2"
+      shift 2
+      ;;
+    --auto-tune-every-batches)
+      AUTO_TUNE_EVERY_BATCHES="$2"
+      shift 2
+      ;;
+    --auto-tune-min-batch-seconds)
+      AUTO_TUNE_MIN_BATCH_SECONDS="$2"
+      shift 2
+      ;;
+    --auto-tune-core-budget)
+      AUTO_TUNE_CORE_BUDGET="$2"
+      shift 2
+      ;;
+    --auto-tune-low-load-pct)
+      AUTO_TUNE_LOW_LOAD_PCT="$2"
+      shift 2
+      ;;
+    --auto-tune-high-load-pct)
+      AUTO_TUNE_HIGH_LOAD_PCT="$2"
       shift 2
       ;;
     --no-shard-retry-on-oom)
@@ -238,6 +307,64 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+require_nonneg_int() {
+  local name="$1"
+  local value="$2"
+  if ! [[ "$value" =~ ^[0-9]+$ ]]; then
+    echo "error: $name must be an integer >= 0 (got: $value)" >&2
+    exit 2
+  fi
+}
+
+require_positive_int() {
+  local name="$1"
+  local value="$2"
+  if ! [[ "$value" =~ ^[1-9][0-9]*$ ]]; then
+    echo "error: $name must be a positive integer (got: $value)" >&2
+    exit 2
+  fi
+}
+
+require_nonneg_int "stage-max-files" "$STAGE_MAX_FILES"
+require_nonneg_int "stage-max-gib" "$STAGE_MAX_GIB"
+require_nonneg_int "stage-min-age-seconds" "$STAGE_MIN_AGE_SECONDS"
+require_positive_int "stage-copy-jobs" "$STAGE_COPY_JOBS"
+require_nonneg_int "stage-min-free-gib" "$STAGE_MIN_FREE_GIB"
+require_nonneg_int "hot-queue-min-files" "$HOT_QUEUE_MIN_FILES"
+require_nonneg_int "process-max-files" "$PROCESS_MAX_FILES"
+require_positive_int "batch-size" "$BATCH_SIZE"
+require_positive_int "encode-batch-size" "$ENCODE_BATCH_SIZE"
+require_positive_int "tokenizer-threads" "$TOKENIZER_THREADS"
+require_positive_int "shard-jobs" "$SHARD_JOBS"
+require_positive_int "shard-min-batch-size" "$SHARD_MIN_BATCH_SIZE"
+require_positive_int "shard-size-tokens" "$SHARD_SIZE_TOKENS"
+require_nonneg_int "min-chars" "$MIN_CHARS"
+require_nonneg_int "max-chars" "$MAX_CHARS"
+require_nonneg_int "max-rows-per-file" "$MAX_ROWS_PER_FILE"
+require_positive_int "sleep-seconds" "$SLEEP_SECONDS"
+require_nonneg_int "iterations" "$ITERATIONS"
+
+require_positive_int "auto-tune-min-shard-jobs" "$AUTO_TUNE_MIN_SHARD_JOBS"
+require_positive_int "auto-tune-max-shard-jobs" "$AUTO_TUNE_MAX_SHARD_JOBS"
+require_positive_int "auto-tune-every-batches" "$AUTO_TUNE_EVERY_BATCHES"
+require_nonneg_int "auto-tune-min-batch-seconds" "$AUTO_TUNE_MIN_BATCH_SECONDS"
+require_nonneg_int "auto-tune-core-budget" "$AUTO_TUNE_CORE_BUDGET"
+require_nonneg_int "auto-tune-low-load-pct" "$AUTO_TUNE_LOW_LOAD_PCT"
+require_nonneg_int "auto-tune-high-load-pct" "$AUTO_TUNE_HIGH_LOAD_PCT"
+
+if [[ "$AUTO_TUNE_MIN_SHARD_JOBS" -gt "$AUTO_TUNE_MAX_SHARD_JOBS" ]]; then
+  echo "error: auto-tune-min-shard-jobs must be <= auto-tune-max-shard-jobs" >&2
+  exit 2
+fi
+if [[ "$AUTO_TUNE_LOW_LOAD_PCT" -ge "$AUTO_TUNE_HIGH_LOAD_PCT" ]]; then
+  echo "error: auto-tune-low-load-pct must be < auto-tune-high-load-pct" >&2
+  exit 2
+fi
+if [[ "$AUTO_TUNE_HIGH_LOAD_PCT" -gt 100 ]]; then
+  echo "error: auto-tune-high-load-pct must be <= 100" >&2
+  exit 2
+fi
+
 if [[ ! -d "$WARM_PARQUET_DIR" ]]; then
   echo "error: warm parquet dir not found: $WARM_PARQUET_DIR" >&2
   exit 1
@@ -282,9 +409,87 @@ log() {
   echo "[$(date -Iseconds)] $*" | tee -a "$LOG_FILE"
 }
 
+if command -v nproc >/dev/null 2>&1; then
+  CPU_CORES="$(nproc)"
+else
+  CPU_CORES=1
+fi
+if ! [[ "$CPU_CORES" =~ ^[1-9][0-9]*$ ]]; then
+  CPU_CORES=1
+fi
+
+if [[ "$AUTO_TUNE_SHARD_JOBS" -eq 1 ]]; then
+  if [[ "$SHARD_JOBS" -lt "$AUTO_TUNE_MIN_SHARD_JOBS" ]]; then
+    SHARD_JOBS="$AUTO_TUNE_MIN_SHARD_JOBS"
+  fi
+  if [[ "$SHARD_JOBS" -gt "$AUTO_TUNE_MAX_SHARD_JOBS" ]]; then
+    SHARD_JOBS="$AUTO_TUNE_MAX_SHARD_JOBS"
+  fi
+fi
+
 warm_shards_root="$WARM_ROOT/shards_global/$(basename "$SHARDS_ROOT")"
 warm_tokenizer_dir="$WARM_ROOT/tokenizer"
 warm_reports_dir="$WARM_ROOT/reports/fineweb_stage_shard_loop"
+
+retune_tokenizer_threads() {
+  local jobs="$1"
+  local budget="$AUTO_TUNE_CORE_BUDGET"
+  if [[ "$budget" -le 0 ]]; then
+    budget="$CPU_CORES"
+  fi
+  if [[ "$budget" -lt 1 ]]; then
+    budget=1
+  fi
+  local threads=$((budget / jobs))
+  if [[ "$threads" -lt 1 ]]; then
+    threads=1
+  fi
+  TOKENIZER_THREADS="$threads"
+}
+
+maybe_auto_tune_parallelism() {
+  local completed_batches="$1"
+  if [[ "$AUTO_TUNE_SHARD_JOBS" -ne 1 ]]; then
+    return
+  fi
+  if [[ $((completed_batches % AUTO_TUNE_EVERY_BATCHES)) -ne 0 ]]; then
+    return
+  fi
+  if [[ "$LAST_BATCH_SECONDS" -lt "$AUTO_TUNE_MIN_BATCH_SECONDS" ]]; then
+    log "auto_tune_skip reason=short_batch batch_seconds=$LAST_BATCH_SECONDS min_batch_seconds=$AUTO_TUNE_MIN_BATCH_SECONDS shard_jobs=$SHARD_JOBS tokenizer_threads=$TOKENIZER_THREADS"
+    return
+  fi
+
+  local load1
+  load1="$(awk '{print $1}' /proc/loadavg 2>/dev/null || echo "0.0")"
+  local load_pct
+  load_pct="$(awk -v load="$load1" -v cores="$CPU_CORES" 'BEGIN { if (cores < 1) cores = 1; printf "%.0f", (load * 100.0) / cores }')"
+
+  local desired_jobs="$SHARD_JOBS"
+  local reason="hold"
+  if [[ "$load_pct" -le "$AUTO_TUNE_LOW_LOAD_PCT" && "$desired_jobs" -lt "$AUTO_TUNE_MAX_SHARD_JOBS" ]]; then
+    desired_jobs=$((desired_jobs + 1))
+    reason="low_load_scale_up"
+  elif [[ "$load_pct" -ge "$AUTO_TUNE_HIGH_LOAD_PCT" && "$desired_jobs" -gt "$AUTO_TUNE_MIN_SHARD_JOBS" ]]; then
+    desired_jobs=$((desired_jobs - 1))
+    reason="high_load_scale_down"
+  fi
+
+  if [[ "$desired_jobs" -eq "$SHARD_JOBS" ]]; then
+    log "auto_tune_hold reason=$reason load1=$load1 load_pct=$load_pct shard_jobs=$SHARD_JOBS tokenizer_threads=$TOKENIZER_THREADS batch_seconds=$LAST_BATCH_SECONDS"
+    return
+  fi
+
+  local old_jobs="$SHARD_JOBS"
+  local old_threads="$TOKENIZER_THREADS"
+  SHARD_JOBS="$desired_jobs"
+  retune_tokenizer_threads "$SHARD_JOBS"
+  log "auto_tune_update reason=$reason load1=$load1 load_pct=$load_pct shard_jobs=$old_jobs->$SHARD_JOBS tokenizer_threads=$old_threads->$TOKENIZER_THREADS batch_seconds=$LAST_BATCH_SECONDS"
+}
+
+if [[ "$AUTO_TUNE_SHARD_JOBS" -eq 1 ]]; then
+  retune_tokenizer_threads "$SHARD_JOBS"
+fi
 
 is_bad_parquet_name() {
   local name="$1"
@@ -541,7 +746,7 @@ stage_once() {
     return 0
   fi
 
-  log "stage_start max_files=$stage_files max_gib=$STAGE_MAX_GIB copy_jobs=$STAGE_COPY_JOBS hot_count=$hot_count eligible_hot_count=$eligible_hot_count queue_min=$HOT_QUEUE_MIN_FILES"
+  log "stage_start max_files=$stage_files max_gib=$STAGE_MAX_GIB copy_jobs=$STAGE_COPY_JOBS min_free_gib=$STAGE_MIN_FREE_GIB hot_count=$hot_count eligible_hot_count=$eligible_hot_count queue_min=$HOT_QUEUE_MIN_FILES"
   if [[ "$DRY_RUN" -eq 1 ]]; then
     (
       # Prevent staging subprocesses (including tee) from inheriting the loop lock FD.
@@ -553,6 +758,7 @@ stage_once() {
         --max-gib "$STAGE_MAX_GIB" \
         --min-age-seconds "$STAGE_MIN_AGE_SECONDS" \
         --copy-jobs "$STAGE_COPY_JOBS" \
+        --min-free-gib "$STAGE_MIN_FREE_GIB" \
         --skip-list "$STAGE_SKIP_FILE" \
         --dry-run | tee -a "$LOG_FILE"
     )
@@ -567,6 +773,7 @@ stage_once() {
         --max-gib "$STAGE_MAX_GIB" \
         --min-age-seconds "$STAGE_MIN_AGE_SECONDS" \
         --copy-jobs "$STAGE_COPY_JOBS" \
+        --min-free-gib "$STAGE_MIN_FREE_GIB" \
         --skip-list "$STAGE_SKIP_FILE" | tee -a "$LOG_FILE"
     )
   fi
@@ -827,7 +1034,7 @@ process_batch() {
 }
 
 log "loop_start warm_parquet_dir=$WARM_PARQUET_DIR hot_parquet_dir=$HOT_PARQUET_DIR"
-log "loop_config shards_root=$SHARDS_ROOT tokenizer_path=$TOKENIZER_PATH iterations=$ITERATIONS hot_queue_min_files=$HOT_QUEUE_MIN_FILES stage_copy_jobs=$STAGE_COPY_JOBS bad_parquet_file=$BAD_PARQUET_FILE quarantine_dir=$QUARANTINE_DIR"
+log "loop_config shards_root=$SHARDS_ROOT tokenizer_path=$TOKENIZER_PATH iterations=$ITERATIONS hot_queue_min_files=$HOT_QUEUE_MIN_FILES stage_copy_jobs=$STAGE_COPY_JOBS stage_min_free_gib=$STAGE_MIN_FREE_GIB shard_jobs=$SHARD_JOBS tokenizer_threads=$TOKENIZER_THREADS auto_tune_shard_jobs=$AUTO_TUNE_SHARD_JOBS auto_tune_bounds=${AUTO_TUNE_MIN_SHARD_JOBS}-${AUTO_TUNE_MAX_SHARD_JOBS} auto_tune_load_pct=${AUTO_TUNE_LOW_LOAD_PCT}-${AUTO_TUNE_HIGH_LOAD_PCT} auto_tune_core_budget=$AUTO_TUNE_CORE_BUDGET bad_parquet_file=$BAD_PARQUET_FILE quarantine_dir=$QUARANTINE_DIR"
 reconcile_bad_parquet_from_warm
 bootstrap_processed_from_manifests
 refresh_stage_skip_list
@@ -866,8 +1073,12 @@ while true; do
     log "preflight_filtered selected=${#selected[@]} valid=${#valid_selected[@]}"
   fi
 
+  batch_start_epoch="$(date +%s)"
   process_batch "$((completed_batches + 1))" "${valid_selected[@]}"
+  batch_end_epoch="$(date +%s)"
+  LAST_BATCH_SECONDS=$((batch_end_epoch - batch_start_epoch))
   completed_batches=$((completed_batches + 1))
+  maybe_auto_tune_parallelism "$completed_batches"
   stage_once
 
   if [[ "$ITERATIONS" -gt 0 && "$completed_batches" -ge "$ITERATIONS" ]]; then

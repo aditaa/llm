@@ -7,6 +7,7 @@ MAX_FILES=10
 MAX_GIB=0
 MIN_AGE_SECONDS=180
 COPY_JOBS=1
+MIN_FREE_GIB=0
 SKIP_LIST=""
 DRY_RUN=0
 
@@ -29,12 +30,14 @@ Options:
   --min-age-seconds N      Ignore source files modified more recently than this
                            (default: 180)
   --copy-jobs N            Parallel copy workers for selected files (default: 1)
+  --min-free-gib N         Keep at least N GiB free on destination filesystem
+                           after this staging run (default: 0 disabled)
   --skip-list FILE         Optional newline-separated parquet basenames to skip
   --dry-run                Print what would be copied without copying
   -h, --help               Show this help
 
 Example:
-  bash scripts/stage_fineweb_from_warm.sh --max-files 4 --max-gib 8 --copy-jobs 2
+  bash scripts/stage_fineweb_from_warm.sh --max-files 4 --max-gib 8 --copy-jobs 2 --min-free-gib 80
 USAGE
 }
 
@@ -62,6 +65,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --copy-jobs)
       COPY_JOBS="$2"
+      shift 2
+      ;;
+    --min-free-gib)
+      MIN_FREE_GIB="$2"
       shift 2
       ;;
     --skip-list)
@@ -94,7 +101,7 @@ log="artifacts/reports/stage_fineweb_from_warm_$(date +%Y%m%d_%H%M%S).log"
 
 echo "[$(date -Iseconds)] source=$SRC_DIR" | tee -a "$log"
 echo "[$(date -Iseconds)] dest=$DEST_DIR" | tee -a "$log"
-echo "[$(date -Iseconds)] max_files=$MAX_FILES max_gib=$MAX_GIB min_age_seconds=$MIN_AGE_SECONDS dry_run=$DRY_RUN skip_list=${SKIP_LIST:-none}" | tee -a "$log"
+echo "[$(date -Iseconds)] max_files=$MAX_FILES max_gib=$MAX_GIB min_age_seconds=$MIN_AGE_SECONDS copy_jobs=$COPY_JOBS min_free_gib=$MIN_FREE_GIB dry_run=$DRY_RUN skip_list=${SKIP_LIST:-none}" | tee -a "$log"
 
 if [[ -n "$SKIP_LIST" && ! -f "$SKIP_LIST" ]]; then
   echo "skip-list not found: $SKIP_LIST" >&2
@@ -102,6 +109,10 @@ if [[ -n "$SKIP_LIST" && ! -f "$SKIP_LIST" ]]; then
 fi
 if ! [[ "$COPY_JOBS" =~ ^[1-9][0-9]*$ ]]; then
   echo "copy-jobs must be a positive integer: $COPY_JOBS" >&2
+  exit 2
+fi
+if ! [[ "$MIN_FREE_GIB" =~ ^[0-9]+$ ]]; then
+  echo "min-free-gib must be an integer >= 0: $MIN_FREE_GIB" >&2
   exit 2
 fi
 
@@ -113,6 +124,9 @@ skipped_existing=0
 skipped_blocklist=0
 considered=0
 selected_entries=()
+disk_guardrail_hit=0
+free_start_bytes="$(df -PB1 "$DEST_DIR" | awk 'NR==2 {print $4}')"
+min_free_bytes="$((MIN_FREE_GIB * 1024 * 1024 * 1024))"
 
 copy_one() {
   local src_path="$1"
@@ -177,6 +191,13 @@ while IFS= read -r src_path; do
       break
     fi
   fi
+  if [[ "$MIN_FREE_GIB" -gt 0 ]]; then
+    projected_free="$((free_start_bytes - copied_bytes - src_size))"
+    if [[ "$projected_free" -lt "$min_free_bytes" ]]; then
+      disk_guardrail_hit=1
+      break
+    fi
+  fi
 
   if [[ "$DRY_RUN" -eq 1 ]]; then
     echo "DRY-RUN copy $name size_bytes=$src_size age_seconds=$age" | tee -a "$log"
@@ -231,4 +252,9 @@ fi
 
 copied_gib="$(awk -v b="$copied_bytes" 'BEGIN { printf "%.2f", b/1024/1024/1024 }')"
 echo "[$(date -Iseconds)] considered=$considered copied_files=$copied_files copied_gib=$copied_gib skipped_recent=$skipped_recent skipped_existing=$skipped_existing skipped_blocklist=$skipped_blocklist" | tee -a "$log"
+if [[ "$disk_guardrail_hit" -eq 1 ]]; then
+  free_end_bytes="$(df -PB1 "$DEST_DIR" | awk 'NR==2 {print $4}')"
+  free_end_gib="$(awk -v b="$free_end_bytes" 'BEGIN { printf "%.2f", b/1024/1024/1024 }')"
+  echo "[$(date -Iseconds)] stop_reason=min_free_guardrail min_free_gib=$MIN_FREE_GIB free_gib_now=$free_end_gib" | tee -a "$log"
+fi
 echo "log_file=$log" | tee -a "$log"

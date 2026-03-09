@@ -25,9 +25,14 @@ class SampleState:
     manifest_unique_inputs: int | None = None
     manifest_count: int | None = None
     train_step: int | None = None
+    train_step_change_ts: float | None = None
+    train_step_change_value: int | None = None
+    train_sps_estimate: float | None = None
 
 
 STEP_RE = re.compile(r"step=(\d+)\b")
+TARGET_STEP_RE = re.compile(r"target_step=(\d+)\b")
+MAX_STEPS_RE = re.compile(r"--max-steps(?:=|\s+)(\d+)\b")
 WAIT_MANIFESTS_RE = re.compile(r"waiting_for_manifests have=(\d+) need=(\d+)")
 WAIT_UNIQUE_RE = re.compile(r"waiting_for_unique_inputs have=(\d+) need=(\d+)")
 WAIT_TRAIN_TOKENS_RE = re.compile(r"waiting_for_train_tokens have_tokens=(\d+) need_tokens=(\d+)")
@@ -45,7 +50,12 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--expected-parquet-files", type=int, default=510)
     parser.add_argument("--expected-bytes", type=int, default=1061360917731)
-    parser.add_argument("--train-target-step", type=int, default=100000)
+    parser.add_argument(
+        "--train-target-step",
+        type=int,
+        default=0,
+        help="Training target step. 0 means auto-detect from active trainer/supervisor logs.",
+    )
     parser.add_argument(
         "--manifest-stall-seconds",
         type=int,
@@ -188,6 +198,57 @@ def _latest_train_step(supervisor_state_dir: Path) -> int:
         if steps:
             return max(steps)
     return 0
+
+
+def _latest_supervisor_target_step(supervisor_state_dir: Path) -> int | None:
+    if not supervisor_state_dir.exists():
+        return None
+    logs = sorted(
+        supervisor_state_dir.glob("supervisor_*.log"),
+        key=lambda p: p.stat().st_mtime,
+        reverse=True,
+    )
+    for log_path in logs[:4]:
+        rc, text = _run_capture(["tail", "-n", "400", str(log_path)], timeout=5)
+        if rc != 0 or not text:
+            continue
+        for line in reversed(text.splitlines()):
+            if "train_launch " not in line:
+                continue
+            match = TARGET_STEP_RE.search(line)
+            if match:
+                return int(match.group(1))
+    return None
+
+
+def _active_trainer_target_step() -> int | None:
+    rc, text = _run_capture(["pgrep", "-af", r"llm\.cli train"], timeout=5)
+    if rc != 0 or not text:
+        return None
+    targets: list[int] = []
+    for line in text.splitlines():
+        match = MAX_STEPS_RE.search(line)
+        if match:
+            targets.append(int(match.group(1)))
+    if not targets:
+        return None
+    return max(targets)
+
+
+def _effective_train_target_step(
+    configured_target_step: int,
+    supervisor_state_dir: Path,
+    train_step: int,
+) -> int | None:
+    if configured_target_step > 0:
+        return max(configured_target_step, train_step)
+    active_target = _active_trainer_target_step()
+    if active_target is not None:
+        return max(active_target, train_step)
+    supervisor_target = _latest_supervisor_target_step(supervisor_state_dir)
+    if supervisor_target is not None:
+        return max(supervisor_target, train_step)
+    return None
 
 
 def _latest_generation_summary(supervisor_state_dir: Path) -> tuple[str, str, str]:
@@ -439,12 +500,14 @@ def _rate(current: int, previous: int | None, dt: float | None) -> float | None:
     if previous is None or dt is None or dt <= 0:
         return None
     delta = current - previous
-    if delta < 0:
+    if delta <= 0:
         return None
     return delta / dt
 
 
-def _eta(remaining: float, rate_per_sec: float | None) -> str:
+def _eta(remaining: float | None, rate_per_sec: float | None) -> str:
+    if remaining is None:
+        return "unknown"
     if remaining <= 0:
         return "done"
     if rate_per_sec is None or rate_per_sec <= 0:
@@ -484,6 +547,7 @@ def _render(
     )
     processed_parquet = _count_nonempty_lines(stage_state)
     train_step = _latest_train_step(sup_dir)
+    train_target_step = _effective_train_target_step(args.train_target_step, sup_dir, train_step)
     supervisor_gate = _latest_supervisor_gate(sup_dir)
     gen_rc, gen_pass_rate, gen_regression_pass = _latest_generation_summary(sup_dir)
 
@@ -493,6 +557,23 @@ def _render(
     shard_pps = _rate(processed_parquet, state.processed_parquet, dt)
     coverage_pps = _rate(manifest_unique_inputs, state.manifest_unique_inputs, dt)
     train_sps = _rate(train_step, state.train_step, dt)
+    if train_sps is None:
+        if state.train_step_change_value is None:
+            state.train_step_change_value = train_step
+            state.train_step_change_ts = now
+        elif train_step > state.train_step_change_value:
+            if state.train_step_change_ts is not None:
+                d_steps = train_step - state.train_step_change_value
+                d_secs = now - state.train_step_change_ts
+                if d_steps > 0 and d_secs > 0:
+                    state.train_sps_estimate = d_steps / d_secs
+            state.train_step_change_value = train_step
+            state.train_step_change_ts = now
+        elif train_step < state.train_step_change_value:
+            state.train_step_change_value = train_step
+            state.train_step_change_ts = now
+            state.train_sps_estimate = None
+        train_sps = state.train_sps_estimate
 
     latest_manifest_mtime = _latest_manifest_mtime(shards_root)
     manifest_stall_age = (
@@ -546,7 +627,11 @@ def _render(
     rem_bytes = max(0, int(args.expected_bytes) - warm_bytes)
     rem_files = max(0, int(args.expected_parquet_files) - warm_parquet)
     rem_manifest_unique = max(0, int(args.expected_parquet_files) - manifest_unique_inputs)
-    rem_steps = max(0, int(args.train_target_step) - train_step)
+    rem_steps: int | None
+    if train_target_step is None:
+        rem_steps = None
+    else:
+        rem_steps = max(0, int(train_target_step) - train_step)
     coverage_complete = (
         warm_parquet >= int(args.expected_parquet_files)
         and processed_parquet >= int(args.expected_parquet_files)
@@ -622,7 +707,7 @@ def _render(
         f"complete={int(coverage_complete)}"
     )
     lines.append(
-        f"  Training: step={train_step}/{args.train_target_step} "
+        f"  Training: step={train_step}/{train_target_step if train_target_step is not None else '?'} "
         f"rate={f'{train_sps:.3f} step/s' if train_sps is not None else 'n/a'} "
         f"eta={_eta(rem_steps, train_sps)}"
     )

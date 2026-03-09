@@ -275,6 +275,133 @@ class ScriptTests(unittest.TestCase):
             self.assertEqual(proc.returncode, 0, msg=proc.stderr)
             self.assertIn("Supervisor: gate=waiting_train_tokens 123456/999999", proc.stdout)
 
+    def test_pipeline_live_view_auto_detects_train_target_step(self) -> None:
+        if (
+            subprocess.run(
+                ["pgrep", "-af", r"llm\.cli train"],
+                capture_output=True,
+                text=True,
+                check=False,
+            ).returncode
+            == 0
+        ):
+            self.skipTest("trainer already running on host")
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            warm = root / "warm"
+            hot = root / "hot"
+            shards = root / "shards"
+            stage_dir = root / "stage"
+            sup_dir = root / "supervisor"
+            for path in [warm, hot, shards, stage_dir, sup_dir]:
+                path.mkdir(parents=True, exist_ok=True)
+
+            (sup_dir / "supervisor_20260309_130904.log").write_text(
+                (
+                    "[2026-03-09T13:09:09-05:00] "
+                    "train_launch manifests=11 step_now=138000 target_step=140000 "
+                    "batch_size=12 grad_accum=2\n"
+                ),
+                encoding="utf-8",
+            )
+            (sup_dir / "train_138000_to_140000_20260309_130909.log").write_text(
+                "step=139900 train_loss=3.12 lr=0.00003 tokens_seen=123 toks_per_sec=28000\n",
+                encoding="utf-8",
+            )
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    "scripts/pipeline_live_view.py",
+                    "--once",
+                    "--no-alt-screen",
+                    "--refresh-seconds",
+                    "0.1",
+                    "--warm-dir",
+                    str(warm),
+                    "--hot-dir",
+                    str(hot),
+                    "--shards-root",
+                    str(shards),
+                    "--stage-state-dir",
+                    str(stage_dir),
+                    "--supervisor-state-dir",
+                    str(sup_dir),
+                ],
+                cwd=Path(__file__).resolve().parents[1],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(proc.returncode, 0, msg=proc.stderr)
+            self.assertIn("Training: step=139900/140000", proc.stdout)
+
+    def test_pipeline_eta_report_auto_detects_train_target_step(self) -> None:
+        if (
+            subprocess.run(
+                ["pgrep", "-af", r"llm\.cli train"],
+                capture_output=True,
+                text=True,
+                check=False,
+            ).returncode
+            == 0
+        ):
+            self.skipTest("trainer already running on host")
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            warm = root / "warm"
+            shards = root / "shards"
+            stage_dir = root / "stage"
+            sup_dir = root / "supervisor"
+            for path in [warm, shards, stage_dir, sup_dir]:
+                path.mkdir(parents=True, exist_ok=True)
+
+            (sup_dir / "supervisor_20260309_130904.log").write_text(
+                (
+                    "[2026-03-09T13:09:09-05:00] "
+                    "train_launch manifests=11 step_now=138000 target_step=140000 "
+                    "batch_size=12 grad_accum=2\n"
+                ),
+                encoding="utf-8",
+            )
+            (sup_dir / "train_138000_to_140000_20260309_130909.log").write_text(
+                "step=139900 train_loss=3.12 lr=0.00003 tokens_seen=123 toks_per_sec=28000\n",
+                encoding="utf-8",
+            )
+
+            out_json = root / "status.json"
+            out_txt = root / "status.txt"
+            state_json = root / "state.json"
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    "scripts/pipeline_eta_report.py",
+                    "--warm-dir",
+                    str(warm),
+                    "--shards-root",
+                    str(shards),
+                    "--stage-state-dir",
+                    str(stage_dir),
+                    "--supervisor-state-dir",
+                    str(sup_dir),
+                    "--output-json",
+                    str(out_json),
+                    "--output-text",
+                    str(out_txt),
+                    "--state-file",
+                    str(state_json),
+                ],
+                cwd=Path(__file__).resolve().parents[1],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(proc.returncode, 0, msg=proc.stderr)
+            payload = json.loads(out_json.read_text(encoding="utf-8"))
+            self.assertEqual(payload["metrics"]["train_step"], 139900)
+            self.assertEqual(payload["expected"]["train_target_step"], 140000)
+            self.assertEqual(payload["remaining"]["train_steps"], 100)
+
     def test_pipeline_live_view_alerts_when_stage_controller_missing(self) -> None:
         if (
             subprocess.run(

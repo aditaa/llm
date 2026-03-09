@@ -112,6 +112,8 @@ def _capture_command(
 
 
 STEP_RE = re.compile(r"step=(\d+)\b")
+TARGET_STEP_RE = re.compile(r"target_step=(\d+)\b")
+MAX_STEPS_RE = re.compile(r"--max-steps(?:=|\s+)(\d+)\b")
 
 
 def _latest_train_step(supervisor_state_dir: Path) -> int:
@@ -134,6 +136,68 @@ def _latest_train_step(supervisor_state_dir: Path) -> int:
         if steps:
             return max(steps)
     return 0
+
+
+def _latest_supervisor_target_step(supervisor_state_dir: Path) -> int | None:
+    if not supervisor_state_dir.exists():
+        return None
+    logs = sorted(
+        supervisor_state_dir.glob("supervisor_*.log"),
+        key=lambda p: p.stat().st_mtime,
+        reverse=True,
+    )
+    for log_path in logs[:4]:
+        proc = subprocess.run(
+            ["tail", "-n", "400", str(log_path)],
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        text = proc.stdout if proc.returncode == 0 else ""
+        if not text:
+            continue
+        for line in reversed(text.splitlines()):
+            if "train_launch " not in line:
+                continue
+            match = TARGET_STEP_RE.search(line)
+            if match:
+                return int(match.group(1))
+    return None
+
+
+def _active_trainer_target_step() -> int | None:
+    proc = subprocess.run(
+        ["pgrep", "-af", "--", r"llm\.cli train"],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    if proc.returncode != 0 or not proc.stdout:
+        return None
+    targets: list[int] = []
+    for line in proc.stdout.splitlines():
+        match = MAX_STEPS_RE.search(line)
+        if match:
+            targets.append(int(match.group(1)))
+    if not targets:
+        return None
+    return max(targets)
+
+
+def _effective_train_target_step(
+    configured_target_step: int,
+    supervisor_state_dir: Path,
+    train_step: int,
+) -> int | None:
+    if configured_target_step > 0:
+        return max(configured_target_step, train_step)
+    active_target = _active_trainer_target_step()
+    if active_target is not None:
+        return max(active_target, train_step)
+    supervisor_target = _latest_supervisor_target_step(supervisor_state_dir)
+    if supervisor_target is not None:
+        return max(supervisor_target, train_step)
+    return None
 
 
 def _latest_generation_summary(supervisor_state_dir: Path) -> dict[str, Any]:
@@ -205,7 +269,9 @@ def _manifest_input_coverage(shards_root: Path) -> dict[str, int]:
     }
 
 
-def _eta_seconds(remaining: float, rate_per_sec: float | None) -> float | None:
+def _eta_seconds(remaining: float | None, rate_per_sec: float | None) -> float | None:
+    if remaining is None:
+        return None
     if rate_per_sec is None or rate_per_sec <= 0:
         return None
     if remaining <= 0:
@@ -236,7 +302,12 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--expected-parquet-files", type=int, default=510)
     parser.add_argument("--expected-bytes", type=int, default=1061360917731)
-    parser.add_argument("--train-target-step", type=int, default=100000)
+    parser.add_argument(
+        "--train-target-step",
+        type=int,
+        default=0,
+        help="Training target step. 0 means auto-detect from active trainer/supervisor logs.",
+    )
     parser.add_argument("--output-json", default="artifacts/reports/pipeline_status.json")
     parser.add_argument("--output-text", default="artifacts/reports/pipeline_status.txt")
     parser.add_argument("--state-file", default="artifacts/reports/pipeline_status_state.json")
@@ -278,6 +349,7 @@ def collect_status(args: argparse.Namespace) -> dict[str, Any]:
     manifest_overlap_manifests = int(manifest_coverage["overlap_manifests"])
     sharded_parquet = _count_nonempty_lines(stage_state_dir / "processed_parquet_files.txt")
     train_step = _latest_train_step(sup_dir)
+    train_target_step = _effective_train_target_step(args.train_target_step, sup_dir, train_step)
     generation_gate_latest = _latest_generation_summary(sup_dir)
 
     active = {
@@ -350,14 +422,14 @@ def collect_status(args: argparse.Namespace) -> dict[str, Any]:
                 manifest_rate = d_manifests / dt
             if d_unique_inputs >= 0:
                 unique_inputs_rate = d_unique_inputs / dt
-            if d_steps >= 0:
+            if d_steps > 0:
                 step_rate = d_steps / dt
 
     rem_bytes = max(0, int(args.expected_bytes) - warm_bytes)
     rem_download_parquet = max(0, int(args.expected_parquet_files) - warm_parquet)
     rem_sharded_parquet = max(0, int(args.expected_parquet_files) - sharded_parquet)
     rem_unique_inputs = max(0, int(args.expected_parquet_files) - manifest_unique_inputs)
-    rem_steps = max(0, int(args.train_target_step) - train_step)
+    rem_steps = None if train_target_step is None else max(0, int(train_target_step) - train_step)
     coverage_complete = (
         warm_parquet >= int(args.expected_parquet_files)
         and sharded_parquet >= int(args.expected_parquet_files)
@@ -391,7 +463,8 @@ def collect_status(args: argparse.Namespace) -> dict[str, Any]:
         "expected": {
             "parquet_files": int(args.expected_parquet_files),
             "bytes": int(args.expected_bytes),
-            "train_target_step": int(args.train_target_step),
+            "train_target_step": train_target_step,
+            "train_target_step_configured": int(args.train_target_step),
         },
         "rates": {
             "download_bytes_per_sec": bytes_rate,

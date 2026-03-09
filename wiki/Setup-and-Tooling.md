@@ -77,7 +77,8 @@ Units installed from `deploy/systemd/`:
 - `llm-hf-download-watchdog.service` (optional)
 
 `deploy/systemd/llm.env.example` includes tuned loop args for this host profile
-(`--stage-min-free-gib 80` + `--auto-tune-shard-jobs`). Override
+(`--stage-min-free-gib 80`, `--auto-tune-shard-jobs`, `--sync-background`,
+`--shard-size-tokens 20000000`). Override
 `LLM_STAGE_SHARD_LOOP_ARGS` in `/etc/llm/llm.env` if you want a different policy.
 
 ## Wiki Publishing

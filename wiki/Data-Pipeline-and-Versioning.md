@@ -77,6 +77,9 @@ bash scripts/fineweb_stage_shard_loop.sh \
   --auto-tune-max-shard-jobs 4 \
   --tokenizer-threads 10 \
   --encode-batch-size 1024 \
+  --shard-size-tokens 20000000 \
+  --sync-background \
+  --sync-max-inflight 2 \
   --sleep-seconds 60 \
   --shard-min-batch-size 512
 ```
@@ -92,6 +95,8 @@ This loop:
 - marks files processed only after post-batch guardrails pass (valid report+manifest, non-empty shard files)
 - enforces a hot-disk free-space floor when `--stage-min-free-gib` is set
 - can auto-tune shard parallelism (`--auto-tune-shard-jobs`) using CPU load + per-batch runtime
+- can overlap warm sync in the background (`--sync-background`) with bounded in-flight jobs
+- benefits from larger shard targets (`--shard-size-tokens 20000000`) to cut file-count/sync overhead
 - on 20-core hosts, two shard jobs with tokenizer batch encoding is the current higher-throughput profile
 - reconciles bad parquet basenames against warm-source validity on startup, so transient hot-copy failures can be retried
 

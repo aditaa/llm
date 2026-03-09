@@ -118,7 +118,8 @@ Installed units:
 Environment file:
 - `/etc/llm/llm.env` (seeded from `deploy/systemd/llm.env.example`)
 - Set `LLM_STAGE_SHARD_LOOP_ARGS` to tune staging/sharding (default template includes
-  `--stage-min-free-gib 80` and `--auto-tune-shard-jobs` for safer long runs on limited hot disk)
+  `--stage-min-free-gib 80`, `--auto-tune-shard-jobs`, `--sync-background`, and
+  `--shard-size-tokens 20000000` for safer/faster long runs on limited hot disk)
 
 Useful commands:
 ```bash

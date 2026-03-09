@@ -258,6 +258,9 @@ bash scripts/fineweb_stage_shard_loop.sh \
   --auto-tune-max-shard-jobs 4 \
   --tokenizer-threads 10 \
   --encode-batch-size 1024 \
+  --shard-size-tokens 20000000 \
+  --sync-background \
+  --sync-max-inflight 2 \
   --sleep-seconds 60 \
   --shard-min-batch-size 512
 ```
@@ -276,6 +279,8 @@ transient hot-copy failures do not permanently blacklist valid warm files.
 `--stage-copy-jobs` controls warm->hot copy parallelism for staging throughput.
 `--stage-min-free-gib` prevents staging from filling hot disk below a safety floor.
 `--auto-tune-shard-jobs` adapts `--shard-jobs` (and matching tokenizer threads) from loadavg + batch runtime.
+`--sync-background` overlaps warm-storage sync with the next shard batch to reduce idle gaps.
+`--shard-size-tokens 20000000` reduces shard file-count overhead vs the old 5M-token default.
 If a shard build fails with OOM-like errors, the loop retries automatically with a smaller batch size.
 Batch guardrails now require valid report/manifest + non-empty shard outputs before files are marked
 processed or purged from hot storage.
@@ -617,7 +622,7 @@ Environment template:
 
 Recommended `LLM_STAGE_SHARD_LOOP_ARGS` baseline for 20-core hosts:
 ```bash
-LLM_STAGE_SHARD_LOOP_ARGS="--hot-queue-min-files 12 --stage-max-files 10 --stage-copy-jobs 2 --stage-min-free-gib 80 --process-max-files 10 --shard-jobs 2 --auto-tune-shard-jobs --auto-tune-min-shard-jobs 1 --auto-tune-max-shard-jobs 4 --auto-tune-min-batch-seconds 300 --tokenizer-threads 10 --encode-batch-size 1024 --sleep-seconds 60 --shard-min-batch-size 512"
+LLM_STAGE_SHARD_LOOP_ARGS="--hot-queue-min-files 12 --stage-max-files 10 --stage-copy-jobs 2 --stage-min-free-gib 80 --process-max-files 10 --shard-jobs 2 --auto-tune-shard-jobs --auto-tune-min-shard-jobs 1 --auto-tune-max-shard-jobs 4 --auto-tune-min-batch-seconds 300 --tokenizer-threads 10 --encode-batch-size 1024 --shard-size-tokens 20000000 --sync-background --sync-max-inflight 2 --sleep-seconds 60 --shard-min-batch-size 512"
 ```
 
 ## Inference Bundle Packaging

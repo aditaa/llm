@@ -71,6 +71,7 @@ class ScriptTests(unittest.TestCase):
         self.assertIn("--stage-copy-jobs", proc.stdout)
         self.assertIn("--stage-min-free-gib", proc.stdout)
         self.assertIn("--auto-tune-shard-jobs", proc.stdout)
+        self.assertIn("--sync-background", proc.stdout)
 
     def test_render_eval_trend_dashboard(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

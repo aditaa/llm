@@ -929,6 +929,9 @@ class ScriptTests(unittest.TestCase):
 
     @unittest.skipIf(shutil.which("timeout") is None, "timeout is required")
     def test_train_supervisor_waits_on_train_token_gate(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+        if not (repo_root / ".venv" / "bin" / "python").exists():
+            self.skipTest(".venv/bin/python not available in this test environment")
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             shards = root / "shards"
@@ -972,7 +975,7 @@ class ScriptTests(unittest.TestCase):
                     "--no-eval-after-chunk",
                     "--no-generation-gate",
                 ],
-                cwd=Path(__file__).resolve().parents[1],
+                cwd=repo_root,
                 capture_output=True,
                 text=True,
                 check=False,

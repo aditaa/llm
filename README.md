@@ -604,6 +604,7 @@ Includes embedded snapshots of `top -b -n1`, `free -h`, `nvidia-smi`, and `df -h
 Also reports manifest coverage metrics (`manifest_unique_input_files`, overlap counts, `coverage_complete`).
 Also includes per-task `RUN/STOP` state with stop reasons (for example `download complete`,
 `staging handled by stage-loop`, `idle between chunks/eval`, or gate waits).
+Task process counts are root-deduped (controller processes), so wrapper/child shells do not inflate `RUN xN`.
 
 Live terminal view (single command to watch continuously):
 ```bash
@@ -620,6 +621,8 @@ This is a live-only monitor (no report/status files written) and includes:
 
 Coverage ETA/rate now falls back to sharding throughput when manifest overlap is zero, so
 ETA remains visible between manifest update bursts.
+Alerts also flag duplicate train controllers (`train-supervisor`/`trainer`) and unmanaged
+stage-loop runs (stage-loop active without stage-watchdog).
 
 It refreshes in-place (full-screen mode). If your terminal does not handle full-screen
 escape codes well, add `--no-alt-screen`.

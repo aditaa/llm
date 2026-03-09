@@ -708,6 +708,7 @@ def _render(
     shard_pps = _rate(processed_parquet, state.processed_parquet, dt)
     coverage_pps = _rate(manifest_unique_inputs, state.manifest_unique_inputs, dt)
     train_sps = _rate(train_step, state.train_step, dt)
+    train_rate_note = ""
     if train_sps is None:
         if state.train_step_change_value is None:
             state.train_step_change_value = train_step
@@ -725,6 +726,8 @@ def _render(
             state.train_step_change_ts = now
             state.train_sps_estimate = None
         train_sps = state.train_sps_estimate
+        if train_sps is not None:
+            train_rate_note = " (rolling)"
 
     if coverage_pps is None:
         if state.coverage_change_value is None:
@@ -858,6 +861,20 @@ def _render(
         alerts.append(f"multiple stage watchdogs detected ({task_counts.get('stage-watchdog', 0)})")
     if task_counts.get("stage-loop", 0) > 1:
         alerts.append(f"multiple stage loops detected ({task_counts.get('stage-loop', 0)})")
+    if task_counts.get("train-supervisor", 0) > 1:
+        alerts.append(
+            f"multiple train supervisors detected ({task_counts.get('train-supervisor', 0)})"
+        )
+    if task_counts.get("trainer", 0) > 1:
+        alerts.append(f"multiple trainers detected ({task_counts.get('trainer', 0)})")
+    if task_counts.get("trainer", 0) > 0 and task_counts.get("train-supervisor", 0) == 0:
+        alerts.append("trainer active without supervisor process")
+    if (
+        not coverage_complete
+        and task_counts.get("stage-loop", 0) > 0
+        and task_counts.get("stage-watchdog", 0) == 0
+    ):
+        alerts.append("stage-loop running without watchdog auto-restart")
     if task_counts.get("stage-watchdog", 0) == 0 and task_counts.get("stage-loop", 0) == 0:
         alerts.append("stage pipeline controller is not running")
     if (
@@ -920,7 +937,7 @@ def _render(
     train_target_text = str(train_target_step) if train_target_step is not None else "?"
     lines.append(
         f"  Training: step={train_step}/{train_target_text} "
-        f"rate={f'{train_sps:.3f} step/s' if train_sps is not None else 'n/a'} "
+        f"rate={f'{train_sps:.3f} step/s{train_rate_note}' if train_sps is not None else 'n/a'} "
         f"eta={_eta(rem_steps, train_sps)}"
     )
     if manifest_stall_age is not None:

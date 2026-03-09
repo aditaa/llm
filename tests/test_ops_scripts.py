@@ -1,3 +1,4 @@
+import importlib.util
 import json
 import os
 import shutil
@@ -712,6 +713,37 @@ class ScriptTests(unittest.TestCase):
             )
             self.assertNotEqual(payload["eta_human"]["manifest_unique_inputs"], "unknown")
 
+    def test_pipeline_eta_report_pgrep_root_count_dedupes_children(self) -> None:
+        marker = f"eta_root_count_{int(time.time() * 1_000_000)}"
+        cmd = (
+            f"exec -a {marker} bash -lc "
+            f"'exec -a {marker} sleep 15 & wait'"
+        )
+        proc = subprocess.Popen(
+            ["bash", "-lc", cmd],
+            cwd=Path(__file__).resolve().parents[1],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        try:
+            time.sleep(0.8)
+            module_path = Path(__file__).resolve().parents[1] / "scripts" / "pipeline_eta_report.py"
+            spec = importlib.util.spec_from_file_location("pipeline_eta_report", module_path)
+            self.assertIsNotNone(spec)
+            self.assertIsNotNone(spec.loader)
+            module = importlib.util.module_from_spec(spec)
+            assert spec.loader is not None
+            spec.loader.exec_module(module)
+            count = module._pgrep_root_count(marker)
+            self.assertEqual(count, 1)
+        finally:
+            proc.terminate()
+            try:
+                proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait(timeout=5)
+
     def test_pipeline_live_view_alerts_when_stage_controller_missing(self) -> None:
         if (
             subprocess.run(
@@ -826,6 +858,71 @@ class ScriptTests(unittest.TestCase):
                 )
                 self.assertEqual(proc.returncode, 0, msg=proc.stderr)
                 self.assertIn("ALERT: manifest count stalled", proc.stdout)
+            finally:
+                dummy.terminate()
+                dummy.wait(timeout=5)
+
+    def test_pipeline_live_view_alerts_when_stage_loop_unmanaged(self) -> None:
+        if (
+            subprocess.run(
+                ["pgrep", "-af", "fineweb_stage_shard_loop.sh|fineweb_stage_shard_watchdog.sh"],
+                capture_output=True,
+                text=True,
+                check=False,
+            ).returncode
+            == 0
+        ):
+            self.skipTest("stage controller already running on host")
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            warm = root / "warm"
+            hot = root / "hot"
+            shards = root / "shards"
+            stage_dir = root / "stage"
+            sup_dir = root / "supervisor"
+            for path in [warm, hot, shards, stage_dir, sup_dir]:
+                path.mkdir(parents=True, exist_ok=True)
+
+            dummy = subprocess.Popen(
+                ["bash", "-lc", "exec -a fineweb_stage_shard_loop.sh sleep 15"],
+                cwd=Path(__file__).resolve().parents[1],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            try:
+                proc = subprocess.run(
+                    [
+                        sys.executable,
+                        "scripts/pipeline_live_view.py",
+                        "--once",
+                        "--no-alt-screen",
+                        "--refresh-seconds",
+                        "0.1",
+                        "--warm-dir",
+                        str(warm),
+                        "--hot-dir",
+                        str(hot),
+                        "--shards-root",
+                        str(shards),
+                        "--stage-state-dir",
+                        str(stage_dir),
+                        "--supervisor-state-dir",
+                        str(sup_dir),
+                        "--expected-parquet-files",
+                        "10",
+                        "--expected-bytes",
+                        "100",
+                    ],
+                    cwd=Path(__file__).resolve().parents[1],
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+                self.assertEqual(proc.returncode, 0, msg=proc.stderr)
+                self.assertIn(
+                    "ALERT: stage-loop running without watchdog auto-restart",
+                    proc.stdout,
+                )
             finally:
                 dummy.terminate()
                 dummy.wait(timeout=5)

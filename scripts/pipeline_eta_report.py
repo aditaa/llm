@@ -52,7 +52,7 @@ def _count_nonempty_lines(path: Path) -> int:
     return len(unique)
 
 
-def _pgrep_count(pattern: str) -> int:
+def _pgrep_root_count(pattern: str) -> int:
     proc = subprocess.run(
         ["pgrep", "-af", "--", pattern],
         text=True,
@@ -61,8 +61,37 @@ def _pgrep_count(pattern: str) -> int:
     )
     if proc.returncode != 0:
         return 0
-    lines = [line for line in proc.stdout.splitlines() if line.strip()]
-    return len(lines)
+    pids: list[int] = []
+    for line in proc.stdout.splitlines():
+        parts = line.strip().split(maxsplit=1)
+        if parts and parts[0].isdigit():
+            pids.append(int(parts[0]))
+    if not pids:
+        return 0
+
+    pid_set = set(pids)
+    tree = subprocess.run(
+        ["ps", "-o", "pid=,ppid=", "-p", ",".join(str(pid) for pid in pids)],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    if tree.returncode != 0 or not tree.stdout:
+        return len(pids)
+
+    ppids: dict[int, int] = {}
+    for raw in tree.stdout.splitlines():
+        parts = raw.split()
+        if len(parts) != 2:
+            continue
+        if not parts[0].isdigit() or not parts[1].isdigit():
+            continue
+        ppids[int(parts[0])] = int(parts[1])
+
+    root_pids = [pid for pid in pids if ppids.get(pid) not in pid_set]
+    if not root_pids:
+        return len(pids)
+    return len(root_pids)
 
 
 def _capture_command(
@@ -456,16 +485,16 @@ def collect_status(args: argparse.Namespace) -> dict[str, Any]:
     generation_gate_latest = _latest_generation_summary(sup_dir)
 
     active = {
-        "hf_watchdog": _pgrep_count(r"hf_download_watchdog\.sh"),
-        "download_worker": _pgrep_count(r"hf_download_resumable\.sh"),
-        "prefetch_worker": _pgrep_count(r"fineweb_prefetch_hot_queue\.sh"),
-        "stage_watchdog": _pgrep_count(r"fineweb_stage_shard_watchdog\.sh"),
-        "stage_loop": _pgrep_count(r"fineweb_stage_shard_loop\.sh"),
-        "shard_builder": _pgrep_count(r"scripts/fineweb_parquet_to_shards\.py"),
-        "train_supervisor": _pgrep_count(r"train_supervisor_rtx5070_350bt\.sh"),
-        "trainer": _pgrep_count(r"llm\.cli train"),
-        "eval_runner": _pgrep_count(r"scripts/eval_checkpoint_prompts\.py"),
-        "generation_gate_runner": _pgrep_count(
+        "hf_watchdog": _pgrep_root_count(r"hf_download_watchdog\.sh"),
+        "download_worker": _pgrep_root_count(r"hf_download_resumable\.sh"),
+        "prefetch_worker": _pgrep_root_count(r"fineweb_prefetch_hot_queue\.sh"),
+        "stage_watchdog": _pgrep_root_count(r"fineweb_stage_shard_watchdog\.sh"),
+        "stage_loop": _pgrep_root_count(r"fineweb_stage_shard_loop\.sh"),
+        "shard_builder": _pgrep_root_count(r"scripts/fineweb_parquet_to_shards\.py"),
+        "train_supervisor": _pgrep_root_count(r"train_supervisor_rtx5070_350bt\.sh"),
+        "trainer": _pgrep_root_count(r"llm\.cli train"),
+        "eval_runner": _pgrep_root_count(r"scripts/eval_checkpoint_prompts\.py"),
+        "generation_gate_runner": _pgrep_root_count(
             r"scripts/eval_checkpoint_prompts\.py .*generation_smoke_suite_v1\.json"
         ),
     }
@@ -688,7 +717,9 @@ def write_reports(status: dict[str, Any], output_json: Path, output_text: Path) 
             "rates:"
             f" download_mib_per_sec={r['download_mib_per_sec']} download_parquet_per_sec={r['download_parquet_per_sec']}"
             f" sharding_parquet_per_sec={r['sharding_parquet_per_sec']} manifest_per_sec={r['manifest_per_sec']}"
-            f" manifest_unique_inputs_per_sec={r['manifest_unique_inputs_per_sec']} train_steps_per_sec={r['train_steps_per_sec']}",
+            f" manifest_unique_inputs_per_sec={r['manifest_unique_inputs_per_sec']}"
+            f" manifest_unique_inputs_rate_source={r.get('manifest_unique_inputs_rate_source')}"
+            f" train_steps_per_sec={r['train_steps_per_sec']}",
             f"eta: download_bytes={status['eta_human']['download']} download_parquet={status['eta_human']['download_parquet']}"
             f" sharding={status['eta_human']['sharding']} manifest_unique_inputs={status['eta_human']['manifest_unique_inputs']} train={status['eta_human']['train']}",
             "coverage:"

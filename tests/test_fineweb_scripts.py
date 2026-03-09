@@ -290,6 +290,75 @@ class StageFineWebFromWarmTests(unittest.TestCase):
             self.assertEqual(proc.returncode, 2)
             self.assertIn("copy-jobs must be a positive integer", proc.stderr)
 
+    def test_min_free_gib_requires_nonnegative_integer(self) -> None:
+        repo_root = _repo_root()
+        script = repo_root / "scripts" / "stage_fineweb_from_warm.sh"
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            src_dir = tmp_path / "src"
+            dest_dir = tmp_path / "dest"
+            src_dir.mkdir(parents=True, exist_ok=True)
+            dest_dir.mkdir(parents=True, exist_ok=True)
+            (src_dir / "a.parquet").write_bytes(b"A")
+
+            proc = subprocess.run(
+                [
+                    "bash",
+                    str(script),
+                    "--src-dir",
+                    str(src_dir),
+                    "--dest-dir",
+                    str(dest_dir),
+                    "--min-free-gib",
+                    "bad",
+                ],
+                cwd=tmp_path,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(proc.returncode, 2)
+            self.assertIn("min-free-gib must be an integer >= 0", proc.stderr)
+
+    def test_min_free_gib_guardrail_stops_before_copy(self) -> None:
+        repo_root = _repo_root()
+        script = repo_root / "scripts" / "stage_fineweb_from_warm.sh"
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            src_dir = tmp_path / "src"
+            dest_dir = tmp_path / "dest"
+            src_dir.mkdir(parents=True, exist_ok=True)
+            dest_dir.mkdir(parents=True, exist_ok=True)
+            (src_dir / "a.parquet").write_bytes(b"A")
+            (src_dir / "b.parquet").write_bytes(b"B")
+
+            proc = subprocess.run(
+                [
+                    "bash",
+                    str(script),
+                    "--src-dir",
+                    str(src_dir),
+                    "--dest-dir",
+                    str(dest_dir),
+                    "--max-files",
+                    "10",
+                    "--min-age-seconds",
+                    "0",
+                    "--min-free-gib",
+                    "999999",
+                ],
+                cwd=tmp_path,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(proc.returncode, 0, msg=proc.stderr)
+            copied = sorted(p.name for p in dest_dir.glob("*.parquet"))
+            self.assertEqual(copied, [])
+            self.assertIn("stop_reason=min_free_guardrail", proc.stdout)
+
 
 class FineWebManifestDedupeTests(unittest.TestCase):
     def test_dedupe_disables_older_overlapping_manifest(self) -> None:

@@ -19,12 +19,14 @@ Usage:
     [--worker-log-file artifacts/reports/fineweb_350bt_download_resumable.log] \
     [--watchdog-log-file artifacts/reports/hf_download_watchdog.log] \
     [--check-interval-seconds 120] \
-    [--stall-seconds 1200]
+    [--stall-seconds 1200] \
+    [--exit-on-complete --expected-parquet-files 510 --expected-bytes 1061360917731]
 
 Notes:
   - Wraps `hf_download_resumable.sh` and keeps it running.
   - Restarts the worker if it exits unexpectedly.
   - Detects stalls from unchanged parquet/incomplete bytes+counts and restarts.
+  - Optional completion exit can stop watchdog once expected file/byte targets are reached.
 USAGE
 }
 
@@ -52,6 +54,9 @@ WATCHDOG_LOG_FILE="artifacts/reports/hf_download_watchdog.log"
 CHECK_INTERVAL_SECONDS=120
 STALL_SECONDS=1200
 RESTART_DELAY_SECONDS=5
+EXIT_ON_COMPLETE=0
+EXPECTED_PARQUET_FILES=0
+EXPECTED_BYTES=0
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -119,6 +124,18 @@ while [[ $# -gt 0 ]]; do
       STALL_SECONDS="${2:-}"
       shift 2
       ;;
+    --exit-on-complete)
+      EXIT_ON_COMPLETE=1
+      shift
+      ;;
+    --expected-parquet-files)
+      EXPECTED_PARQUET_FILES="${2:-}"
+      shift 2
+      ;;
+    --expected-bytes)
+      EXPECTED_BYTES="${2:-}"
+      shift 2
+      ;;
     -h|--help)
       usage
       exit 0
@@ -134,6 +151,27 @@ done
 if [[ -z "$DATASET" || -z "$INCLUDE_PATTERN" || -z "$LOCAL_DIR" ]]; then
   echo "error: --dataset, --include, and --local-dir are required" >&2
   usage >&2
+  exit 2
+fi
+
+if ! [[ "$CHECK_INTERVAL_SECONDS" =~ ^[0-9]+$ ]] || [[ "$CHECK_INTERVAL_SECONDS" -le 0 ]]; then
+  echo "error: --check-interval-seconds must be a positive integer" >&2
+  exit 2
+fi
+if ! [[ "$STALL_SECONDS" =~ ^[0-9]+$ ]] || [[ "$STALL_SECONDS" -le 0 ]]; then
+  echo "error: --stall-seconds must be a positive integer" >&2
+  exit 2
+fi
+if ! [[ "$EXPECTED_PARQUET_FILES" =~ ^[0-9]+$ ]]; then
+  echo "error: --expected-parquet-files must be an integer >= 0" >&2
+  exit 2
+fi
+if ! [[ "$EXPECTED_BYTES" =~ ^[0-9]+$ ]]; then
+  echo "error: --expected-bytes must be an integer >= 0" >&2
+  exit 2
+fi
+if [[ "$EXIT_ON_COMPLETE" -eq 1 && "$EXPECTED_PARQUET_FILES" -le 0 && "$EXPECTED_BYTES" -le 0 ]]; then
+  echo "error: --exit-on-complete requires --expected-parquet-files and/or --expected-bytes" >&2
   exit 2
 fi
 
@@ -158,6 +196,13 @@ progress_snapshot() {
   incomplete_count="$(find "$LOCAL_DIR" -type f -name '*.incomplete' | wc -l | tr -d ' ')"
   total_bytes="$(find "$LOCAL_DIR" -type f \( -name '*.parquet' -o -name '*.incomplete' \) -printf '%s\n' | awk '{s+=$1} END {print s+0}')"
   printf '%s:%s:%s' "$parquet_count" "$incomplete_count" "$total_bytes"
+}
+
+parse_snapshot() {
+  local snapshot="$1"
+  local parquet_count incomplete_count total_bytes
+  IFS=':' read -r parquet_count incomplete_count total_bytes <<< "$snapshot"
+  echo "${parquet_count:-0} ${incomplete_count:-0} ${total_bytes:-0}"
 }
 
 clear_stale_lock() {
@@ -251,6 +296,25 @@ while true; do
     last_snapshot="$current_snapshot"
     last_progress_epoch="$now_epoch"
     log "progress snapshot=$current_snapshot"
+  fi
+
+  if [[ "$EXIT_ON_COMPLETE" -eq 1 ]]; then
+    read -r parquet_count incomplete_count total_bytes <<< "$(parse_snapshot "$current_snapshot")"
+    complete=1
+    if [[ "$EXPECTED_PARQUET_FILES" -gt 0 && "$parquet_count" -lt "$EXPECTED_PARQUET_FILES" ]]; then
+      complete=0
+    fi
+    if [[ "$incomplete_count" -ne 0 ]]; then
+      complete=0
+    fi
+    if [[ "$EXPECTED_BYTES" -gt 0 && "$total_bytes" -lt "$EXPECTED_BYTES" ]]; then
+      complete=0
+    fi
+    if [[ "$complete" -eq 1 ]]; then
+      log "completion_reached snapshot=$current_snapshot expected_parquet=$EXPECTED_PARQUET_FILES expected_bytes=$EXPECTED_BYTES exiting"
+      stop_worker "completion_reached"
+      exit 0
+    fi
   fi
 
   if [[ -n "$WORKER_PID" ]] && ! kill -0 "$WORKER_PID" 2>/dev/null; then

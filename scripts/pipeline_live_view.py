@@ -171,7 +171,8 @@ def _latest_generation_summary(supervisor_state_dir: Path) -> tuple[str, str, st
     if latest is None:
         return ("NA", "NA", "NA")
     parts = latest.split("\t")
-    # run_tag,step,generation_rc,pass_rate,check_pass_rate,avg_case_score,cases_passed,cases_total,regression_pass,baseline_report,report_json
+    # run_tag, step, generation_rc, pass_rate, check_pass_rate, avg_case_score,
+    # cases_passed, cases_total, regression_pass, baseline_report, report_json
     if len(parts) < 9:
         return ("NA", "NA", "NA")
     return (parts[2], parts[3], parts[8])
@@ -266,7 +267,8 @@ def _disk_snapshot(paths: list[str]) -> list[str]:
         used = max(0, total - free)
         pct = (100.0 * used / total) if total > 0 else 0.0
         lines.append(
-            f"{path}: used={_human_bytes(used)} free={_human_bytes(free)} total={_human_bytes(total)} ({pct:.1f}%)"
+            f"{path}: used={_human_bytes(used)} free={_human_bytes(free)} "
+            f"total={_human_bytes(total)} ({pct:.1f}%)"
         )
     return lines
 
@@ -290,7 +292,8 @@ def _gpu_snapshot() -> list[str]:
         idx, name, util, mem_used, mem_total, temp, power_draw, power_limit = parts[:8]
         mem_pct = (100.0 * float(mem_used) / float(mem_total)) if float(mem_total) > 0 else 0.0
         lines.append(
-            f"GPU{idx} {name}: util={util}% mem={mem_used}/{mem_total}MiB ({mem_pct:.1f}%) temp={temp}C power={power_draw}/{power_limit}W"
+            f"GPU{idx} {name}: util={util}% mem={mem_used}/{mem_total}MiB ({mem_pct:.1f}%) "
+            f"temp={temp}C power={power_draw}/{power_limit}W"
         )
     rc_apps, apps_text = _run_capture(
         [
@@ -322,7 +325,10 @@ def _task_status(pattern: str) -> tuple[int, list[str]]:
         return 0, []
 
     pid_csv = ",".join(str(pid) for pid in pids)
-    rc_ps, ps_text = _run_capture(["ps", "-o", "pid=,etime=,pcpu=,pmem=,comm=", "-p", pid_csv], timeout=5)
+    rc_ps, ps_text = _run_capture(
+        ["ps", "-o", "pid=,etime=,pcpu=,pmem=,comm=", "-p", pid_csv],
+        timeout=5,
+    )
     rows: list[str] = []
     if rc_ps == 0 and ps_text:
         for raw in ps_text.splitlines():
@@ -468,7 +474,8 @@ def _render(
     lines.append("Pipeline Progress")
     lines.append(
         f"  Download: warm_parquet={warm_parquet}/{args.expected_parquet_files} "
-        f"incomplete={warm_incomplete} warm_size={_human_bytes(warm_bytes)}/{_human_bytes(args.expected_bytes)} "
+        f"incomplete={warm_incomplete} "
+        f"warm_size={_human_bytes(warm_bytes)}/{_human_bytes(args.expected_bytes)} "
         f"rate={f'{rate_mib:.2f}MiB/s' if rate_mib is not None else 'n/a'} "
         f"eta={_eta(rem_bytes, download_bps)}"
     )
@@ -492,7 +499,8 @@ def _render(
         f"eta={_eta(rem_steps, train_sps)}"
     )
     lines.append(
-        f"  GenGate:  latest_rc={gen_rc} latest_pass_rate={gen_pass_rate} latest_regression_pass={gen_regression_pass}"
+        f"  GenGate:  latest_rc={gen_rc} latest_pass_rate={gen_pass_rate} "
+        f"latest_regression_pass={gen_regression_pass}"
     )
 
     lines.append("")

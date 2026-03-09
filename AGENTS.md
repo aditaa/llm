@@ -120,6 +120,7 @@ Keep PR scope narrow; split refactors and features into separate PRs.
 - For bounded external pulls (for example FineWeb samples), use `python3 scripts/pull_hf_rows.py` and write to warm storage first
 - For long-running Hugging Face parquet pulls, use `scripts/hf_download_resumable.sh` instead of one-shot `hf download` (prefer `--enable-hf-transfer`, `--max-workers 6`, `--skip-dry-run`, and `--attempt-timeout-seconds` for 350BT-scale pulls)
 - For unattended long pulls, prefer `scripts/hf_download_watchdog.sh` to restart stalled/exited resumable workers based on progress checks (`--stall-seconds`, `--check-interval-seconds`)
+- For watchdog runs, set `--exit-on-complete` with `--expected-parquet-files` and/or `--expected-bytes` so completed pulls do not restart indefinitely
 - For parquet-based FineWeb workflows, use `scripts/stage_fineweb_from_warm.sh` to copy bounded warm chunks into hot storage
 - Use `stage_fineweb_from_warm.sh --skip-list <bad_file_list>` to avoid re-staging known-bad parquet basenames
 - For long-running 350BT ingestion on limited hot disk, use `scripts/fineweb_stage_shard_loop.sh` for staged processing and automatic hot-space reclaim
@@ -133,6 +134,7 @@ Keep PR scope narrow; split refactors and features into separate PRs.
 - For higher CPU throughput on this 20-core host, prefer `--shard-jobs 2 --tokenizer-threads 10 --encode-batch-size 1024`
 - Keep stage-loop OOM retry enabled (default) so shard builds back off to smaller `--batch-size` automatically
 - For continuously growing shard sets, use `scripts/train_supervisor_rtx5070_350bt.sh` so each resumed chunk re-reads new manifests before training continues
+- For staged 350BT training, set `train_supervisor_rtx5070_350bt.sh --min-unique-input-files <N>` (for example `510`) to avoid starting on too-small shard coverage
 - Supervisor now runs `scripts/fineweb_manifest_dedupe.py` before each train chunk launch to disable exact duplicate manifest file-sets (`keep=newest`) and report partial overlaps; use `--no-dedupe-overlap-manifests` or `--dedupe-dry-run` as needed
 - For continuous 350BT pipeline runs, keep exactly one `fineweb_stage_shard_watchdog.sh` and one `train_supervisor_rtx5070_350bt.sh` process active; avoid concurrent one-off `llm.cli train` runs against the same checkpoint directory
 - Supervisor resume guardrail validates `last.pt`/`ckpt_step_*.pt` and quarantines invalid checkpoint files before retry

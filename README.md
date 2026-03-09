@@ -225,9 +225,14 @@ bash scripts/hf_download_watchdog.sh \
   --skip-dry-run \
   --attempt-timeout-seconds 5400 \
   --stall-seconds 1200 \
+  --exit-on-complete \
+  --expected-parquet-files 510 \
+  --expected-bytes 1061360917731 \
   --worker-log-file artifacts/reports/fineweb_350bt_download_resumable.log \
   --watchdog-log-file artifacts/reports/hf_download_watchdog.log
 ```
+Use `--exit-on-complete` with expected file and/or byte targets so the watchdog exits once
+download is complete (instead of looping forever and relaunching workers).
 
 3ab. Stage FineWeb chunks from warm to hot as needed:
 ```bash
@@ -524,6 +529,7 @@ bash scripts/train_supervisor_rtx5070_350bt.sh \
   --poll-seconds 60 \
   --batch-size 12 \
   --target-effective-batch 24 \
+  --min-unique-input-files 510 \
   --min-batch-size 6 \
   --max-batch-size 20 \
   --batch-step 2 \
@@ -536,6 +542,7 @@ Supervisor now runs a manifest dedupe pass before each train chunk launch
 (`scripts/fineweb_manifest_dedupe.py`, keep strategy `newest`) that disables exact duplicate
 manifest file-sets and reports partial overlaps for review.
 Use `--no-dedupe-overlap-manifests` to disable, or `--dedupe-dry-run` to audit without disabling duplicates.
+Use `--min-unique-input-files <N>` to hold training until enough unique parquet inputs are represented in manifests.
 Add `--no-train-fail-on-eval-regression` if you want chunk runs to continue even when
 the train-loop held-out perplexity gate is noisy; prompt-suite regression/promotion
 checks still run in the supervisor eval step.

@@ -106,9 +106,13 @@ bash scripts/hf_download_watchdog.sh \
   --enable-hf-transfer \
   --skip-dry-run \
   --attempt-timeout-seconds 5400 \
-  --stall-seconds 1200
+  --stall-seconds 1200 \
+  --exit-on-complete \
+  --expected-parquet-files 510 \
+  --expected-bytes 1061360917731
 ```
 The watchdog monitors parquet/incomplete byte growth and restarts the resumable worker if it exits or stalls.
+Use `--exit-on-complete` with expected targets so the watchdog exits when the download is actually complete.
 
 Hot-queue prefetch worker (stage on demand while training):
 ```bash
@@ -125,6 +129,7 @@ bash scripts/train_supervisor_rtx5070_350bt.sh \
   --poll-seconds 60 \
   --batch-size 12 \
   --target-effective-batch 24 \
+  --min-unique-input-files 510 \
   --min-batch-size 6 \
   --max-batch-size 20 \
   --batch-step 2 \
@@ -134,6 +139,8 @@ bash scripts/train_supervisor_rtx5070_350bt.sh \
 This runs training in chunks and resumes from `last.pt`; each chunk restart re-reads
 all manifests under `data/shards_global/fineweb-global-bpe-v1` so newly added shard
 batches are picked up without manual intervention.
+Use `--min-unique-input-files <N>` to avoid starting training before enough parquet
+coverage is represented in shard manifests.
 Resume guardrail now validates `last.pt`/`ckpt_step_*.pt` for resumability and
 quarantines invalid files before fallback to the newest valid checkpoint.
 Use `--no-train-fail-on-eval-regression` if you want chunk training to continue and

@@ -15,6 +15,7 @@ STATE_DIR="artifacts/reports/train_supervisor_350bt"
 POLL_SECONDS=120
 STEP_CHUNK=2000
 MIN_MANIFESTS=1
+MIN_UNIQUE_INPUT_FILES=0
 MAX_FAILURE_STREAK=0  # 0 = unlimited retries
 
 DEVICE="cuda"
@@ -97,6 +98,7 @@ Core options:
   --poll-seconds N             Sleep between checks/restarts (default: 120)
   --step-chunk N               Steps per training cycle before restart (default: 2000)
   --min-manifests N            Wait until at least N manifests exist (default: 1)
+  --min-unique-input-files N   Wait until at least N unique manifest input files exist (default: 0)
   --max-failure-streak N       Stop after N consecutive train failures (0 = never)
   --no-dedupe-overlap-manifests
                                Disable manifest overlap dedupe before each train chunk
@@ -196,6 +198,7 @@ while [[ $# -gt 0 ]]; do
     --poll-seconds) POLL_SECONDS="$2"; shift 2 ;;
     --step-chunk) STEP_CHUNK="$2"; shift 2 ;;
     --min-manifests) MIN_MANIFESTS="$2"; shift 2 ;;
+    --min-unique-input-files) MIN_UNIQUE_INPUT_FILES="$2"; shift 2 ;;
     --max-failure-streak) MAX_FAILURE_STREAK="$2"; shift 2 ;;
     --no-dedupe-overlap-manifests) DEDUPE_OVERLAP_MANIFESTS=0; shift ;;
     --dedupe-keep) DEDUPE_KEEP="$2"; shift 2 ;;
@@ -280,6 +283,14 @@ if [[ ! -d "$SHARDS_PATH" ]]; then
 fi
 if [[ "$STEP_CHUNK" -le 0 ]]; then
   echo "error: step-chunk must be > 0" >&2
+  exit 1
+fi
+if ! [[ "$MIN_MANIFESTS" =~ ^[0-9]+$ ]] || ! [[ "$MIN_UNIQUE_INPUT_FILES" =~ ^[0-9]+$ ]]; then
+  echo "error: min-manifests and min-unique-input-files must be integers >= 0" >&2
+  exit 1
+fi
+if [[ "$MIN_MANIFESTS" -lt 0 || "$MIN_UNIQUE_INPUT_FILES" -lt 0 ]]; then
+  echo "error: min-manifests and min-unique-input-files must be >= 0" >&2
   exit 1
 fi
 if [[ "$POLL_SECONDS" -le 0 ]]; then
@@ -436,6 +447,41 @@ log_has_resume_checkpoint_error() {
 
 manifest_count() {
   find "$SHARDS_PATH" -name manifest.json 2>/dev/null | wc -l | tr -d ' '
+}
+
+manifest_coverage_counts() {
+  "$PYTHON_BIN" - <<'PY' "$SHARDS_PATH"
+import json
+import sys
+from pathlib import Path
+
+root = Path(sys.argv[1])
+file_to_manifests: dict[str, set[str]] = {}
+manifest_sets: list[set[str]] = []
+
+for manifest_path in sorted(root.rglob("manifest.json")):
+    try:
+        payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except Exception:
+        continue
+    raw = payload.get("input_files", [])
+    if not isinstance(raw, list):
+        continue
+    names = {Path(str(item)).name for item in raw if str(item).strip()}
+    if not names:
+        continue
+    manifest_sets.append(names)
+    mref = str(manifest_path)
+    for name in names:
+        refs = file_to_manifests.setdefault(name, set())
+        refs.add(mref)
+
+overlap_inputs = sum(1 for refs in file_to_manifests.values() if len(refs) > 1)
+overlap_manifests = sum(
+    1 for names in manifest_sets if any(len(file_to_manifests.get(name, ())) > 1 for name in names)
+)
+print(len(file_to_manifests), overlap_inputs, overlap_manifests)
+PY
 }
 
 run_manifest_dedupe() {
@@ -883,6 +929,12 @@ while true; do
     sleep "$POLL_SECONDS"
     continue
   fi
+  read -r unique_inputs overlap_inputs overlap_manifests < <(manifest_coverage_counts)
+  if [[ "$MIN_UNIQUE_INPUT_FILES" -gt 0 && "$unique_inputs" -lt "$MIN_UNIQUE_INPUT_FILES" ]]; then
+    log "waiting_for_unique_inputs have=$unique_inputs need=$MIN_UNIQUE_INPUT_FILES overlap_inputs=$overlap_inputs overlap_manifests=$overlap_manifests sleep=${POLL_SECONDS}s"
+    sleep "$POLL_SECONDS"
+    continue
+  fi
 
   resume_ckpt="$(select_resume_checkpoint)"
   if [[ -n "$resume_ckpt" ]]; then
@@ -899,7 +951,7 @@ while true; do
     resume_args=(--resume-from "$resume_ckpt")
   fi
 
-  log "train_launch manifests=$mcount step_now=$step_now target_step=$target_step batch_size=$BATCH_SIZE grad_accum=$GRAD_ACCUM_STEPS resume=${resume_ckpt:-none} run_log=$run_log"
+  log "train_launch manifests=$mcount unique_inputs=$unique_inputs overlap_inputs=$overlap_inputs overlap_manifests=$overlap_manifests step_now=$step_now target_step=$target_step batch_size=$BATCH_SIZE grad_accum=$GRAD_ACCUM_STEPS resume=${resume_ckpt:-none} run_log=$run_log"
 
   train_gate_args=()
   if [[ "$TRAIN_FAIL_ON_EVAL_REGRESSION" -eq 1 ]]; then

@@ -18,6 +18,46 @@ except ModuleNotFoundError:
 
 
 class ScriptTests(unittest.TestCase):
+    def test_hf_download_watchdog_requires_completion_target(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            local_dir = root / "hf"
+            proc = subprocess.run(
+                [
+                    "bash",
+                    "scripts/hf_download_watchdog.sh",
+                    "--dataset",
+                    "HuggingFaceFW/fineweb",
+                    "--repo-type",
+                    "dataset",
+                    "--include",
+                    "sample/350BT/*.parquet",
+                    "--local-dir",
+                    str(local_dir),
+                    "--exit-on-complete",
+                ],
+                cwd=Path(__file__).resolve().parents[1],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(proc.returncode, 2)
+            self.assertIn(
+                "--exit-on-complete requires --expected-parquet-files and/or --expected-bytes",
+                proc.stderr,
+            )
+
+    def test_train_supervisor_help_lists_unique_input_gate(self) -> None:
+        proc = subprocess.run(
+            ["bash", "scripts/train_supervisor_rtx5070_350bt.sh", "--help"],
+            cwd=Path(__file__).resolve().parents[1],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(proc.returncode, 0, msg=proc.stderr)
+        self.assertIn("--min-unique-input-files", proc.stdout)
+
     def test_render_eval_trend_dashboard(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

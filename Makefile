@@ -114,7 +114,7 @@ train-350bt-ctx1024:
 
 train-supervisor-350bt:
 	@echo "Usage:"
-	@echo "  bash scripts/train_supervisor_rtx5070_350bt.sh --step-chunk 2000 --poll-seconds 60 --batch-size 12 --target-effective-batch 24 --min-batch-size 6 --max-batch-size 20 --batch-step 2 --checkpoint-keep-last 6 --checkpoint-keep-every 10000 --ema-decay 0.999 --eval-suite configs/eval/standard_prompt_suite_v3.json --generation-suite configs/eval/generation_smoke_suite_v1.json --generation-every-chunks 1 --no-train-fail-on-eval-regression"
+	@echo "  bash scripts/train_supervisor_rtx5070_350bt.sh --step-chunk 2000 --poll-seconds 60 --batch-size 12 --target-effective-batch 24 --min-unique-input-files 510 --min-batch-size 6 --max-batch-size 20 --batch-step 2 --checkpoint-keep-last 6 --checkpoint-keep-every 10000 --ema-decay 0.999 --eval-suite configs/eval/standard_prompt_suite_v3.json --generation-suite configs/eval/generation_smoke_suite_v1.json --generation-every-chunks 1 --no-train-fail-on-eval-regression"
 
 pipeline-eta:
 	@echo "Usage:"
@@ -175,7 +175,7 @@ hf-download-resumable:
 
 hf-download-watchdog:
 	@echo "Run watchdog wrapper that restarts stalled or exited HF download worker."
-	@echo "Usage: HF_TOKEN=hf_xxx bash scripts/hf_download_watchdog.sh --dataset HuggingFaceFW/fineweb --repo-type dataset --include 'sample/350BT/*.parquet' --local-dir /mnt/ceph/llm/data/fineweb/sample-350BT --max-workers 4 --enable-hf-transfer --skip-dry-run --attempt-timeout-seconds 5400 --stall-seconds 1200 --worker-log-file artifacts/reports/fineweb_350bt_download_resumable.log --watchdog-log-file artifacts/reports/hf_download_watchdog.log"
+	@echo "Usage: HF_TOKEN=hf_xxx bash scripts/hf_download_watchdog.sh --dataset HuggingFaceFW/fineweb --repo-type dataset --include 'sample/350BT/*.parquet' --local-dir /mnt/ceph/llm/data/fineweb/sample-350BT --max-workers 4 --enable-hf-transfer --skip-dry-run --attempt-timeout-seconds 5400 --stall-seconds 1200 --exit-on-complete --expected-parquet-files 510 --expected-bytes 1061360917731 --worker-log-file artifacts/reports/fineweb_350bt_download_resumable.log --watchdog-log-file artifacts/reports/hf_download_watchdog.log"
 
 hf-prepare-publish:
 	@echo "Prepare release bundle and optionally push to Hugging Face model repo."

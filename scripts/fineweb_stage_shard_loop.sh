@@ -17,7 +17,7 @@ TOKENIZER_THREADS=10
 SHARD_JOBS=1
 SHARD_RETRY_ON_OOM=1
 SHARD_MIN_BATCH_SIZE=512
-SHARD_SIZE_TOKENS=5000000
+SHARD_SIZE_TOKENS=20000000
 VAL_RATIO=0.01
 SEED=42
 MIN_CHARS=80
@@ -44,6 +44,8 @@ AUTO_TUNE_HIGH_LOAD_PCT=90
 SLEEP_SECONDS=120
 ITERATIONS=0
 SYNC_TO_WARM=1
+SYNC_BACKGROUND=0
+SYNC_MAX_INFLIGHT=2
 PURGE_HOT=1
 DRY_RUN=0
 CPU_CORES=1
@@ -115,6 +117,8 @@ Options:
   --sleep-seconds N           Idle poll sleep (default: 120)
   --iterations N              Number of successful batches (default: 0 infinite)
   --no-sync-to-warm           Skip syncing shard outputs to warm storage
+  --sync-background           Run warm sync in background (non-blocking per batch)
+  --sync-max-inflight N       Max in-flight background warm sync jobs (default: 2)
   --no-purge-hot              Keep processed parquet files on hot storage
   --dry-run                   Print actions without executing shard build/deletes
   -h, --help                  Show help
@@ -287,6 +291,14 @@ while [[ $# -gt 0 ]]; do
       SYNC_TO_WARM=0
       shift
       ;;
+    --sync-background)
+      SYNC_BACKGROUND=1
+      shift
+      ;;
+    --sync-max-inflight)
+      SYNC_MAX_INFLIGHT="$2"
+      shift 2
+      ;;
     --no-purge-hot)
       PURGE_HOT=0
       shift
@@ -343,6 +355,7 @@ require_nonneg_int "max-chars" "$MAX_CHARS"
 require_nonneg_int "max-rows-per-file" "$MAX_ROWS_PER_FILE"
 require_positive_int "sleep-seconds" "$SLEEP_SECONDS"
 require_nonneg_int "iterations" "$ITERATIONS"
+require_positive_int "sync-max-inflight" "$SYNC_MAX_INFLIGHT"
 
 require_positive_int "auto-tune-min-shard-jobs" "$AUTO_TUNE_MIN_SHARD_JOBS"
 require_positive_int "auto-tune-max-shard-jobs" "$AUTO_TUNE_MAX_SHARD_JOBS"
@@ -430,6 +443,7 @@ fi
 warm_shards_root="$WARM_ROOT/shards_global/$(basename "$SHARDS_ROOT")"
 warm_tokenizer_dir="$WARM_ROOT/tokenizer"
 warm_reports_dir="$WARM_ROOT/reports/fineweb_stage_shard_loop"
+declare -a SYNC_PIDS=()
 
 retune_tokenizer_threads() {
   local jobs="$1"
@@ -822,6 +836,72 @@ sync_batch_to_warm() {
   )
 }
 
+prune_sync_jobs() {
+  local -a active=()
+  local pid
+  for pid in "${SYNC_PIDS[@]}"; do
+    if kill -0 "$pid" 2>/dev/null; then
+      active+=("$pid")
+      continue
+    fi
+    if ! wait "$pid"; then
+      log "batch_sync_failed pid=$pid"
+    fi
+  done
+  SYNC_PIDS=("${active[@]}")
+}
+
+wait_for_sync_slot() {
+  prune_sync_jobs
+  while [[ "${#SYNC_PIDS[@]}" -ge "$SYNC_MAX_INFLIGHT" ]]; do
+    local wait_pid="${SYNC_PIDS[0]}"
+    if ! wait "$wait_pid"; then
+      log "batch_sync_failed pid=$wait_pid"
+    fi
+    prune_sync_jobs
+  done
+}
+
+queue_sync_batch_to_warm() {
+  local job_id="$1"
+  local batch_dir="$2"
+  local report_path="$3"
+
+  if [[ "$SYNC_TO_WARM" -ne 1 ]]; then
+    return
+  fi
+
+  if [[ "$SYNC_BACKGROUND" -eq 1 ]]; then
+    wait_for_sync_slot
+    (
+      exec 9>&-
+      sync_batch_to_warm "$batch_dir" "$report_path"
+    ) >> "$LOG_FILE" 2>&1 &
+    local sync_pid="$!"
+    SYNC_PIDS+=("$sync_pid")
+    log "batch_sync_queued id=$job_id pid=$sync_pid inflight=${#SYNC_PIDS[@]} max_inflight=$SYNC_MAX_INFLIGHT"
+    return
+  fi
+
+  sync_batch_to_warm "$batch_dir" "$report_path"
+  log "batch_synced id=$job_id warm_shards_root=$warm_shards_root mode=blocking"
+}
+
+drain_sync_jobs() {
+  if [[ "${#SYNC_PIDS[@]}" -eq 0 ]]; then
+    return
+  fi
+  log "batch_sync_drain_start inflight=${#SYNC_PIDS[@]}"
+  local pid
+  for pid in "${SYNC_PIDS[@]}"; do
+    if ! wait "$pid"; then
+      log "batch_sync_failed pid=$pid"
+    fi
+  done
+  SYNC_PIDS=()
+  log "batch_sync_drain_done"
+}
+
 run_shard_job() {
   local job_id="$1"
   local files_list="$2"
@@ -912,10 +992,6 @@ run_shard_job() {
       --path "$output_dir" | tee -a "$LOG_FILE"
   )
 
-  if [[ "$SYNC_TO_WARM" -eq 1 ]]; then
-    sync_batch_to_warm "$output_dir" "$report_json"
-    log "batch_synced id=$job_id warm_shards_root=$warm_shards_root"
-  fi
 }
 
 process_batch() {
@@ -1014,6 +1090,14 @@ process_batch() {
   fi
   validate_batch_guardrails "$batch_id" guard_job_ids guard_job_lists
 
+  local idx
+  for ((idx = 0; idx < ${#guard_job_ids[@]}; idx++)); do
+    local jid="${guard_job_ids[$idx]}"
+    local output_dir="$SHARDS_ROOT/$jid"
+    local report_json="$STATE_DIR/${jid}.report.json"
+    queue_sync_batch_to_warm "$jid" "$output_dir" "$report_json"
+  done
+
   for name in "${files[@]}"; do
     printf '%s\n' "$name" >> "$PROCESSED_FILE"
   done
@@ -1034,7 +1118,7 @@ process_batch() {
 }
 
 log "loop_start warm_parquet_dir=$WARM_PARQUET_DIR hot_parquet_dir=$HOT_PARQUET_DIR"
-log "loop_config shards_root=$SHARDS_ROOT tokenizer_path=$TOKENIZER_PATH iterations=$ITERATIONS hot_queue_min_files=$HOT_QUEUE_MIN_FILES stage_copy_jobs=$STAGE_COPY_JOBS stage_min_free_gib=$STAGE_MIN_FREE_GIB shard_jobs=$SHARD_JOBS tokenizer_threads=$TOKENIZER_THREADS auto_tune_shard_jobs=$AUTO_TUNE_SHARD_JOBS auto_tune_bounds=${AUTO_TUNE_MIN_SHARD_JOBS}-${AUTO_TUNE_MAX_SHARD_JOBS} auto_tune_load_pct=${AUTO_TUNE_LOW_LOAD_PCT}-${AUTO_TUNE_HIGH_LOAD_PCT} auto_tune_core_budget=$AUTO_TUNE_CORE_BUDGET bad_parquet_file=$BAD_PARQUET_FILE quarantine_dir=$QUARANTINE_DIR"
+log "loop_config shards_root=$SHARDS_ROOT tokenizer_path=$TOKENIZER_PATH iterations=$ITERATIONS hot_queue_min_files=$HOT_QUEUE_MIN_FILES stage_copy_jobs=$STAGE_COPY_JOBS stage_min_free_gib=$STAGE_MIN_FREE_GIB shard_jobs=$SHARD_JOBS tokenizer_threads=$TOKENIZER_THREADS shard_size_tokens=$SHARD_SIZE_TOKENS sync_to_warm=$SYNC_TO_WARM sync_background=$SYNC_BACKGROUND sync_max_inflight=$SYNC_MAX_INFLIGHT auto_tune_shard_jobs=$AUTO_TUNE_SHARD_JOBS auto_tune_bounds=${AUTO_TUNE_MIN_SHARD_JOBS}-${AUTO_TUNE_MAX_SHARD_JOBS} auto_tune_load_pct=${AUTO_TUNE_LOW_LOAD_PCT}-${AUTO_TUNE_HIGH_LOAD_PCT} auto_tune_core_budget=$AUTO_TUNE_CORE_BUDGET bad_parquet_file=$BAD_PARQUET_FILE quarantine_dir=$QUARANTINE_DIR"
 reconcile_bad_parquet_from_warm
 bootstrap_processed_from_manifests
 refresh_stage_skip_list
@@ -1083,6 +1167,7 @@ while true; do
 
   if [[ "$ITERATIONS" -gt 0 && "$completed_batches" -ge "$ITERATIONS" ]]; then
     log "loop_done reason=iterations_reached completed_batches=$completed_batches"
+    drain_sync_jobs
     break
   fi
 done

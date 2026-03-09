@@ -1,4 +1,5 @@
 import json
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -236,6 +237,59 @@ class ScriptTests(unittest.TestCase):
             )
             self.assertEqual(proc.returncode, 0, msg=proc.stderr)
             self.assertIn("Supervisor: gate=waiting_train_tokens 123456/999999", proc.stdout)
+
+    @unittest.skipIf(shutil.which("timeout") is None, "timeout is required")
+    def test_train_supervisor_waits_on_train_token_gate(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            shards = root / "shards"
+            batch = shards / "batch_0001"
+            output_dir = root / "out"
+            state_dir = root / "state"
+            batch.mkdir(parents=True, exist_ok=True)
+
+            (batch / "manifest.json").write_text(
+                json.dumps(
+                    {
+                        "input_files": ["000_00001.parquet"],
+                        "train": {"total_tokens": 123, "shards": []},
+                        "val": {"total_tokens": 0, "shards": []},
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            proc = subprocess.run(
+                [
+                    "timeout",
+                    "3",
+                    "bash",
+                    "scripts/train_supervisor_rtx5070_350bt.sh",
+                    "--shards-path",
+                    str(shards),
+                    "--output-dir",
+                    str(output_dir),
+                    "--state-dir",
+                    str(state_dir),
+                    "--poll-seconds",
+                    "1",
+                    "--min-manifests",
+                    "1",
+                    "--min-unique-input-files",
+                    "0",
+                    "--min-train-tokens",
+                    "999",
+                    "--no-auto-tune",
+                    "--no-eval-after-chunk",
+                    "--no-generation-gate",
+                ],
+                cwd=Path(__file__).resolve().parents[1],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(proc.returncode, 124, msg=proc.stderr)
+            self.assertIn("waiting_for_train_tokens", proc.stdout)
 
 
 @unittest.skipIf(torch is None, "torch is not installed")

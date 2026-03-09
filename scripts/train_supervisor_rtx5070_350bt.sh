@@ -472,6 +472,7 @@ from pathlib import Path
 root = Path(sys.argv[1])
 file_to_manifests: dict[str, set[str]] = {}
 manifest_sets: list[set[str]] = []
+train_tokens = 0
 
 for manifest_path in sorted(root.rglob("manifest.json")):
     try:

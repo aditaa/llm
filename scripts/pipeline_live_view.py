@@ -485,6 +485,81 @@ def _task_status(pattern: str) -> tuple[int, list[str]]:
     return len(root_pids), rows
 
 
+def _stop_reason(
+    task_name: str,
+    *,
+    coverage_complete: bool,
+    warm_parquet: int,
+    expected_parquet_files: int,
+    hot_parquet: int,
+    train_step: int,
+    train_target_step: int | None,
+    supervisor_gate: str,
+    task_counts: dict[str, int],
+) -> str:
+    if task_name == "hf-watchdog":
+        if warm_parquet >= expected_parquet_files:
+            return "download complete"
+        return "not started"
+    if task_name == "download-worker":
+        if warm_parquet >= expected_parquet_files:
+            return "download complete"
+        if task_counts.get("hf-watchdog", 0) > 0:
+            return "watchdog-managed; worker idle/restarting"
+        return "not started"
+    if task_name == "hf-download":
+        if warm_parquet >= expected_parquet_files:
+            return "download complete"
+        if task_counts.get("download-worker", 0) > 0 or task_counts.get("hf-watchdog", 0) > 0:
+            return "managed by resumable worker/watchdog"
+        return "not started"
+    if task_name == "prefetch-worker":
+        if coverage_complete:
+            return "coverage complete"
+        return "not started"
+    if task_name == "stage-watchdog":
+        if coverage_complete:
+            return "coverage complete"
+        if task_counts.get("stage-loop", 0) > 0:
+            return "stage-loop running directly (no watchdog)"
+        return "not started"
+    if task_name == "stage-loop":
+        if coverage_complete:
+            return "coverage complete"
+        if task_counts.get("stage-watchdog", 0) > 0:
+            return "waiting for watchdog restart"
+        return "not started"
+    if task_name == "shard-builder":
+        if coverage_complete:
+            return "all expected parquet processed"
+        if task_counts.get("stage-loop", 0) > 0:
+            if hot_parquet <= 0:
+                return "waiting for staged hot parquet"
+            return "idle between shard batches"
+        return "not started"
+    if task_name == "train-supervisor":
+        if train_target_step is not None and train_step >= train_target_step:
+            return "target step reached"
+        if supervisor_gate != "unknown":
+            return f"blocked: {supervisor_gate}"
+        return "not started"
+    if task_name == "trainer":
+        if train_target_step is not None and train_step >= train_target_step:
+            return "target step reached"
+        if task_counts.get("train-supervisor", 0) > 0:
+            if supervisor_gate.startswith("waiting_"):
+                return f"waiting on supervisor gate ({supervisor_gate})"
+            return "idle between chunks/eval"
+        return "no active supervisor"
+    if task_name == "eval-runner":
+        return "runs only during eval windows"
+    if task_name == "generation-gate":
+        return "runs only on scheduled gate interval"
+    if task_name == "zim-offload":
+        return "offload worker not started"
+    return "not started"
+
+
 def _top_cpu_processes(limit: int) -> list[str]:
     rc, text = _run_capture(
         ["ps", "-eo", "pid=,pcpu=,pmem=,etime=,comm=", "--sort=-pcpu"],
@@ -613,14 +688,37 @@ def _render(
         ("generation-gate", r"eval_checkpoint_prompts\.py .*generation_smoke_suite_v1\.json"),
         ("zim-offload", r"zim_offload_worker\.sh"),
     ]
+
+    coverage_complete = (
+        warm_parquet >= int(args.expected_parquet_files)
+        and processed_parquet >= int(args.expected_parquet_files)
+        and manifest_unique_inputs >= int(args.expected_parquet_files)
+    )
+
     task_lines: list[str] = []
     task_counts: dict[str, int] = {}
+    task_rows: dict[str, list[str]] = {}
     for name, pattern in tasks:
         count, rows = _task_status(pattern)
         task_counts[name] = count
+        task_rows[name] = rows
+    for name, _ in tasks:
+        count = task_counts.get(name, 0)
         if count <= 0:
-            task_lines.append(f"{name:16} STOP")
+            reason = _stop_reason(
+                name,
+                coverage_complete=coverage_complete,
+                warm_parquet=warm_parquet,
+                expected_parquet_files=int(args.expected_parquet_files),
+                hot_parquet=hot_parquet,
+                train_step=train_step,
+                train_target_step=train_target_step,
+                supervisor_gate=supervisor_gate,
+                task_counts=task_counts,
+            )
+            task_lines.append(f"{name:16} STOP | {reason}")
             continue
+        rows = task_rows.get(name, [])
         summary = rows[0] if rows else "running"
         task_lines.append(f"{name:16} RUN x{count} | {summary}")
 
@@ -632,12 +730,6 @@ def _render(
         rem_steps = None
     else:
         rem_steps = max(0, int(train_target_step) - train_step)
-    coverage_complete = (
-        warm_parquet >= int(args.expected_parquet_files)
-        and processed_parquet >= int(args.expected_parquet_files)
-        and manifest_unique_inputs >= int(args.expected_parquet_files)
-    )
-
     rate_mib = (download_bps / 1024 / 1024) if download_bps is not None else None
     cpu_text = f"{cpu_usage:.1f}%" if cpu_usage is not None else "warming"
     mem_pct = (100.0 * mem_used / mem_total) if mem_total > 0 else 0.0
@@ -706,8 +798,9 @@ def _render(
         f"eta={_eta(rem_manifest_unique, coverage_pps)} "
         f"complete={int(coverage_complete)}"
     )
+    train_target_text = str(train_target_step) if train_target_step is not None else "?"
     lines.append(
-        f"  Training: step={train_step}/{train_target_step if train_target_step is not None else '?'} "
+        f"  Training: step={train_step}/{train_target_text} "
         f"rate={f'{train_sps:.3f} step/s' if train_sps is not None else 'n/a'} "
         f"eta={_eta(rem_steps, train_sps)}"
     )

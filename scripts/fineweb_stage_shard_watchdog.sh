@@ -95,7 +95,12 @@ progress_snapshot() {
 WORKER_PID=""
 
 start_worker() {
-  bash scripts/fineweb_stage_shard_loop.sh $WORKER_ARGS >> "$WATCHDOG_LOG_FILE" 2>&1 &
+  # Launch worker in its own session so stop_worker can terminate the full process group.
+  if command -v setsid >/dev/null 2>&1; then
+    setsid bash scripts/fineweb_stage_shard_loop.sh $WORKER_ARGS >> "$WATCHDOG_LOG_FILE" 2>&1 &
+  else
+    bash scripts/fineweb_stage_shard_loop.sh $WORKER_ARGS >> "$WATCHDOG_LOG_FILE" 2>&1 &
+  fi
   WORKER_PID="$!"
   log "worker_started pid=$WORKER_PID args=\"$WORKER_ARGS\""
 }
@@ -110,10 +115,10 @@ stop_worker() {
     return
   fi
   log "worker_stop pid=$WORKER_PID reason=$reason"
-  kill "$WORKER_PID" 2>/dev/null || true
+  kill -TERM "-$WORKER_PID" 2>/dev/null || kill "$WORKER_PID" 2>/dev/null || true
   sleep 5
   if kill -0 "$WORKER_PID" 2>/dev/null; then
-    kill -9 "$WORKER_PID" 2>/dev/null || true
+    kill -KILL "-$WORKER_PID" 2>/dev/null || kill -9 "$WORKER_PID" 2>/dev/null || true
   fi
   wait "$WORKER_PID" 2>/dev/null || true
   WORKER_PID=""

@@ -125,6 +125,7 @@ Keep PR scope narrow; split refactors and features into separate PRs.
 - Use `stage_fineweb_from_warm.sh --skip-list <bad_file_list>` to avoid re-staging known-bad parquet basenames
 - For long-running 350BT ingestion on limited hot disk, use `scripts/fineweb_stage_shard_loop.sh` for staged processing and automatic hot-space reclaim
 - For unattended long 350BT ingestion, run `scripts/fineweb_stage_shard_watchdog.sh` to auto-restart stage-loop worker exits/stalls
+- For long shard batches, use a higher stage-watchdog stall timeout (for example `--stall-seconds 5400`) to avoid false restarts mid-batch
 - Use `fineweb_stage_shard_loop.sh --hot-queue-min-files <N>` to keep a bounded hot parquet queue and reduce sharder copy stalls
 - `fineweb_stage_shard_loop.sh` now preflights selected parquet files and quarantines failures into `artifacts/reports/fineweb_stage_shard_loop/quarantine_bad_parquet/`
 - Known-bad parquet basenames are tracked in `artifacts/reports/fineweb_stage_shard_loop/bad_parquet_files.txt` and skipped in future stage cycles

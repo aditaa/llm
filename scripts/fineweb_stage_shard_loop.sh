@@ -507,22 +507,30 @@ stage_once() {
 
   log "stage_start max_files=$stage_files max_gib=$STAGE_MAX_GIB hot_count=$hot_count eligible_hot_count=$eligible_hot_count queue_min=$HOT_QUEUE_MIN_FILES"
   if [[ "$DRY_RUN" -eq 1 ]]; then
-    bash scripts/stage_fineweb_from_warm.sh \
-      --src-dir "$WARM_PARQUET_DIR" \
-      --dest-dir "$HOT_PARQUET_DIR" \
-      --max-files "$stage_files" \
-      --max-gib "$STAGE_MAX_GIB" \
-      --min-age-seconds "$STAGE_MIN_AGE_SECONDS" \
-      --skip-list "$STAGE_SKIP_FILE" \
-      --dry-run | tee -a "$LOG_FILE"
+    (
+      # Prevent staging subprocess from inheriting the loop lock FD.
+      exec 9>&-
+      bash scripts/stage_fineweb_from_warm.sh \
+        --src-dir "$WARM_PARQUET_DIR" \
+        --dest-dir "$HOT_PARQUET_DIR" \
+        --max-files "$stage_files" \
+        --max-gib "$STAGE_MAX_GIB" \
+        --min-age-seconds "$STAGE_MIN_AGE_SECONDS" \
+        --skip-list "$STAGE_SKIP_FILE" \
+        --dry-run
+    ) | tee -a "$LOG_FILE"
   else
-    bash scripts/stage_fineweb_from_warm.sh \
-      --src-dir "$WARM_PARQUET_DIR" \
-      --dest-dir "$HOT_PARQUET_DIR" \
-      --max-files "$stage_files" \
-      --max-gib "$STAGE_MAX_GIB" \
-      --min-age-seconds "$STAGE_MIN_AGE_SECONDS" \
-      --skip-list "$STAGE_SKIP_FILE" | tee -a "$LOG_FILE"
+    (
+      # Prevent staging subprocess from inheriting the loop lock FD.
+      exec 9>&-
+      bash scripts/stage_fineweb_from_warm.sh \
+        --src-dir "$WARM_PARQUET_DIR" \
+        --dest-dir "$HOT_PARQUET_DIR" \
+        --max-files "$stage_files" \
+        --max-gib "$STAGE_MAX_GIB" \
+        --min-age-seconds "$STAGE_MIN_AGE_SECONDS" \
+        --skip-list "$STAGE_SKIP_FILE"
+    ) | tee -a "$LOG_FILE"
   fi
   log "stage_done"
 }
@@ -549,12 +557,24 @@ sync_batch_to_warm() {
   local batch_dir="$1"
   local report_path="$2"
   mkdir -p "$warm_shards_root" "$warm_tokenizer_dir" "$warm_reports_dir"
-  rsync -ah "$batch_dir/" "$warm_shards_root/$(basename "$batch_dir")/"
+  (
+    exec 9>&-
+    rsync -ah "$batch_dir/" "$warm_shards_root/$(basename "$batch_dir")/"
+  )
   if [[ -f "$TOKENIZER_PATH" ]]; then
-    rsync -ah "$TOKENIZER_PATH" "$warm_tokenizer_dir/"
+    (
+      exec 9>&-
+      rsync -ah "$TOKENIZER_PATH" "$warm_tokenizer_dir/"
+    )
   fi
-  rsync -ah "$report_path" "$warm_reports_dir/"
-  rsync -ah "$LOG_FILE" "$warm_reports_dir/"
+  (
+    exec 9>&-
+    rsync -ah "$report_path" "$warm_reports_dir/"
+  )
+  (
+    exec 9>&-
+    rsync -ah "$LOG_FILE" "$warm_reports_dir/"
+  )
 }
 
 run_shard_job() {
@@ -579,21 +599,25 @@ run_shard_job() {
     log "shard_build_attempt id=$job_id attempt=$shard_attempt batch_size=$shard_batch_size encode_batch_size=$ENCODE_BATCH_SIZE tokenizer_threads=$TOKENIZER_THREADS"
 
     set +e
-    TOKENIZERS_PARALLELISM=true RAYON_NUM_THREADS="$TOKENIZER_THREADS" PYTHONPATH=src .venv/bin/python scripts/fineweb_parquet_to_shards.py \
-      --input-dir "$HOT_PARQUET_DIR" \
-      --files-list "$files_list" \
-      --output-dir "$output_dir" \
-      "$tok_arg_flag" "$tok_arg_path" \
-      --field "$FIELD" \
-      --batch-size "$shard_batch_size" \
-      --encode-batch-size "$ENCODE_BATCH_SIZE" \
-      --shard-size-tokens "$SHARD_SIZE_TOKENS" \
-      --val-ratio "$VAL_RATIO" \
-      --seed "$SEED" \
-      --min-chars "$MIN_CHARS" \
-      --max-chars "$MAX_CHARS" \
-      --max-rows-per-file "$MAX_ROWS_PER_FILE" \
-      --report-output "$report_json" 2>&1 | tee -a "$LOG_FILE" "$shard_attempt_log"
+    (
+      # Prevent shard subprocesses from inheriting the loop lock FD.
+      exec 9>&-
+      TOKENIZERS_PARALLELISM=true RAYON_NUM_THREADS="$TOKENIZER_THREADS" PYTHONPATH=src .venv/bin/python scripts/fineweb_parquet_to_shards.py \
+        --input-dir "$HOT_PARQUET_DIR" \
+        --files-list "$files_list" \
+        --output-dir "$output_dir" \
+        "$tok_arg_flag" "$tok_arg_path" \
+        --field "$FIELD" \
+        --batch-size "$shard_batch_size" \
+        --encode-batch-size "$ENCODE_BATCH_SIZE" \
+        --shard-size-tokens "$SHARD_SIZE_TOKENS" \
+        --val-ratio "$VAL_RATIO" \
+        --seed "$SEED" \
+        --min-chars "$MIN_CHARS" \
+        --max-chars "$MAX_CHARS" \
+        --max-rows-per-file "$MAX_ROWS_PER_FILE" \
+        --report-output "$report_json"
+    ) 2>&1 | tee -a "$LOG_FILE" "$shard_attempt_log"
     shard_rc=${PIPESTATUS[0]}
     set -e
 
@@ -631,8 +655,12 @@ run_shard_job() {
     shard_attempt=$((shard_attempt + 1))
   done
 
-  PYTHONPATH=src .venv/bin/python -m llm.cli verify-shards \
-    --path "$output_dir" | tee -a "$LOG_FILE"
+  (
+    # Prevent verify subprocess from inheriting the loop lock FD.
+    exec 9>&-
+    PYTHONPATH=src .venv/bin/python -m llm.cli verify-shards \
+      --path "$output_dir"
+  ) | tee -a "$LOG_FILE"
 
   if [[ "$SYNC_TO_WARM" -eq 1 ]]; then
     sync_batch_to_warm "$output_dir" "$report_json"

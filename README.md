@@ -244,9 +244,9 @@ to avoid restaging files previously flagged as invalid.
 3ac. Run rolling warm->hot staging + sharding loop (recommended for 350BT on limited hot disk):
 ```bash
 bash scripts/fineweb_stage_shard_loop.sh \
-  --hot-queue-min-files 8 \
-  --stage-max-files 10 \
-  --process-max-files 10 \
+  --hot-queue-min-files 18 \
+  --stage-max-files 12 \
+  --process-max-files 12 \
   --shard-jobs 2 \
   --tokenizer-threads 10 \
   --encode-batch-size 1024 \
@@ -273,9 +273,9 @@ current high-throughput profile.
 3ad. Optional watchdog for stage/shard loop auto-restart on exit/stall:
 ```bash
 bash scripts/fineweb_stage_shard_watchdog.sh \
-  --worker-args "--hot-queue-min-files 12 --stage-max-files 10 --process-max-files 10 --shard-jobs 1 --tokenizer-threads 10 --encode-batch-size 1024 --sleep-seconds 60 --shard-min-batch-size 512" \
+  --worker-args "--hot-queue-min-files 18 --stage-max-files 12 --process-max-files 12 --shard-jobs 2 --tokenizer-threads 10 --encode-batch-size 1024 --sleep-seconds 60 --shard-min-batch-size 512" \
   --check-interval-seconds 120 \
-  --stall-seconds 1800
+  --stall-seconds 5400
 ```
 
 3ad. Build tokenizer + token shards directly from FineWeb parquet:

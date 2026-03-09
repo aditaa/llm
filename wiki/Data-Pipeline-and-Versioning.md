@@ -69,8 +69,12 @@ bash scripts/fineweb_stage_shard_loop.sh \
   --hot-queue-min-files 18 \
   --stage-max-files 12 \
   --stage-copy-jobs 2 \
+  --stage-min-free-gib 80 \
   --process-max-files 12 \
   --shard-jobs 2 \
+  --auto-tune-shard-jobs \
+  --auto-tune-min-shard-jobs 1 \
+  --auto-tune-max-shard-jobs 4 \
   --tokenizer-threads 10 \
   --encode-batch-size 1024 \
   --sleep-seconds 60 \
@@ -86,6 +90,8 @@ This loop:
 - preflights selected parquet files (row groups/rows/required `text` field)
 - quarantines bad hot parquet files and tracks them in `artifacts/reports/fineweb_stage_shard_loop/bad_parquet_files.txt`
 - marks files processed only after post-batch guardrails pass (valid report+manifest, non-empty shard files)
+- enforces a hot-disk free-space floor when `--stage-min-free-gib` is set
+- can auto-tune shard parallelism (`--auto-tune-shard-jobs`) using CPU load + per-batch runtime
 - on 20-core hosts, two shard jobs with tokenizer batch encoding is the current higher-throughput profile
 - reconciles bad parquet basenames against warm-source validity on startup, so transient hot-copy failures can be retried
 
@@ -128,6 +134,7 @@ bash scripts/fineweb_prefetch_hot_queue.sh \
 `*.parquet.incomplete` temp files and atomically renames on completion, so
 downstream preflight/sharding does not see partially written parquet data.
 Use `--copy-jobs <N>` on stage commands to parallelize warm->hot copies.
+Use `--min-free-gib <N>` on stage commands to stop staging before hot disk gets too full.
 
 Auto-resume trainer supervisor for growing shard sets:
 ```bash

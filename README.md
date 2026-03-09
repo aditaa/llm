@@ -240,6 +240,7 @@ bash scripts/stage_fineweb_from_warm.sh --max-files 4 --max-gib 8 --copy-jobs 2
 ```
 You can pass `--skip-list artifacts/reports/fineweb_stage_shard_loop/bad_parquet_files.txt`
 to avoid restaging files previously flagged as invalid.
+Use `--min-free-gib <N>` to keep a floor of free space on hot storage while staging.
 The staging script now copies into `*.parquet.incomplete` first and renames atomically,
 so sharding/preflight never reads partially written parquet files.
 
@@ -249,8 +250,12 @@ bash scripts/fineweb_stage_shard_loop.sh \
   --hot-queue-min-files 18 \
   --stage-max-files 12 \
   --stage-copy-jobs 2 \
+  --stage-min-free-gib 80 \
   --process-max-files 12 \
   --shard-jobs 2 \
+  --auto-tune-shard-jobs \
+  --auto-tune-min-shard-jobs 1 \
+  --auto-tune-max-shard-jobs 4 \
   --tokenizer-threads 10 \
   --encode-batch-size 1024 \
   --sleep-seconds 60 \
@@ -269,6 +274,8 @@ It also reconciles `bad_parquet_files.txt` against warm-source parquet validity 
 transient hot-copy failures do not permanently blacklist valid warm files.
 `--hot-queue-min-files` keeps a small parquet queue staged locally so shard building is less likely to idle on copy waits.
 `--stage-copy-jobs` controls warm->hot copy parallelism for staging throughput.
+`--stage-min-free-gib` prevents staging from filling hot disk below a safety floor.
+`--auto-tune-shard-jobs` adapts `--shard-jobs` (and matching tokenizer threads) from loadavg + batch runtime.
 If a shard build fails with OOM-like errors, the loop retries automatically with a smaller batch size.
 Batch guardrails now require valid report/manifest + non-empty shard outputs before files are marked
 processed or purged from hot storage.

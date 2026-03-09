@@ -125,6 +125,7 @@ Keep PR scope narrow; split refactors and features into separate PRs.
 - For parquet-based FineWeb workflows, use `scripts/stage_fineweb_from_warm.sh` to copy bounded warm chunks into hot storage
 - `stage_fineweb_from_warm.sh` writes to `*.parquet.incomplete` and atomically renames to `.parquet` after size validation
 - Use `stage_fineweb_from_warm.sh --copy-jobs <N>` to parallelize warm->hot staging copies
+- Use `stage_fineweb_from_warm.sh --min-free-gib <N>` to keep a hot-disk free-space floor during staging
 - Use `stage_fineweb_from_warm.sh --skip-list <bad_file_list>` to avoid re-staging known-bad parquet basenames
 - For long-running 350BT ingestion on limited hot disk, use `scripts/fineweb_stage_shard_loop.sh` for staged processing and automatic hot-space reclaim
 - For unattended long 350BT ingestion, run `scripts/fineweb_stage_shard_watchdog.sh` to auto-restart stage-loop worker exits/stalls
@@ -132,6 +133,8 @@ Keep PR scope narrow; split refactors and features into separate PRs.
 - `fineweb_stage_shard_watchdog.sh` enforces a singleton lock and stops worker process groups (not only the parent shell)
 - Use `fineweb_stage_shard_loop.sh --hot-queue-min-files <N>` to keep a bounded hot parquet queue and reduce sharder copy stalls
 - Use `fineweb_stage_shard_loop.sh --stage-copy-jobs <N>` to forward parallel staging copy workers into each stage cycle
+- Use `fineweb_stage_shard_loop.sh --stage-min-free-gib <N>` so staging never drives hot disk below a free-space guardrail
+- Use `fineweb_stage_shard_loop.sh --auto-tune-shard-jobs` to adapt shard parallelism and tokenizer threads from CPU load + batch runtime
 - `fineweb_stage_shard_loop.sh` now preflights selected parquet files and quarantines failures into `artifacts/reports/fineweb_stage_shard_loop/quarantine_bad_parquet/`
 - Known-bad parquet basenames are tracked in `artifacts/reports/fineweb_stage_shard_loop/bad_parquet_files.txt` and skipped in future stage cycles
 - On startup, `fineweb_stage_shard_loop.sh` reconciles bad parquet entries against warm-source validity to avoid permanent false-positive skips

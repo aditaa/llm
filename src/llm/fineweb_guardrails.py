@@ -23,6 +23,32 @@ def _load_expected_files(files_list: Path) -> list[str]:
     ]
 
 
+def _resolve_manifest_path(
+    *,
+    manifest_field: str,
+    report_path: Path,
+    output_dir: Path,
+) -> Path:
+    candidate = Path(manifest_field)
+    if candidate.is_absolute():
+        return candidate
+
+    candidates = [
+        output_dir / candidate,
+        report_path.parent / candidate,
+        Path.cwd() / candidate,
+    ]
+    seen: set[Path] = set()
+    for path in candidates:
+        resolved = path.resolve()
+        if resolved in seen:
+            continue
+        seen.add(resolved)
+        if resolved.exists():
+            return resolved
+    return (Path.cwd() / candidate).resolve()
+
+
 def validate_job_artifacts(
     *,
     job_id: str,
@@ -40,9 +66,11 @@ def validate_job_artifacts(
     manifest_field = report.get("manifest")
     if not manifest_field:
         raise ValueError(f"{job_id}: report missing manifest path")
-    manifest_path_from_report = Path(str(manifest_field))
-    if not manifest_path_from_report.is_absolute():
-        manifest_path_from_report = (output_dir / manifest_path_from_report).resolve()
+    manifest_path_from_report = _resolve_manifest_path(
+        manifest_field=str(manifest_field),
+        report_path=report_path,
+        output_dir=output_dir,
+    )
     if not manifest_path_from_report.exists():
         raise ValueError(f"{job_id}: manifest not found: {manifest_path_from_report}")
 
@@ -115,4 +143,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

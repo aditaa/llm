@@ -76,7 +76,41 @@ class FineWebGuardrailsTests(unittest.TestCase):
                     files_list=files_list,
                 )
 
+    def test_validate_job_artifacts_accepts_report_relative_manifest_path(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            output_dir = root / "data" / "shards_global" / "fw_batch"
+            output_dir.mkdir(parents=True, exist_ok=True)
+            files_list = root / "files.txt"
+            files_list.write_text("a.parquet\n", encoding="utf-8")
+
+            shard_file = output_dir / "train_000000.bin"
+            shard_file.write_bytes(b"\x01\x00\x02\x00")
+
+            manifest = {
+                "input_files": ["/tmp/a.parquet"],
+                "token_dtype": "uint16",
+                "train": {"total_tokens": 2, "shards": [{"path": "train_000000.bin", "tokens": 2}]},
+                "val": {"total_tokens": 0, "shards": []},
+            }
+            _write_json(output_dir / "manifest.json", manifest)
+
+            report = {
+                "manifest": "data/shards_global/fw_batch/manifest.json",
+                "rows_sharded": 2,
+            }
+            _write_json(root / "report.json", report)
+
+            rows, tokens, shards = validate_job_artifacts(
+                job_id="job_rel_manifest",
+                report_path=root / "report.json",
+                output_dir=output_dir,
+                files_list=files_list,
+            )
+            self.assertEqual(rows, 2)
+            self.assertEqual(tokens, 2)
+            self.assertEqual(shards, 1)
+
 
 if __name__ == "__main__":
     unittest.main()
-

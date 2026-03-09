@@ -621,6 +621,19 @@ mark_bad_parquet() {
   fi
 }
 
+mark_bad_from_files_list() {
+  local files_list="$1"
+  local reason="$2"
+  if [[ ! -f "$files_list" ]]; then
+    return
+  fi
+  local name
+  while IFS= read -r name; do
+    [[ -z "$name" ]] && continue
+    mark_bad_parquet "$HOT_PARQUET_DIR/$name" "$reason"
+  done < "$files_list"
+}
+
 reconcile_bad_parquet_from_warm() {
   if [[ ! -s "$BAD_PARQUET_FILE" ]]; then
     return
@@ -903,7 +916,7 @@ drain_sync_jobs() {
 }
 
 on_loop_signal() {
-  local sig="$1"
+  sig="$1"
   log "loop_signal signal=$sig action=drain_sync_jobs_then_exit"
   drain_sync_jobs
   exit 0
@@ -964,16 +977,19 @@ run_shard_job() {
 
     if [[ "$SHARD_RETRY_ON_OOM" -ne 1 ]]; then
       log "shard_build_failed id=$job_id attempt=$shard_attempt rc=$shard_rc retry_on_oom=0"
+      mark_bad_from_files_list "$files_list" "shard_build_failed_retry_disabled_rc_${shard_rc}"
       return "$shard_rc"
     fi
 
     if ! grep -Eqi 'out of memory|memoryerror|arrowmemoryerror|bad_alloc|cannot allocate memory|std::bad_alloc' "$shard_attempt_log"; then
       log "shard_build_failed id=$job_id attempt=$shard_attempt rc=$shard_rc reason=non_oom_error"
+      mark_bad_from_files_list "$files_list" "shard_build_failed_non_oom_rc_${shard_rc}"
       return "$shard_rc"
     fi
 
     if [[ "$shard_batch_size" -le "$SHARD_MIN_BATCH_SIZE" ]]; then
       log "shard_build_failed id=$job_id attempt=$shard_attempt rc=$shard_rc reason=min_batch_reached batch_size=$shard_batch_size"
+      mark_bad_from_files_list "$files_list" "shard_build_failed_min_batch_rc_${shard_rc}"
       return "$shard_rc"
     fi
 
@@ -984,6 +1000,7 @@ run_shard_job() {
     fi
     if [[ "$next_batch_size" -eq "$shard_batch_size" ]]; then
       log "shard_build_failed id=$job_id attempt=$shard_attempt rc=$shard_rc reason=no_batch_change_possible batch_size=$shard_batch_size"
+      mark_bad_from_files_list "$files_list" "shard_build_failed_no_batch_change_rc_${shard_rc}"
       return "$shard_rc"
     fi
 
@@ -1042,7 +1059,10 @@ process_batch() {
     for name in "${files[@]}"; do
       printf '%s\n' "$name" >> "$files_list"
     done
-    run_shard_job "$batch_id" "$files_list" "$tok_arg_flag" "$tok_arg_path"
+    if ! run_shard_job "$batch_id" "$files_list" "$tok_arg_flag" "$tok_arg_path"; then
+      log "batch_skip id=$batch_id reason=single_job_failed"
+      return 0
+    fi
     guard_job_ids+=("$batch_id")
     guard_job_lists+=("$files_list")
   else
@@ -1077,25 +1097,38 @@ process_batch() {
     done
 
     local failed=0
+    local -a succeeded_job_ids=()
+    local -a succeeded_job_lists=()
     for ((j = 0; j < ${#pids[@]}; j++)); do
-      if ! wait "${pids[$j]}"; then
+      if wait "${pids[$j]}"; then
+        succeeded_job_ids+=("${active_job_ids[$j]}")
+        succeeded_job_lists+=("${active_job_lists[$j]}")
+      else
         log "batch_job_failed id=${active_job_ids[$j]}"
         failed=1
       fi
     done
-    if [[ "$failed" -ne 0 ]]; then
-      log "batch_failed id=$batch_id reason=one_or_more_parallel_jobs_failed"
-      return 1
+    if [[ "${#succeeded_job_ids[@]}" -eq 0 ]]; then
+      if [[ "$failed" -ne 0 ]]; then
+        log "batch_skip id=$batch_id reason=all_parallel_jobs_failed"
+      fi
+      return 0
     fi
-    guard_job_ids=("${active_job_ids[@]}")
-    guard_job_lists=("${active_job_lists[@]}")
+    if [[ "$failed" -ne 0 ]]; then
+      log "batch_partial id=$batch_id reason=one_or_more_parallel_jobs_failed succeeded_jobs=${#succeeded_job_ids[@]}"
+    fi
+    guard_job_ids=("${succeeded_job_ids[@]}")
+    guard_job_lists=("${succeeded_job_lists[@]}")
   fi
 
   if [[ "$DRY_RUN" -eq 1 ]]; then
     log "batch_done_dry_run id=$batch_id"
     return 0
   fi
-  validate_batch_guardrails "$batch_id" guard_job_ids guard_job_lists
+  if ! validate_batch_guardrails "$batch_id" guard_job_ids guard_job_lists; then
+    log "batch_skip id=$batch_id reason=guardrail_failure"
+    return 0
+  fi
 
   local idx
   for ((idx = 0; idx < ${#guard_job_ids[@]}; idx++)); do
@@ -1105,20 +1138,34 @@ process_batch() {
     queue_sync_batch_to_warm "$jid" "$output_dir" "$report_json"
   done
 
-  for name in "${files[@]}"; do
+  local -a processed_names=()
+  local -A processed_seen=()
+  local files_list_path
+  for files_list_path in "${guard_job_lists[@]}"; do
+    while IFS= read -r name; do
+      [[ -z "$name" ]] && continue
+      if [[ -n "${processed_seen[$name]+x}" ]]; then
+        continue
+      fi
+      processed_seen["$name"]=1
+      processed_names+=("$name")
+    done < "$files_list_path"
+  done
+
+  for name in "${processed_names[@]}"; do
     printf '%s\n' "$name" >> "$PROCESSED_FILE"
   done
   sort -u "$PROCESSED_FILE" -o "$PROCESSED_FILE"
   refresh_stage_skip_list
 
   if [[ "$PURGE_HOT" -eq 1 ]]; then
-    for name in "${files[@]}"; do
+    for name in "${processed_names[@]}"; do
       local hot_file="$HOT_PARQUET_DIR/$name"
       if [[ -f "$hot_file" ]]; then
         rm -f "$hot_file"
       fi
     done
-    log "batch_hot_purged id=$batch_id purged_files=${#files[@]}"
+    log "batch_hot_purged id=$batch_id purged_files=${#processed_names[@]}"
   fi
 
   log "batch_done id=$batch_id"
@@ -1170,7 +1217,12 @@ while true; do
   fi
 
   batch_start_epoch="$(date +%s)"
-  process_batch "$((completed_batches + 1))" "${valid_selected[@]}"
+  if ! process_batch "$((completed_batches + 1))" "${valid_selected[@]}"; then
+    log "batch_failed_unhandled selected=${#valid_selected[@]} action=continue"
+    stage_once
+    sleep 2
+    continue
+  fi
   batch_end_epoch="$(date +%s)"
   LAST_BATCH_SECONDS=$((batch_end_epoch - batch_start_epoch))
   completed_batches=$((completed_batches + 1))

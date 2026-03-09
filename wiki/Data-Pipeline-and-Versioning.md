@@ -97,6 +97,7 @@ This loop:
 - can auto-tune shard parallelism (`--auto-tune-shard-jobs`) using CPU load + per-batch runtime
 - can overlap warm sync in the background (`--sync-background`) with bounded in-flight jobs
 - benefits from larger shard targets (`--shard-size-tokens 20000000`) to cut file-count/sync overhead
+- quarantines shard-job inputs on non-OOM shard-build failures and continues with remaining files
 - on 20-core hosts, two shard jobs with tokenizer batch encoding is the current higher-throughput profile
 - reconciles bad parquet basenames against warm-source validity on startup, so transient hot-copy failures can be retried
 

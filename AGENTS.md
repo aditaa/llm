@@ -141,6 +141,7 @@ Keep PR scope narrow; split refactors and features into separate PRs.
 - Default systemd loop/watchdog templates now use stage free-space guardrails + auto-tune; override with `LLM_STAGE_SHARD_LOOP_ARGS` in `/etc/llm/llm.env` if needed
 - `fineweb_stage_shard_loop.sh` now preflights selected parquet files and quarantines failures into `artifacts/reports/fineweb_stage_shard_loop/quarantine_bad_parquet/`
 - Known-bad parquet basenames are tracked in `artifacts/reports/fineweb_stage_shard_loop/bad_parquet_files.txt` and skipped in future stage cycles
+- On shard-build non-OOM failures, `fineweb_stage_shard_loop.sh` quarantines that job's parquet inputs as bad and continues processing remaining files
 - On startup, `fineweb_stage_shard_loop.sh` reconciles bad parquet entries against warm-source validity to avoid permanent false-positive skips
 - `fineweb_stage_shard_loop.sh` now bootstraps processed parquet basenames from existing manifests at startup, merges `processed + bad` into a stage skip list, and removes known files from hot storage before staging
 - Stage-loop batch guardrails now require valid report + manifest + non-empty shard files before marking files as processed/purging hot copies

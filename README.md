@@ -284,6 +284,8 @@ transient hot-copy failures do not permanently blacklist valid warm files.
 If a shard build fails with OOM-like errors, the loop retries automatically with a smaller batch size.
 Batch guardrails now require valid report/manifest + non-empty shard outputs before files are marked
 processed or purged from hot storage.
+If a shard build fails with non-OOM errors (for example parquet decode errors), that job's input files
+are quarantined as bad and the loop continues with remaining files.
 Guardrail checks are implemented in `src/llm/fineweb_guardrails.py` and are unit-tested.
 For 20-core hosts, `--shard-jobs 2 --tokenizer-threads 10 --encode-batch-size 1024` is the
 current high-throughput profile.

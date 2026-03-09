@@ -137,6 +137,7 @@ Keep PR scope narrow; split refactors and features into separate PRs.
 - Use `fineweb_stage_shard_loop.sh --auto-tune-shard-jobs` to adapt shard parallelism and tokenizer threads from CPU load + batch runtime
 - Use `fineweb_stage_shard_loop.sh --sync-background --sync-max-inflight <N>` to overlap warm sync with next shard batches and reduce idle wait
 - Prefer larger shard files for throughput (`--shard-size-tokens 20000000` for FineWeb 350BT pipeline)
+- `fineweb_stage_shard_loop.sh` now drains background sync jobs on `INT`/`TERM` for safer restarts
 - Default systemd loop/watchdog templates now use stage free-space guardrails + auto-tune; override with `LLM_STAGE_SHARD_LOOP_ARGS` in `/etc/llm/llm.env` if needed
 - `fineweb_stage_shard_loop.sh` now preflights selected parquet files and quarantines failures into `artifacts/reports/fineweb_stage_shard_loop/quarantine_bad_parquet/`
 - Known-bad parquet basenames are tracked in `artifacts/reports/fineweb_stage_shard_loop/bad_parquet_files.txt` and skipped in future stage cycles

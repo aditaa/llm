@@ -902,6 +902,13 @@ drain_sync_jobs() {
   log "batch_sync_drain_done"
 }
 
+on_loop_signal() {
+  local sig="$1"
+  log "loop_signal signal=$sig action=drain_sync_jobs_then_exit"
+  drain_sync_jobs
+  exit 0
+}
+
 run_shard_job() {
   local job_id="$1"
   local files_list="$2"
@@ -1119,12 +1126,17 @@ process_batch() {
 
 log "loop_start warm_parquet_dir=$WARM_PARQUET_DIR hot_parquet_dir=$HOT_PARQUET_DIR"
 log "loop_config shards_root=$SHARDS_ROOT tokenizer_path=$TOKENIZER_PATH iterations=$ITERATIONS hot_queue_min_files=$HOT_QUEUE_MIN_FILES stage_copy_jobs=$STAGE_COPY_JOBS stage_min_free_gib=$STAGE_MIN_FREE_GIB shard_jobs=$SHARD_JOBS tokenizer_threads=$TOKENIZER_THREADS shard_size_tokens=$SHARD_SIZE_TOKENS sync_to_warm=$SYNC_TO_WARM sync_background=$SYNC_BACKGROUND sync_max_inflight=$SYNC_MAX_INFLIGHT auto_tune_shard_jobs=$AUTO_TUNE_SHARD_JOBS auto_tune_bounds=${AUTO_TUNE_MIN_SHARD_JOBS}-${AUTO_TUNE_MAX_SHARD_JOBS} auto_tune_load_pct=${AUTO_TUNE_LOW_LOAD_PCT}-${AUTO_TUNE_HIGH_LOAD_PCT} auto_tune_core_budget=$AUTO_TUNE_CORE_BUDGET bad_parquet_file=$BAD_PARQUET_FILE quarantine_dir=$QUARANTINE_DIR"
+trap 'on_loop_signal INT' INT
+trap 'on_loop_signal TERM' TERM
 reconcile_bad_parquet_from_warm
 bootstrap_processed_from_manifests
 refresh_stage_skip_list
 
 completed_batches=0
 while true; do
+  if [[ "$SYNC_BACKGROUND" -eq 1 ]]; then
+    prune_sync_jobs
+  fi
   purge_hot_known_files
   selected=()
   select_unprocessed_files selected

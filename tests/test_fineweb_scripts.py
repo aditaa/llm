@@ -282,8 +282,68 @@ class FineWebManifestDedupeTests(unittest.TestCase):
             self.assertEqual(payload["manifest_total"], 3)
             self.assertEqual(payload["manifest_kept"], 2)
             self.assertEqual(payload["manifest_overlap"], 1)
+            self.assertEqual(payload["partial_overlap_manifests"], 0)
+            self.assertEqual(payload["partial_overlap_input_files"], 0)
             self.assertEqual(payload["unique_input_files"], 3)
             self.assertEqual(len(payload["disabled"]), 1)
+
+    def test_partial_overlap_is_reported_not_disabled(self) -> None:
+        repo_root = _repo_root()
+        script = repo_root / "scripts" / "fineweb_manifest_dedupe.py"
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            shards_root = tmp_path / "shards"
+            shards_root.mkdir(parents=True, exist_ok=True)
+
+            first_dir = shards_root / "batch_first"
+            second_dir = shards_root / "batch_second"
+            first_dir.mkdir()
+            second_dir.mkdir()
+
+            first_manifest = first_dir / "manifest.json"
+            first_manifest.write_text(
+                json.dumps({"input_files": ["000_00001.parquet", "000_00002.parquet"]}),
+                encoding="utf-8",
+            )
+            second_manifest = second_dir / "manifest.json"
+            second_manifest.write_text(
+                json.dumps({"input_files": ["000_00002.parquet", "000_00003.parquet"]}),
+                encoding="utf-8",
+            )
+
+            report = tmp_path / "dedupe_report.json"
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(script),
+                    "--shards-root",
+                    str(shards_root),
+                    "--report-output",
+                    str(report),
+                    "--keep",
+                    "newest",
+                ],
+                cwd=repo_root,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(proc.returncode, 0, msg=proc.stderr)
+
+            self.assertTrue(first_manifest.exists())
+            self.assertTrue(second_manifest.exists())
+            self.assertFalse((first_dir / "manifest.duplicate.disabled.json").exists())
+            self.assertFalse((second_dir / "manifest.duplicate.disabled.json").exists())
+
+            payload = json.loads(report.read_text(encoding="utf-8"))
+            self.assertEqual(payload["manifest_total"], 2)
+            self.assertEqual(payload["manifest_kept"], 2)
+            self.assertEqual(payload["manifest_overlap"], 0)
+            self.assertEqual(payload["partial_overlap_input_files"], 1)
+            self.assertEqual(payload["partial_overlap_manifests"], 2)
+            self.assertEqual(payload["unique_input_files"], 3)
+            self.assertEqual(len(payload["disabled"]), 0)
 
 
 if __name__ == "__main__":

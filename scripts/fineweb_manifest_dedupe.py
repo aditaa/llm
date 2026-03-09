@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Disable overlapping FineWeb shard manifests so each parquet basename is used once."""
+"""Disable exact-duplicate FineWeb shard manifests and report partial overlaps."""
 
 from __future__ import annotations
 
@@ -98,27 +98,56 @@ def main() -> int:
         raise SystemExit(f"shards-root not found: {shards_root}")
 
     entries = _iter_entries(shards_root)
-    ordered = sorted(entries, key=lambda item: item.mtime, reverse=(args.keep == "newest"))
+    groups: dict[tuple[str, ...], list[ManifestEntry]] = {}
+    for entry in entries:
+        groups.setdefault(entry.input_files, []).append(entry)
 
-    claimed_files: dict[str, Path] = {}
     kept: list[ManifestEntry] = []
     duplicates: list[dict[str, Any]] = []
-
-    for entry in ordered:
-        overlap = sorted(name for name in entry.input_files if name in claimed_files)
-        if overlap:
+    for input_set, group_entries in groups.items():
+        ordered_group = sorted(
+            group_entries,
+            key=lambda item: item.mtime,
+            reverse=(args.keep == "newest"),
+        )
+        keeper = ordered_group[0]
+        kept.append(keeper)
+        for duplicate in ordered_group[1:]:
             duplicates.append(
                 {
-                    "manifest": str(entry.manifest_path),
-                    "dataset_dir": str(entry.dataset_dir),
-                    "overlap_files": overlap,
-                    "kept_by": sorted(str(claimed_files[name]) for name in overlap),
+                    "manifest": str(duplicate.manifest_path),
+                    "dataset_dir": str(duplicate.dataset_dir),
+                    "duplicate_of": str(keeper.manifest_path),
+                    "input_files": list(input_set),
                 }
             )
-            continue
-        kept.append(entry)
+
+    claimed_files: dict[str, list[Path]] = {}
+    for entry in kept:
         for name in entry.input_files:
-            claimed_files[name] = entry.manifest_path
+            claimed_files.setdefault(name, []).append(entry.manifest_path)
+
+    partial_overlaps: list[dict[str, Any]] = []
+    for entry in kept:
+        overlap_files = sorted(name for name in entry.input_files if len(claimed_files[name]) > 1)
+        if not overlap_files:
+            continue
+        overlap_with = sorted(
+            {
+                str(other)
+                for name in overlap_files
+                for other in claimed_files[name]
+                if other != entry.manifest_path
+            }
+        )
+        partial_overlaps.append(
+            {
+                "manifest": str(entry.manifest_path),
+                "dataset_dir": str(entry.dataset_dir),
+                "overlap_files": overlap_files,
+                "overlap_with": overlap_with,
+            }
+        )
 
     disabled: list[dict[str, str]] = []
     if not args.dry_run:
@@ -130,6 +159,7 @@ def main() -> int:
             disabled.append({"manifest": str(manifest_path), "disabled_to": str(disabled_path)})
 
     unique_files = sorted(claimed_files.keys())
+    partial_overlap_input_files = sum(1 for refs in claimed_files.values() if len(refs) > 1)
     report = {
         "shards_root": str(shards_root),
         "keep_strategy": args.keep,
@@ -137,9 +167,13 @@ def main() -> int:
         "manifest_total": len(entries),
         "manifest_kept": len(kept),
         "manifest_overlap": len(duplicates),
+        "manifest_exact_duplicates": len(duplicates),
+        "partial_overlap_manifests": len(partial_overlaps),
+        "partial_overlap_input_files": partial_overlap_input_files,
         "unique_input_files": len(unique_files),
         "kept_manifests": [str(item.manifest_path) for item in kept],
         "duplicates": duplicates,
+        "partial_overlaps": partial_overlaps,
         "disabled": disabled,
     }
     report_output.parent.mkdir(parents=True, exist_ok=True)
@@ -148,6 +182,8 @@ def main() -> int:
     print(f"manifest_total={report['manifest_total']}")
     print(f"manifest_kept={report['manifest_kept']}")
     print(f"manifest_overlap={report['manifest_overlap']}")
+    print(f"partial_overlap_manifests={report['partial_overlap_manifests']}")
+    print(f"partial_overlap_input_files={report['partial_overlap_input_files']}")
     print(f"unique_input_files={report['unique_input_files']}")
     print(f"dry_run={int(args.dry_run)}")
     print(f"report={report_output}")

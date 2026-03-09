@@ -532,8 +532,9 @@ bash scripts/train_supervisor_rtx5070_350bt.sh \
 ```
 For continuous 350BT ingestion/training, keep exactly one stage watchdog and one train supervisor running.
 Avoid launching one-off `llm.cli train --max-steps ...` jobs in parallel with the supervisor.
-Supervisor now runs a manifest overlap dedupe pass before each train chunk launch
-(`scripts/fineweb_manifest_dedupe.py`, keep strategy `newest`) so repeated parquet files are not over-weighted.
+Supervisor now runs a manifest dedupe pass before each train chunk launch
+(`scripts/fineweb_manifest_dedupe.py`, keep strategy `newest`) that disables exact duplicate
+manifest file-sets and reports partial overlaps for review.
 Use `--no-dedupe-overlap-manifests` to disable, or `--dedupe-dry-run` to audit without disabling duplicates.
 Add `--no-train-fail-on-eval-regression` if you want chunk runs to continue even when
 the train-loop held-out perplexity gate is noisy; prompt-suite regression/promotion

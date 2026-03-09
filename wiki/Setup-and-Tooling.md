@@ -76,6 +76,10 @@ Units installed from `deploy/systemd/`:
 - `llm-fineweb-stage-shard-watchdog.service`
 - `llm-hf-download-watchdog.service` (optional)
 
+`deploy/systemd/llm.env.example` includes tuned loop args for this host profile
+(`--stage-min-free-gib 80` + `--auto-tune-shard-jobs`). Override
+`LLM_STAGE_SHARD_LOOP_ARGS` in `/etc/llm/llm.env` if you want a different policy.
+
 ## Wiki Publishing
 Wiki pages are source-controlled in `wiki/` and published with:
 

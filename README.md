@@ -630,6 +630,8 @@ Templates:
 - `deploy/systemd/llm-hf-download-watchdog.service`
 - `deploy/systemd/llm-checkpoint-offload-prune.service`
 - `deploy/systemd/llm-checkpoint-offload-prune.timer`
+- `deploy/systemd/llm-bad-parquet-revalidate.service`
+- `deploy/systemd/llm-bad-parquet-revalidate.timer`
 - `deploy/systemd/llm-vm-swappiness.service`
 
 Note: prefetch is optional when stage-loop already uses hot-queue staging flags

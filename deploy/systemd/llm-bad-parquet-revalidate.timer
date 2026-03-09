@@ -1,0 +1,13 @@
+[Unit]
+Description=Run LLM bad-parquet revalidate job periodically
+
+[Timer]
+OnBootSec=10min
+OnUnitActiveSec=1h
+AccuracySec=5min
+Persistent=true
+Unit=llm-bad-parquet-revalidate.service
+
+[Install]
+WantedBy=timers.target
+

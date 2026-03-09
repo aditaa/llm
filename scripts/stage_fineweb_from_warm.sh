@@ -8,6 +8,10 @@ MAX_GIB=0
 MIN_AGE_SECONDS=180
 COPY_JOBS=1
 MIN_FREE_GIB=0
+LOCK_WAIT_SECONDS=0
+RSYNC_RETRIES=3
+RSYNC_CONNECT_TIMEOUT_SECONDS=30
+RSYNC_TIMEOUT_SECONDS=900
 SKIP_LIST=""
 DRY_RUN=0
 
@@ -30,6 +34,12 @@ Options:
   --min-age-seconds N      Ignore source files modified more recently than this
                            (default: 180)
   --copy-jobs N            Parallel copy workers for selected files (default: 1)
+  --lock-wait-seconds N    Wait up to N seconds for stage lock (default: 0 skip if busy)
+  --rsync-retries N        Retry attempts per file copy (default: 3)
+  --rsync-connect-timeout-seconds N
+                           Rsync connect timeout (default: 30)
+  --rsync-timeout-seconds N
+                           Rsync I/O timeout (default: 900)
   --min-free-gib N         Keep at least N GiB free on destination filesystem
                            after this staging run (default: 0 disabled)
   --skip-list FILE         Optional newline-separated parquet basenames to skip
@@ -71,6 +81,22 @@ while [[ $# -gt 0 ]]; do
       MIN_FREE_GIB="$2"
       shift 2
       ;;
+    --lock-wait-seconds)
+      LOCK_WAIT_SECONDS="$2"
+      shift 2
+      ;;
+    --rsync-retries)
+      RSYNC_RETRIES="$2"
+      shift 2
+      ;;
+    --rsync-connect-timeout-seconds)
+      RSYNC_CONNECT_TIMEOUT_SECONDS="$2"
+      shift 2
+      ;;
+    --rsync-timeout-seconds)
+      RSYNC_TIMEOUT_SECONDS="$2"
+      shift 2
+      ;;
     --skip-list)
       SKIP_LIST="$2"
       shift 2
@@ -101,11 +127,21 @@ log="artifacts/reports/stage_fineweb_from_warm_$(date +%Y%m%d_%H%M%S).log"
 lock_key="$(printf '%s' "$DEST_DIR" | sha256sum | awk '{print $1}')"
 lock_file="artifacts/reports/stage_fineweb_from_warm_${lock_key}.lock"
 exec 9>"$lock_file"
-flock 9
+if [[ "$LOCK_WAIT_SECONDS" -gt 0 ]]; then
+  if ! flock -w "$LOCK_WAIT_SECONDS" 9; then
+    echo "[$(date -Iseconds)] stage_lock_busy lock_file=$lock_file wait_seconds=$LOCK_WAIT_SECONDS action=skip" | tee -a "$log"
+    exit 0
+  fi
+else
+  if ! flock -n 9; then
+    echo "[$(date -Iseconds)] stage_lock_busy lock_file=$lock_file wait_seconds=0 action=skip" | tee -a "$log"
+    exit 0
+  fi
+fi
 
 echo "[$(date -Iseconds)] source=$SRC_DIR" | tee -a "$log"
 echo "[$(date -Iseconds)] dest=$DEST_DIR" | tee -a "$log"
-echo "[$(date -Iseconds)] max_files=$MAX_FILES max_gib=$MAX_GIB min_age_seconds=$MIN_AGE_SECONDS copy_jobs=$COPY_JOBS min_free_gib=$MIN_FREE_GIB dry_run=$DRY_RUN skip_list=${SKIP_LIST:-none}" | tee -a "$log"
+echo "[$(date -Iseconds)] max_files=$MAX_FILES max_gib=$MAX_GIB min_age_seconds=$MIN_AGE_SECONDS copy_jobs=$COPY_JOBS min_free_gib=$MIN_FREE_GIB lock_wait_seconds=$LOCK_WAIT_SECONDS rsync_retries=$RSYNC_RETRIES rsync_connect_timeout_seconds=$RSYNC_CONNECT_TIMEOUT_SECONDS rsync_timeout_seconds=$RSYNC_TIMEOUT_SECONDS dry_run=$DRY_RUN skip_list=${SKIP_LIST:-none}" | tee -a "$log"
 
 if [[ -n "$SKIP_LIST" && ! -f "$SKIP_LIST" ]]; then
   echo "skip-list not found: $SKIP_LIST" >&2
@@ -119,6 +155,19 @@ if ! [[ "$MIN_FREE_GIB" =~ ^[0-9]+$ ]]; then
   echo "min-free-gib must be an integer >= 0: $MIN_FREE_GIB" >&2
   exit 2
 fi
+for tuple in \
+  "lock-wait-seconds:$LOCK_WAIT_SECONDS" \
+  "rsync-retries:$RSYNC_RETRIES" \
+  "rsync-connect-timeout-seconds:$RSYNC_CONNECT_TIMEOUT_SECONDS" \
+  "rsync-timeout-seconds:$RSYNC_TIMEOUT_SECONDS"
+do
+  key="${tuple%%:*}"
+  value="${tuple##*:}"
+  if ! [[ "$value" =~ ^[0-9]+$ ]]; then
+    echo "$key must be an integer >= 0: $value" >&2
+    exit 2
+  fi
+done
 
 now_epoch="$(date +%s)"
 copied_files=0
@@ -139,13 +188,26 @@ copy_one() {
   local dst_path="$DEST_DIR/$name"
   local tmp_path="$DEST_DIR/${name}.incomplete"
   local tmp_size
+  local attempt
+  local max_attempts=$((RSYNC_RETRIES + 1))
 
-  rm -f "$tmp_path"
-  if ! rsync -ah --partial --inplace "$src_path" "$tmp_path" >> "$log" 2>&1; then
+  for ((attempt = 1; attempt <= max_attempts; attempt++)); do
     rm -f "$tmp_path"
-    echo "FAIL copy error file=$name" | tee -a "$log"
+    if rsync -ah --partial --inplace \
+      --contimeout="$RSYNC_CONNECT_TIMEOUT_SECONDS" \
+      --timeout="$RSYNC_TIMEOUT_SECONDS" \
+      "$src_path" "$tmp_path" >> "$log" 2>&1; then
+      break
+    fi
+    rm -f "$tmp_path"
+    if [[ "$attempt" -lt "$max_attempts" ]]; then
+      echo "RETRY copy file=$name attempt=$attempt/$max_attempts" | tee -a "$log"
+      sleep 2
+      continue
+    fi
+    echo "FAIL copy error file=$name attempt=$attempt/$max_attempts" | tee -a "$log"
     return 1
-  fi
+  done
 
   tmp_size="$(stat -c%s "$tmp_path" || echo -1)"
   if [[ "$tmp_size" -ne "$src_size" ]]; then

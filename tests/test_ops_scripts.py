@@ -88,6 +88,19 @@ class ScriptTests(unittest.TestCase):
         self.assertEqual(proc.returncode, 0, msg=proc.stderr)
         self.assertIn("--no-cleanup-stale-workers", proc.stdout)
 
+    def test_stage_from_warm_help_lists_lock_and_timeout_options(self) -> None:
+        proc = subprocess.run(
+            ["bash", "scripts/stage_fineweb_from_warm.sh", "--help"],
+            cwd=Path(__file__).resolve().parents[1],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(proc.returncode, 0, msg=proc.stderr)
+        self.assertIn("--lock-wait-seconds", proc.stdout)
+        self.assertIn("--rsync-retries", proc.stdout)
+        self.assertIn("--rsync-timeout-seconds", proc.stdout)
+
     def test_checkpoint_offload_prune_help(self) -> None:
         proc = subprocess.run(
             ["bash", "scripts/checkpoint_offload_prune.sh", "--help"],

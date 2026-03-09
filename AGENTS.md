@@ -138,6 +138,7 @@ Keep PR scope narrow; split refactors and features into separate PRs.
 - `fineweb_stage_shard_watchdog.sh` now also cleans stale stage-loop/shard-worker processes before relaunch so only one controller remains active
 - Use `fineweb_stage_shard_loop.sh --hot-queue-min-files <N>` to keep a bounded hot parquet queue and reduce sharder copy stalls
 - `stage_fineweb_from_warm.sh` now uses a per-destination lock so stage-loop and prefetch worker staging calls serialize safely
+- `stage_fineweb_from_warm.sh --lock-wait-seconds 0` (default) skips quickly when another staging call holds the lock; tune if you want blocking behavior
 - Use `fineweb_stage_shard_loop.sh --stage-copy-jobs <N>` to forward parallel staging copy workers into each stage cycle
 - Use `fineweb_stage_shard_loop.sh --stage-min-free-gib <N>` so staging never drives hot disk below a free-space guardrail
 - Use `fineweb_stage_shard_loop.sh --auto-tune-shard-jobs` to adapt shard parallelism and tokenizer threads from CPU load + batch runtime
@@ -177,6 +178,7 @@ Keep PR scope narrow; split refactors and features into separate PRs.
 - `pipeline_live_view.py` shows `STOP | <reason>` for non-running tasks (for example `staging handled by stage-loop` for prefetch when stage-loop queue staging is enabled)
 - `fineweb_prefetch_hot_queue.sh` can auto-read stage-loop skip data (`--auto-skip-state-dir artifacts/reports/fineweb_stage_shard_loop`) so it avoids restaging processed/bad parquet files
 - Revalidate/recover bad parquet list entries with `scripts/revalidate_bad_parquet.py`; use `--restage-valid` to copy newly validated files back into hot storage
+- Optional automation: `llm-bad-parquet-revalidate.timer` runs `revalidate_bad_parquet.py` periodically via systemd
 - For checkpoint regression tracking, run `scripts/eval_checkpoint_prompts.py` with `configs/eval/standard_prompt_suite_v3.json`; use `--baseline-report` and `--promotion-policy configs/eval/promotion_policy_v1.json` to emit regression deltas + promotion verdict
 - Promotion/comparison logic lives in `src/llm/eval_policy.py`; keep policy checks unit-tested (`tests/test_eval_policy.py`)
 - For FineWeb-first training runs, build shards directly with `PYTHONPATH=src .venv/bin/python scripts/fineweb_parquet_to_shards.py --input-dir data/fineweb/sample-350BT --output-dir data/shards_global/fineweb-global-bpe-v1 --tokenizer-out artifacts/tokenizer/fineweb-global-bpe-v1.json --bpe-vocab-size 32000 --field text`

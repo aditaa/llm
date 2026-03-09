@@ -17,7 +17,8 @@ Usage:
 
 Install and optionally enable/start systemd service units for long-running
 LLM pipeline workers (supervisor + prefetch + stage/shard watchdog, optional HF watchdog).
-Also installs maintenance units (checkpoint offload/prune timer + VM swappiness tune service).
+Also installs maintenance units (checkpoint offload/prune timer + bad-parquet
+revalidate timer + VM swappiness tune service).
 
 Options:
   --repo-dir DIR            Repository directory baked into unit files
@@ -25,7 +26,7 @@ Options:
   --systemd-dir DIR         Unit install directory (default: /etc/systemd/system)
   --env-target FILE         Environment file path (default: /etc/llm/llm.env)
   --install-watchdog        Also install/enable HF watchdog service unit
-  --no-maintenance          Skip maintenance units (offload/prune timer + VM tuning)
+  --no-maintenance          Skip maintenance units (offload/revalidate timers + VM tuning)
   --no-enable               Do not run systemctl enable
   --no-start                Do not run systemctl restart/start
   -h, --help                Show help
@@ -126,6 +127,8 @@ fi
 if [[ "$INSTALL_MAINTENANCE" -eq 1 ]]; then
   install_unit "llm-checkpoint-offload-prune.service" "llm-checkpoint-offload-prune.service"
   install_unit "llm-checkpoint-offload-prune.timer" "llm-checkpoint-offload-prune.timer"
+  install_unit "llm-bad-parquet-revalidate.service" "llm-bad-parquet-revalidate.service"
+  install_unit "llm-bad-parquet-revalidate.timer" "llm-bad-parquet-revalidate.timer"
   install_unit "llm-vm-swappiness.service" "llm-vm-swappiness.service"
 fi
 
@@ -149,7 +152,7 @@ if [[ "$INSTALL_WATCHDOG" -eq 1 ]]; then
 fi
 if [[ "$INSTALL_MAINTENANCE" -eq 1 ]]; then
   units+=(llm-vm-swappiness.service)
-  timer_units+=(llm-checkpoint-offload-prune.timer)
+  timer_units+=(llm-checkpoint-offload-prune.timer llm-bad-parquet-revalidate.timer)
 fi
 
 if [[ "$ENABLE" -eq 1 ]]; then

@@ -444,6 +444,8 @@ warm_shards_root="$WARM_ROOT/shards_global/$(basename "$SHARDS_ROOT")"
 warm_tokenizer_dir="$WARM_ROOT/tokenizer"
 warm_reports_dir="$WARM_ROOT/reports/fineweb_stage_shard_loop"
 declare -a SYNC_PIDS=()
+declare -a ACTIVE_SHARD_PIDS=()
+SHOULD_STOP=0
 
 retune_tokenizer_threads() {
   local jobs="$1"
@@ -915,9 +917,32 @@ drain_sync_jobs() {
   log "batch_sync_drain_done"
 }
 
+terminate_active_shard_jobs() {
+  if [[ "${#ACTIVE_SHARD_PIDS[@]}" -eq 0 ]]; then
+    return
+  fi
+  log "active_shard_terminate_start inflight=${#ACTIVE_SHARD_PIDS[@]}"
+  local pid
+  for pid in "${ACTIVE_SHARD_PIDS[@]}"; do
+    if kill -0 "$pid" 2>/dev/null; then
+      kill -TERM "$pid" 2>/dev/null || true
+    fi
+  done
+  sleep 2
+  for pid in "${ACTIVE_SHARD_PIDS[@]}"; do
+    if kill -0 "$pid" 2>/dev/null; then
+      kill -KILL "$pid" 2>/dev/null || true
+    fi
+  done
+  ACTIVE_SHARD_PIDS=()
+  log "active_shard_terminate_done"
+}
+
 on_loop_signal() {
   sig="$1"
-  log "loop_signal signal=$sig action=drain_sync_jobs_then_exit"
+  SHOULD_STOP=1
+  log "loop_signal signal=$sig action=terminate_shard_jobs_drain_sync_then_exit"
+  terminate_active_shard_jobs
   drain_sync_jobs
   exit 0
 }
@@ -1091,7 +1116,9 @@ process_batch() {
         continue
       fi
       run_shard_job "${job_ids[$j]}" "${job_lists[$j]}" "$tok_arg_flag" "$tok_arg_path" &
-      pids+=("$!")
+      local shard_pid="$!"
+      pids+=("$shard_pid")
+      ACTIVE_SHARD_PIDS+=("$shard_pid")
       active_job_ids+=("${job_ids[$j]}")
       active_job_lists+=("${job_lists[$j]}")
     done
@@ -1107,6 +1134,14 @@ process_batch() {
         log "batch_job_failed id=${active_job_ids[$j]}"
         failed=1
       fi
+      local -a active_remaining=()
+      local active_pid
+      for active_pid in "${ACTIVE_SHARD_PIDS[@]}"; do
+        if [[ "$active_pid" != "${pids[$j]}" ]]; then
+          active_remaining+=("$active_pid")
+        fi
+      done
+      ACTIVE_SHARD_PIDS=("${active_remaining[@]}")
     done
     if [[ "${#succeeded_job_ids[@]}" -eq 0 ]]; then
       if [[ "$failed" -ne 0 ]]; then
@@ -1181,6 +1216,10 @@ refresh_stage_skip_list
 
 completed_batches=0
 while true; do
+  if [[ "$SHOULD_STOP" -eq 1 ]]; then
+    log "loop_stop_requested reason=signal"
+    break
+  fi
   if [[ "$SYNC_BACKGROUND" -eq 1 ]]; then
     prune_sync_jobs
   fi

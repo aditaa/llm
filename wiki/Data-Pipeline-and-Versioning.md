@@ -104,11 +104,12 @@ This loop:
 Optional watchdog for stage/shard loop auto-restart:
 ```bash
 bash scripts/fineweb_stage_shard_watchdog.sh \
-  --worker-args "--hot-queue-min-files 18 --stage-max-files 12 --stage-copy-jobs 2 --process-max-files 12 --shard-jobs 2 --tokenizer-threads 10 --encode-batch-size 1024 --sleep-seconds 60 --shard-min-batch-size 512" \
+  --worker-args "--hot-queue-min-files 10 --stage-max-files 8 --stage-copy-jobs 4 --stage-min-free-gib 80 --process-max-files 15 --shard-jobs 2 --auto-tune-shard-jobs --auto-tune-min-shard-jobs 2 --auto-tune-max-shard-jobs 3 --auto-tune-low-load-pct 80 --auto-tune-high-load-pct 95 --auto-tune-min-batch-seconds 300 --tokenizer-threads 10 --encode-batch-size 1024 --shard-size-tokens 20000000 --sync-background --sync-max-inflight 2 --sleep-seconds 60 --shard-min-batch-size 512" \
   --check-interval-seconds 120 \
   --stall-seconds 5400
 ```
-The stage watchdog enforces a singleton lock and stops worker process groups cleanly during restarts.
+The stage watchdog enforces a singleton lock, stops worker process groups cleanly during restarts,
+and now cleans stale stage-loop/shard-worker processes before relaunching.
 
 Optional watchdog for large FineWeb downloads:
 ```bash

@@ -23,6 +23,7 @@ class SampleState:
     warm_parquet: int | None = None
     processed_parquet: int | None = None
     manifest_unique_inputs: int | None = None
+    manifest_count: int | None = None
     train_step: int | None = None
 
 
@@ -45,6 +46,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--expected-parquet-files", type=int, default=510)
     parser.add_argument("--expected-bytes", type=int, default=1061360917731)
     parser.add_argument("--train-target-step", type=int, default=100000)
+    parser.add_argument(
+        "--manifest-stall-seconds",
+        type=int,
+        default=1200,
+        help="Warn when manifest count is unchanged for this many seconds and sharding is idle",
+    )
     parser.add_argument(
         "--mounts",
         default="/,/mnt/ceph,/mnt/ceph/llm/data",
@@ -142,6 +149,27 @@ def _count_nonempty_lines(path: Path) -> int:
             if value:
                 unique.add(value)
     return len(unique)
+
+
+def _latest_manifest_mtime(shards_root: Path) -> float | None:
+    if not shards_root.exists():
+        return None
+    latest: float | None = None
+    for manifest_path in shards_root.rglob("manifest.json"):
+        try:
+            mtime = manifest_path.stat().st_mtime
+        except OSError:
+            continue
+        if latest is None or mtime > latest:
+            latest = mtime
+    return latest
+
+
+def _file_mtime(path: Path) -> float | None:
+    try:
+        return path.stat().st_mtime
+    except OSError:
+        return None
 
 
 def _latest_train_step(supervisor_state_dir: Path) -> int:
@@ -466,11 +494,19 @@ def _render(
     coverage_pps = _rate(manifest_unique_inputs, state.manifest_unique_inputs, dt)
     train_sps = _rate(train_step, state.train_step, dt)
 
+    latest_manifest_mtime = _latest_manifest_mtime(shards_root)
+    manifest_stall_age = (
+        None if latest_manifest_mtime is None else max(0.0, now - latest_manifest_mtime)
+    )
+    processed_mtime = _file_mtime(stage_state)
+    processed_stall_age = None if processed_mtime is None else max(0.0, now - processed_mtime)
+
     state.ts = now
     state.warm_bytes = warm_bytes
     state.warm_parquet = warm_parquet
     state.processed_parquet = processed_parquet
     state.manifest_unique_inputs = manifest_unique_inputs
+    state.manifest_count = manifest_count
     state.train_step = train_step
 
     cpu_usage = _cpu_usage(cpu_prev, cpu_curr)
@@ -497,8 +533,10 @@ def _render(
         ("zim-offload", r"zim_offload_worker\.sh"),
     ]
     task_lines: list[str] = []
+    task_counts: dict[str, int] = {}
     for name, pattern in tasks:
         count, rows = _task_status(pattern)
+        task_counts[name] = count
         if count <= 0:
             task_lines.append(f"{name:16} STOP")
             continue
@@ -519,6 +557,31 @@ def _render(
     cpu_text = f"{cpu_usage:.1f}%" if cpu_usage is not None else "warming"
     mem_pct = (100.0 * mem_used / mem_total) if mem_total > 0 else 0.0
     swap_pct = (100.0 * swap_used / swap_total) if swap_total > 0 else 0.0
+    alerts: list[str] = []
+    if task_counts.get("stage-watchdog", 0) > 1:
+        alerts.append(f"multiple stage watchdogs detected ({task_counts.get('stage-watchdog', 0)})")
+    if task_counts.get("stage-loop", 0) > 1:
+        alerts.append(f"multiple stage loops detected ({task_counts.get('stage-loop', 0)})")
+    if task_counts.get("stage-watchdog", 0) == 0 and task_counts.get("stage-loop", 0) == 0:
+        alerts.append("stage pipeline controller is not running")
+    if (
+        not coverage_complete
+        and task_counts.get("stage-loop", 0) > 0
+        and task_counts.get("shard-builder", 0) == 0
+        and manifest_stall_age is not None
+        and manifest_stall_age >= float(args.manifest_stall_seconds)
+    ):
+        mins = int(manifest_stall_age // 60)
+        alerts.append(f"manifest count stalled for {mins}m with no active shard-builder")
+    if (
+        not coverage_complete
+        and task_counts.get("stage-loop", 0) > 0
+        and task_counts.get("shard-builder", 0) == 0
+        and processed_stall_age is not None
+        and processed_stall_age >= float(args.manifest_stall_seconds)
+    ):
+        mins = int(processed_stall_age // 60)
+        alerts.append(f"processed parquet count stalled for {mins}m with no active shard-builder")
 
     lines: list[str] = []
     lines.append(f"LLM Live Monitor | {ts} | refresh={args.refresh_seconds:.1f}s | ctrl+c to exit")
@@ -563,11 +626,25 @@ def _render(
         f"rate={f'{train_sps:.3f} step/s' if train_sps is not None else 'n/a'} "
         f"eta={_eta(rem_steps, train_sps)}"
     )
+    if manifest_stall_age is not None:
+        processed_stall_secs = int(processed_stall_age or 0)
+        lines.append(
+            f"  StallAge: manifest={int(manifest_stall_age)}s "
+            f"processed={processed_stall_secs}s "
+            f"threshold={args.manifest_stall_seconds}s"
+        )
     lines.append(f"  Supervisor: gate={supervisor_gate}")
     lines.append(
         f"  GenGate:  latest_rc={gen_rc} latest_pass_rate={gen_pass_rate} "
         f"latest_regression_pass={gen_regression_pass}"
     )
+
+    lines.append("")
+    lines.append("Alerts")
+    if alerts:
+        lines.extend([f"  ALERT: {line}" for line in alerts])
+    else:
+        lines.append("  none")
 
     lines.append("")
     lines.append("Task Status")

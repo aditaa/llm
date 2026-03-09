@@ -8,6 +8,7 @@ ENV_TARGET="/etc/llm/llm.env"
 ENABLE=1
 START=1
 INSTALL_WATCHDOG=0
+INSTALL_MAINTENANCE=1
 
 usage() {
   cat <<'USAGE'
@@ -15,7 +16,8 @@ Usage:
   bash scripts/install_systemd_services.sh [options]
 
 Install and optionally enable/start systemd service units for long-running
-LLM pipeline workers (supervisor + prefetch + stage/shard loop, optional HF watchdog).
+LLM pipeline workers (supervisor + prefetch + stage/shard watchdog, optional HF watchdog).
+Also installs maintenance units (checkpoint offload/prune timer + VM swappiness tune service).
 
 Options:
   --repo-dir DIR            Repository directory baked into unit files
@@ -23,6 +25,7 @@ Options:
   --systemd-dir DIR         Unit install directory (default: /etc/systemd/system)
   --env-target FILE         Environment file path (default: /etc/llm/llm.env)
   --install-watchdog        Also install/enable HF watchdog service unit
+  --no-maintenance          Skip maintenance units (offload/prune timer + VM tuning)
   --no-enable               Do not run systemctl enable
   --no-start                Do not run systemctl restart/start
   -h, --help                Show help
@@ -30,6 +33,7 @@ Options:
 Examples:
   bash scripts/install_systemd_services.sh
   bash scripts/install_systemd_services.sh --install-watchdog
+  bash scripts/install_systemd_services.sh --no-maintenance
 USAGE
 }
 
@@ -53,6 +57,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --install-watchdog)
       INSTALL_WATCHDOG=1
+      shift
+      ;;
+    --no-maintenance)
+      INSTALL_MAINTENANCE=0
       shift
       ;;
     --no-enable)
@@ -115,6 +123,11 @@ install_unit "llm-fineweb-stage-shard-watchdog.service" "llm-fineweb-stage-shard
 if [[ "$INSTALL_WATCHDOG" -eq 1 ]]; then
   install_unit "llm-hf-download-watchdog.service" "llm-hf-download-watchdog.service"
 fi
+if [[ "$INSTALL_MAINTENANCE" -eq 1 ]]; then
+  install_unit "llm-checkpoint-offload-prune.service" "llm-checkpoint-offload-prune.service"
+  install_unit "llm-checkpoint-offload-prune.timer" "llm-checkpoint-offload-prune.timer"
+  install_unit "llm-vm-swappiness.service" "llm-vm-swappiness.service"
+fi
 
 if [[ ! -f "$ENV_TARGET" ]]; then
   $SUDO install -m 0644 "$REPO_DIR/deploy/systemd/llm.env.example" "$ENV_TARGET"
@@ -130,20 +143,37 @@ units=(
   llm-fineweb-prefetch.service
   llm-fineweb-stage-shard-watchdog.service
 )
+timer_units=()
 if [[ "$INSTALL_WATCHDOG" -eq 1 ]]; then
   units+=(llm-hf-download-watchdog.service)
+fi
+if [[ "$INSTALL_MAINTENANCE" -eq 1 ]]; then
+  units+=(llm-vm-swappiness.service)
+  timer_units+=(llm-checkpoint-offload-prune.timer)
 fi
 
 if [[ "$ENABLE" -eq 1 ]]; then
   $SUDO systemctl enable "${units[@]}"
+  if [[ "${#timer_units[@]}" -gt 0 ]]; then
+    $SUDO systemctl enable "${timer_units[@]}"
+  fi
   echo "enabled_units=${units[*]}"
+  if [[ "${#timer_units[@]}" -gt 0 ]]; then
+    echo "enabled_timers=${timer_units[*]}"
+  fi
 fi
 
 if [[ "$START" -eq 1 ]]; then
   for unit in "${units[@]}"; do
     $SUDO systemctl restart "$unit"
   done
+  for unit in "${timer_units[@]}"; do
+    $SUDO systemctl restart "$unit"
+  done
   echo "restarted_units=${units[*]}"
+  if [[ "${#timer_units[@]}" -gt 0 ]]; then
+    echo "restarted_timers=${timer_units[*]}"
+  fi
 fi
 
 echo "done=1"

@@ -79,6 +79,8 @@ make hf-download-watchdog # print auto-restart wrapper for stalled/exited HF dow
 make sync-warm   # sync raw/training data + artifacts to warm storage
 make hydrate-warm # hydrate hot workspace from warm storage
 make offload-zim # continuously move raw ZIMs hot -> warm
+make checkpoint-offload-prune # sync checkpoints to warm and prune older local runs
+make set-swappiness # print vm.swappiness tuning usage (root)
 make hf-prepare-publish # print HF bundle/publish usage
 make hf-download-model # print full HF model download usage
 make serve-openai # print local OpenAI-compatible server usage
@@ -559,6 +561,8 @@ bash scripts/train_supervisor_rtx5070_350bt.sh \
 ```
 For continuous 350BT ingestion/training, keep exactly one stage watchdog and one train supervisor running.
 Avoid launching one-off `llm.cli train --max-steps ...` jobs in parallel with the supervisor.
+Stage watchdog now performs stale worker cleanup before relaunch, so restarted controllers
+do not leave orphan shard-build workers behind.
 Supervisor now runs a manifest dedupe pass before each train chunk launch
 (`scripts/fineweb_manifest_dedupe.py`, keep strategy `newest`) that disables exact duplicate
 manifest file-sets and reports partial overlaps for review.
@@ -602,6 +606,7 @@ This is a live-only monitor (no report/status files written) and includes:
 - manifest coverage status (`unique/510`, overlap inputs/manifests, coverage rate + ETA, completion flag)
 - supervisor gate status (for example waiting on `min_unique_input_files`)
 - running project task states with pid/runtime/cpu/mem summaries
+- alert rows for stage-controller health and shard-manifest stall conditions
 
 It refreshes in-place (full-screen mode). If your terminal does not handle full-screen
 escape codes well, add `--no-alt-screen`.
@@ -619,13 +624,20 @@ Templates:
 - `deploy/systemd/llm-fineweb-stage-shard-loop.service`
 - `deploy/systemd/llm-fineweb-stage-shard-watchdog.service`
 - `deploy/systemd/llm-hf-download-watchdog.service`
+- `deploy/systemd/llm-checkpoint-offload-prune.service`
+- `deploy/systemd/llm-checkpoint-offload-prune.timer`
+- `deploy/systemd/llm-vm-swappiness.service`
 
 Environment template:
 - `deploy/systemd/llm.env.example` (installed to `/etc/llm/llm.env`)
 
 Recommended `LLM_STAGE_SHARD_LOOP_ARGS` baseline for 20-core hosts:
 ```bash
-LLM_STAGE_SHARD_LOOP_ARGS="--hot-queue-min-files 12 --stage-max-files 10 --stage-copy-jobs 2 --stage-min-free-gib 80 --process-max-files 10 --shard-jobs 2 --auto-tune-shard-jobs --auto-tune-min-shard-jobs 1 --auto-tune-max-shard-jobs 4 --auto-tune-min-batch-seconds 300 --tokenizer-threads 10 --encode-batch-size 1024 --shard-size-tokens 20000000 --sync-background --sync-max-inflight 2 --sleep-seconds 60 --shard-min-batch-size 512"
+LLM_STAGE_SHARD_LOOP_ARGS="--hot-queue-min-files 10 --stage-max-files 8 --stage-copy-jobs 4 --stage-min-free-gib 80 --process-max-files 15 --shard-jobs 2 --auto-tune-shard-jobs --auto-tune-min-shard-jobs 2 --auto-tune-max-shard-jobs 3 --auto-tune-low-load-pct 80 --auto-tune-high-load-pct 95 --auto-tune-min-batch-seconds 300 --tokenizer-threads 10 --encode-batch-size 1024 --shard-size-tokens 20000000 --sync-background --sync-max-inflight 2 --sleep-seconds 60 --shard-min-batch-size 512"
+```
+Recommended stage watchdog wrapper:
+```bash
+LLM_STAGE_SHARD_WATCHDOG_ARGS="--worker-args \"${LLM_STAGE_SHARD_LOOP_ARGS}\" --check-interval-seconds 120 --stall-seconds 5400 --watchdog-log-file artifacts/reports/fineweb_stage_shard_loop/watchdog.log"
 ```
 
 ## Inference Bundle Packaging
@@ -665,6 +677,17 @@ This now syncs training-critical inputs/outputs including:
 `data/raw_zim`, `data/fineweb`, `data/cleaned`, `data/extracted`,
 `data/shards`, `data/shards_global`, `artifacts/tokenizer`,
 `artifacts/checkpoints`, and `artifacts/reports`.
+- Periodic checkpoint offload + local prune:
+```bash
+bash scripts/checkpoint_offload_prune.sh \
+  --local-checkpoints-dir artifacts/checkpoints \
+  --warm-checkpoints-dir /mnt/ceph/llm/data/checkpoints \
+  --keep-local-runs 1
+```
+- VM swappiness tuning (root):
+```bash
+sudo bash scripts/set_swappiness.sh --value 10 --persist
+```
 - Continuous ZIM offload worker (hot -> warm):
 ```bash
 bash scripts/zim_offload_worker.sh data/raw_zim /mnt/ceph/llm/data/raw_zim 120

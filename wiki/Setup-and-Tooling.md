@@ -33,6 +33,8 @@ make install-systemd-services
 make sync-warm
 make hydrate-warm
 make offload-zim
+make checkpoint-offload-prune
+make set-swappiness
 ```
 
 `make sync-warm` now includes raw/training inputs (`data/raw_zim`, `data/fineweb`,
@@ -75,11 +77,16 @@ Units installed from `deploy/systemd/`:
 - `llm-fineweb-stage-shard-loop.service`
 - `llm-fineweb-stage-shard-watchdog.service`
 - `llm-hf-download-watchdog.service` (optional)
+- `llm-checkpoint-offload-prune.service`
+- `llm-checkpoint-offload-prune.timer`
+- `llm-vm-swappiness.service`
 
 `deploy/systemd/llm.env.example` includes tuned loop args for this host profile
-(`--stage-min-free-gib 80`, `--auto-tune-shard-jobs`, `--sync-background`,
-`--shard-size-tokens 20000000`). Override
-`LLM_STAGE_SHARD_LOOP_ARGS` in `/etc/llm/llm.env` if you want a different policy.
+(`--hot-queue-min-files 10`, `--stage-copy-jobs 4`, `--stage-min-free-gib 80`,
+`--auto-tune-shard-jobs`, `--sync-background`, `--shard-size-tokens 20000000`).
+Override `LLM_STAGE_SHARD_LOOP_ARGS` in `/etc/llm/llm.env` if you want a different policy.
+Set `LLM_CHECKPOINT_OFFLOAD_ARGS` for checkpoint warm-sync/prune policy and
+`LLM_SWAPPINESS=10` for VM tuning on boot.
 
 ## Wiki Publishing
 Wiki pages are source-controlled in `wiki/` and published with:

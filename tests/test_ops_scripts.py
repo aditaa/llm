@@ -1,8 +1,10 @@
 import json
+import os
 import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -74,6 +76,41 @@ class ScriptTests(unittest.TestCase):
         self.assertIn("--stage-min-free-gib", proc.stdout)
         self.assertIn("--auto-tune-shard-jobs", proc.stdout)
         self.assertIn("--sync-background", proc.stdout)
+
+    def test_stage_watchdog_help_lists_cleanup_option(self) -> None:
+        proc = subprocess.run(
+            ["bash", "scripts/fineweb_stage_shard_watchdog.sh", "--help"],
+            cwd=Path(__file__).resolve().parents[1],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(proc.returncode, 0, msg=proc.stderr)
+        self.assertIn("--no-cleanup-stale-workers", proc.stdout)
+
+    def test_checkpoint_offload_prune_help(self) -> None:
+        proc = subprocess.run(
+            ["bash", "scripts/checkpoint_offload_prune.sh", "--help"],
+            cwd=Path(__file__).resolve().parents[1],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(proc.returncode, 0, msg=proc.stderr)
+        self.assertIn("--keep-local-runs", proc.stdout)
+        self.assertIn("--sync-only", proc.stdout)
+
+    def test_set_swappiness_help(self) -> None:
+        proc = subprocess.run(
+            ["bash", "scripts/set_swappiness.sh", "--help"],
+            cwd=Path(__file__).resolve().parents[1],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(proc.returncode, 0, msg=proc.stderr)
+        self.assertIn("--value", proc.stdout)
+        self.assertIn("--persist", proc.stdout)
 
     def test_render_eval_trend_dashboard(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -237,6 +274,124 @@ class ScriptTests(unittest.TestCase):
             )
             self.assertEqual(proc.returncode, 0, msg=proc.stderr)
             self.assertIn("Supervisor: gate=waiting_train_tokens 123456/999999", proc.stdout)
+
+    def test_pipeline_live_view_alerts_when_stage_controller_missing(self) -> None:
+        if (
+            subprocess.run(
+                ["pgrep", "-af", "fineweb_stage_shard_loop.sh|fineweb_stage_shard_watchdog.sh"],
+                capture_output=True,
+                text=True,
+                check=False,
+            ).returncode
+            == 0
+        ):
+            self.skipTest("stage controller already running on host")
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            warm = root / "warm"
+            hot = root / "hot"
+            shards = root / "shards"
+            stage_dir = root / "stage"
+            sup_dir = root / "supervisor"
+            for path in [warm, hot, shards, stage_dir, sup_dir]:
+                path.mkdir(parents=True, exist_ok=True)
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    "scripts/pipeline_live_view.py",
+                    "--once",
+                    "--no-alt-screen",
+                    "--refresh-seconds",
+                    "0.1",
+                    "--warm-dir",
+                    str(warm),
+                    "--hot-dir",
+                    str(hot),
+                    "--shards-root",
+                    str(shards),
+                    "--stage-state-dir",
+                    str(stage_dir),
+                    "--supervisor-state-dir",
+                    str(sup_dir),
+                    "--manifest-stall-seconds",
+                    "1",
+                ],
+                cwd=Path(__file__).resolve().parents[1],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(proc.returncode, 0, msg=proc.stderr)
+            self.assertIn("ALERT: stage pipeline controller is not running", proc.stdout)
+
+    def test_pipeline_live_view_alerts_when_manifest_stalled(self) -> None:
+        if (
+            subprocess.run(
+                ["pgrep", "-af", "scripts/fineweb_parquet_to_shards.py"],
+                capture_output=True,
+                text=True,
+                check=False,
+            ).returncode
+            == 0
+        ):
+            self.skipTest("shard builders already running on host")
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            warm = root / "warm"
+            hot = root / "hot"
+            shards = root / "shards"
+            stage_dir = root / "stage"
+            sup_dir = root / "supervisor"
+            for path in [warm, hot, shards, stage_dir, sup_dir]:
+                path.mkdir(parents=True, exist_ok=True)
+
+            # Force one stale manifest while no sharder is active.
+            batch_dir = shards / "batch_0001"
+            batch_dir.mkdir(parents=True, exist_ok=True)
+            manifest_path = batch_dir / "manifest.json"
+            manifest_path.write_text("{}", encoding="utf-8")
+            old_ts = time.time() - 300
+            os.utime(manifest_path, (old_ts, old_ts))
+
+            dummy = subprocess.Popen(
+                ["bash", "-lc", "exec -a fineweb_stage_shard_loop.sh sleep 15"],
+                cwd=Path(__file__).resolve().parents[1],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            try:
+                proc = subprocess.run(
+                    [
+                        sys.executable,
+                        "scripts/pipeline_live_view.py",
+                        "--once",
+                        "--no-alt-screen",
+                        "--refresh-seconds",
+                        "0.1",
+                        "--warm-dir",
+                        str(warm),
+                        "--hot-dir",
+                        str(hot),
+                        "--shards-root",
+                        str(shards),
+                        "--stage-state-dir",
+                        str(stage_dir),
+                        "--supervisor-state-dir",
+                        str(sup_dir),
+                        "--manifest-stall-seconds",
+                        "1",
+                    ],
+                    cwd=Path(__file__).resolve().parents[1],
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+                self.assertEqual(proc.returncode, 0, msg=proc.stderr)
+                self.assertIn("ALERT: manifest count stalled", proc.stdout)
+            finally:
+                dummy.terminate()
+                dummy.wait(timeout=5)
 
     @unittest.skipIf(shutil.which("timeout") is None, "timeout is required")
     def test_train_supervisor_waits_on_train_token_gate(self) -> None:

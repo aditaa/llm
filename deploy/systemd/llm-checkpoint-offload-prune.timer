@@ -1,0 +1,12 @@
+[Unit]
+Description=LLM Checkpoint Offload/Prune Schedule
+
+[Timer]
+OnBootSec=10m
+OnUnitActiveSec=30m
+AccuracySec=1m
+Persistent=true
+Unit=llm-checkpoint-offload-prune.service
+
+[Install]
+WantedBy=timers.target

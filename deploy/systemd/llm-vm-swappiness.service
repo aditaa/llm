@@ -1,0 +1,12 @@
+[Unit]
+Description=LLM VM Swappiness Tuning
+After=multi-user.target
+
+[Service]
+Type=oneshot
+EnvironmentFile=-/etc/llm/llm.env
+ExecStart=/bin/bash -lc 'target="${LLM_SWAPPINESS:-10}"; [[ "$target" =~ ^[0-9]+$ ]] || { echo "invalid LLM_SWAPPINESS=$target"; exit 2; }; if command -v sysctl >/dev/null 2>&1; then sysctl -w "vm.swappiness=$target"; else /usr/sbin/sysctl -w "vm.swappiness=$target"; fi'
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

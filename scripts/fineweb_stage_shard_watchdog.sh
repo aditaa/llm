@@ -18,17 +18,19 @@ Options:
   --hot-parquet-dir DIR          Hot parquet directory for progress snapshot
   --shards-root DIR              Shards root for progress snapshot
   --processed-file FILE          Stage-loop processed parquet state file
+  --no-cleanup-stale-workers     Do not terminate stale loop/shard workers before relaunch
   -h, --help                     Show help
 USAGE
 }
 
-WORKER_ARGS="--hot-queue-min-files 12 --stage-max-files 10 --stage-copy-jobs 2 --stage-min-free-gib 80 --process-max-files 10 --shard-jobs 2 --auto-tune-shard-jobs --auto-tune-min-shard-jobs 1 --auto-tune-max-shard-jobs 4 --auto-tune-min-batch-seconds 300 --tokenizer-threads 10 --encode-batch-size 1024 --shard-size-tokens 20000000 --sync-background --sync-max-inflight 2 --sleep-seconds 60 --shard-min-batch-size 512"
+WORKER_ARGS="--hot-queue-min-files 10 --stage-max-files 8 --stage-copy-jobs 4 --stage-min-free-gib 80 --process-max-files 15 --shard-jobs 2 --auto-tune-shard-jobs --auto-tune-min-shard-jobs 2 --auto-tune-max-shard-jobs 3 --auto-tune-low-load-pct 80 --auto-tune-high-load-pct 95 --auto-tune-min-batch-seconds 300 --tokenizer-threads 10 --encode-batch-size 1024 --shard-size-tokens 20000000 --sync-background --sync-max-inflight 2 --sleep-seconds 60 --shard-min-batch-size 512"
 WATCHDOG_LOG_FILE="artifacts/reports/fineweb_stage_shard_loop/watchdog.log"
 CHECK_INTERVAL_SECONDS=120
 STALL_SECONDS=1800
 HOT_PARQUET_DIR="data/fineweb/sample-350BT/sample/350BT"
 SHARDS_ROOT="data/shards_global/fineweb-global-bpe-v1"
 PROCESSED_FILE="artifacts/reports/fineweb_stage_shard_loop/processed_parquet_files.txt"
+CLEANUP_STALE_WORKERS=1
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -59,6 +61,10 @@ while [[ $# -gt 0 ]]; do
     --processed-file)
       PROCESSED_FILE="${2:-}"
       shift 2
+      ;;
+    --no-cleanup-stale-workers)
+      CLEANUP_STALE_WORKERS=0
+      shift
       ;;
     -h|--help)
       usage
@@ -105,7 +111,72 @@ progress_snapshot() {
 
 WORKER_PID=""
 
+terminate_pid_list() {
+  local reason="$1"
+  shift
+  local pids=("$@")
+  local pid
+  for pid in "${pids[@]}"; do
+    [[ -z "$pid" ]] && continue
+    if ! [[ "$pid" =~ ^[0-9]+$ ]]; then
+      continue
+    fi
+    if [[ "$pid" -eq "$$" ]]; then
+      continue
+    fi
+    if kill -0 "$pid" 2>/dev/null; then
+      log "stale_worker_stop pid=$pid reason=$reason"
+      kill -TERM "$pid" 2>/dev/null || true
+    fi
+  done
+  sleep 2
+  for pid in "${pids[@]}"; do
+    [[ -z "$pid" ]] && continue
+    if ! [[ "$pid" =~ ^[0-9]+$ ]]; then
+      continue
+    fi
+    if [[ "$pid" -eq "$$" ]]; then
+      continue
+    fi
+    if kill -0 "$pid" 2>/dev/null; then
+      kill -KILL "$pid" 2>/dev/null || true
+      log "stale_worker_killed pid=$pid reason=$reason"
+    fi
+  done
+}
+
+cleanup_stale_workers() {
+  if [[ "$CLEANUP_STALE_WORKERS" -ne 1 ]]; then
+    return
+  fi
+  local -a loop_pids=()
+  local -a shard_pids=()
+  local line pid
+
+  while IFS= read -r line; do
+    [[ -z "$line" ]] && continue
+    pid="${line%% *}"
+    [[ "$pid" == "$$" ]] && continue
+    loop_pids+=("$pid")
+  done < <(pgrep -af "scripts/fineweb_stage_shard_loop.sh" || true)
+
+  while IFS= read -r line; do
+    [[ -z "$line" ]] && continue
+    pid="${line%% *}"
+    [[ "$pid" == "$$" ]] && continue
+    shard_pids+=("$pid")
+  done < <(pgrep -af "scripts/fineweb_parquet_to_shards.py --input-dir $HOT_PARQUET_DIR" || true)
+
+  if [[ "${#loop_pids[@]}" -gt 0 ]]; then
+    terminate_pid_list "watchdog_cleanup_loop" "${loop_pids[@]}"
+  fi
+  if [[ "${#shard_pids[@]}" -gt 0 ]]; then
+    terminate_pid_list "watchdog_cleanup_sharder" "${shard_pids[@]}"
+  fi
+}
+
 start_worker() {
+  cleanup_stale_workers
   # Launch worker in its own session so stop_worker can terminate the full process group.
   (
     # Prevent watchdog lock FD from being inherited by worker descendants.

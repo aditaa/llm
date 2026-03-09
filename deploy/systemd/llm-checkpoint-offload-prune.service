@@ -1,0 +1,14 @@
+[Unit]
+Description=LLM Checkpoint Offload And Local Prune
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=__USER__
+WorkingDirectory=__REPO_DIR__
+EnvironmentFile=-/etc/llm/llm.env
+ExecStart=/bin/bash -lc 'cd __REPO_DIR__ && exec bash scripts/checkpoint_offload_prune.sh ${LLM_CHECKPOINT_OFFLOAD_ARGS:-"--local-checkpoints-dir artifacts/checkpoints --warm-checkpoints-dir /mnt/ceph/llm/data/checkpoints --keep-local-runs 1"}'
+Nice=10
+IOSchedulingClass=idle
+NoNewPrivileges=true

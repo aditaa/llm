@@ -50,6 +50,8 @@ Use the `Makefile` as the source of truth:
 - `make pipeline-eta`: usage helper for combined download + sharding + training ETA/status reporting
 - `make pipeline-live`: usage helper for a live terminal pipeline dashboard
 - `make shard-corpus-batch`: usage helper for batch sharding with a shared tokenizer
+- `make checkpoint-offload-prune`: usage helper for checkpoint warm sync + local prune policy
+- `make set-swappiness`: usage helper for host swappiness tuning (root)
 - `make hf-download-resumable`: usage helper for self-healing Hugging Face resume-download worker
 - `make hf-download-watchdog`: usage helper for watchdog auto-restart around stalled/exited HF download workers
 - `make hf-prepare-publish`: usage helper for Hugging Face release bundle/publish
@@ -63,6 +65,7 @@ CI/CD workflows:
 - `.github/workflows/ci.yml`: lint, typecheck, tests, smoke, and gate job
 - `.github/workflows/wiki-sync.yml`: publishes wiki pages on `main` doc changes
 - `.github/dependabot.yml`: weekly dependency update PRs for `pip`, `requirements/`, and GitHub Actions
+- maintenance units: `deploy/systemd/llm-checkpoint-offload-prune.service` + `.timer`, `deploy/systemd/llm-vm-swappiness.service`
 
 ## Coding Style & Naming Conventions
 - Python 3.10+, 4-space indentation, UTF-8 files
@@ -131,6 +134,7 @@ Keep PR scope narrow; split refactors and features into separate PRs.
 - For unattended long 350BT ingestion, run `scripts/fineweb_stage_shard_watchdog.sh` to auto-restart stage-loop worker exits/stalls
 - For long shard batches, use a higher stage-watchdog stall timeout (for example `--stall-seconds 5400`) to avoid false restarts mid-batch
 - `fineweb_stage_shard_watchdog.sh` enforces a singleton lock and stops worker process groups (not only the parent shell)
+- `fineweb_stage_shard_watchdog.sh` now also cleans stale stage-loop/shard-worker processes before relaunch so only one controller remains active
 - Use `fineweb_stage_shard_loop.sh --hot-queue-min-files <N>` to keep a bounded hot parquet queue and reduce sharder copy stalls
 - Use `fineweb_stage_shard_loop.sh --stage-copy-jobs <N>` to forward parallel staging copy workers into each stage cycle
 - Use `fineweb_stage_shard_loop.sh --stage-min-free-gib <N>` so staging never drives hot disk below a free-space guardrail
@@ -179,6 +183,8 @@ Keep PR scope narrow; split refactors and features into separate PRs.
 - Prefer `llm.cli train --lr-schedule cosine --lr-warmup-steps <N>` for stable first-pass runs
 - Use `--grad-accum-steps` when VRAM is tight and you need higher effective batch
 - Keep disk use bounded with `llm.cli train --checkpoint-keep-last <N> --checkpoint-keep-every <M>`
+- Use `scripts/checkpoint_offload_prune.sh` to sync checkpoint runs to warm storage and prune older local runs (keep active + newest local)
+- Tune host swap behavior with `sudo bash scripts/set_swappiness.sh --value 10 --persist` (or set `LLM_SWAPPINESS=10` in `/etc/llm/llm.env` for systemd)
 - For context-extension continuation, resume with `llm.cli train --allow-context-extension --context-length 1024 ...`
 - Use EMA for long runs with `--ema-decay 0.999 --ema-start-step <warmup_end>` and generate with `--use-ema` when present
 - Keep held-out eval batches frozen (default) and enable regression gating with `--fail-on-eval-regression`

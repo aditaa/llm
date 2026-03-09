@@ -57,6 +57,7 @@ class ScriptTests(unittest.TestCase):
         )
         self.assertEqual(proc.returncode, 0, msg=proc.stderr)
         self.assertIn("--min-unique-input-files", proc.stdout)
+        self.assertIn("--min-train-tokens", proc.stdout)
         self.assertIn("--dedupe-report-keep", proc.stdout)
 
     def test_stage_loop_help_lists_stage_copy_jobs(self) -> None:
@@ -182,6 +183,59 @@ class ScriptTests(unittest.TestCase):
             )
             self.assertEqual(proc.returncode, 0, msg=proc.stderr)
             self.assertIn("Supervisor: gate=waiting_unique_inputs 27/510", proc.stdout)
+
+    def test_pipeline_live_view_reports_train_token_gate(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            warm = root / "warm"
+            hot = root / "hot"
+            shards = root / "shards"
+            stage_dir = root / "stage"
+            sup_dir = root / "supervisor"
+            for path in [warm, hot, shards, stage_dir, sup_dir]:
+                path.mkdir(parents=True, exist_ok=True)
+
+            (sup_dir / "supervisor_20260309_120000.log").write_text(
+                (
+                    "[2026-03-09T12:00:01-05:00] "
+                    "waiting_for_train_tokens have_tokens=123456 need_tokens=999999 "
+                    "unique_inputs=51 overlap_inputs=0 overlap_manifests=0 sleep=60s\n"
+                ),
+                encoding="utf-8",
+            )
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    "scripts/pipeline_live_view.py",
+                    "--once",
+                    "--no-alt-screen",
+                    "--refresh-seconds",
+                    "0.1",
+                    "--warm-dir",
+                    str(warm),
+                    "--hot-dir",
+                    str(hot),
+                    "--shards-root",
+                    str(shards),
+                    "--stage-state-dir",
+                    str(stage_dir),
+                    "--supervisor-state-dir",
+                    str(sup_dir),
+                    "--expected-parquet-files",
+                    "510",
+                    "--expected-bytes",
+                    "1061360917731",
+                    "--train-target-step",
+                    "100000",
+                ],
+                cwd=Path(__file__).resolve().parents[1],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(proc.returncode, 0, msg=proc.stderr)
+            self.assertIn("Supervisor: gate=waiting_train_tokens 123456/999999", proc.stdout)
 
 
 @unittest.skipIf(torch is None, "torch is not installed")

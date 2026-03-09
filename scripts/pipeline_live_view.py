@@ -29,6 +29,7 @@ class SampleState:
 STEP_RE = re.compile(r"step=(\d+)\b")
 WAIT_MANIFESTS_RE = re.compile(r"waiting_for_manifests have=(\d+) need=(\d+)")
 WAIT_UNIQUE_RE = re.compile(r"waiting_for_unique_inputs have=(\d+) need=(\d+)")
+WAIT_TRAIN_TOKENS_RE = re.compile(r"waiting_for_train_tokens have_tokens=(\d+) need_tokens=(\d+)")
 
 
 def parse_args() -> argparse.Namespace:
@@ -195,6 +196,9 @@ def _latest_supervisor_gate(supervisor_state_dir: Path) -> str:
             continue
         lines = [line.strip() for line in text.splitlines() if line.strip()]
         for line in reversed(lines):
+            m = WAIT_TRAIN_TOKENS_RE.search(line)
+            if m:
+                return f"waiting_train_tokens {m.group(1)}/{m.group(2)}"
             m = WAIT_UNIQUE_RE.search(line)
             if m:
                 return f"waiting_unique_inputs {m.group(1)}/{m.group(2)}"

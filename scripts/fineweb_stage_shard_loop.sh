@@ -17,6 +17,9 @@ TOKENIZER_THREADS=10
 SHARD_JOBS=1
 SHARD_RETRY_ON_OOM=1
 SHARD_RESTAGE_ON_CORRUPT=1
+DEEP_VALIDATE_STAGE_NEW_FILES=1
+DEEP_VALIDATE_MAX_BATCHES=8
+DEEP_VALIDATE_BATCH_SIZE=65536
 SHARD_MIN_BATCH_SIZE=512
 SHARD_SIZE_TOKENS=20000000
 VAL_RATIO=0.01
@@ -132,6 +135,15 @@ Options:
   --no-shard-restage-on-corrupt
                               Disable one-time warm->hot restage retry on
                               corrupt-parquet shard failures
+  --no-deep-validate-stage-new-files
+                              Skip deep parquet content checks on newly staged
+                              files (default: enabled)
+  --deep-validate-max-batches N
+                              Per-file batch scan cap for deep validation
+                              (default: 8, 0 = full scan)
+  --deep-validate-batch-size N
+                              Batch size for deep parquet validation scan
+                              (default: 65536)
   --shard-min-batch-size N    Lower bound for batch-size backoff on OOM (default: 512)
   --shard-size-tokens N       Tokens per output shard (default: 5000000)
   --val-ratio X               Validation ratio (default: 0.01)
@@ -313,6 +325,18 @@ while [[ $# -gt 0 ]]; do
       SHARD_RESTAGE_ON_CORRUPT=0
       shift
       ;;
+    --no-deep-validate-stage-new-files)
+      DEEP_VALIDATE_STAGE_NEW_FILES=0
+      shift
+      ;;
+    --deep-validate-max-batches)
+      DEEP_VALIDATE_MAX_BATCHES="$2"
+      shift 2
+      ;;
+    --deep-validate-batch-size)
+      DEEP_VALIDATE_BATCH_SIZE="$2"
+      shift 2
+      ;;
     --shard-min-batch-size)
       SHARD_MIN_BATCH_SIZE="$2"
       shift 2
@@ -412,6 +436,8 @@ require_positive_int "batch-size" "$BATCH_SIZE"
 require_positive_int "encode-batch-size" "$ENCODE_BATCH_SIZE"
 require_positive_int "tokenizer-threads" "$TOKENIZER_THREADS"
 require_positive_int "shard-jobs" "$SHARD_JOBS"
+require_nonneg_int "deep-validate-max-batches" "$DEEP_VALIDATE_MAX_BATCHES"
+require_positive_int "deep-validate-batch-size" "$DEEP_VALIDATE_BATCH_SIZE"
 require_positive_int "shard-min-batch-size" "$SHARD_MIN_BATCH_SIZE"
 require_positive_int "shard-size-tokens" "$SHARD_SIZE_TOKENS"
 require_nonneg_int "min-chars" "$MIN_CHARS"
@@ -830,6 +856,19 @@ count_hot_eligible_files() {
   echo "$count"
 }
 
+list_hot_eligible_files() {
+  local -n out_ref="$1"
+  out_ref=()
+  mapfile -t hot_files < <(find "$HOT_PARQUET_DIR" -maxdepth 1 -type f -name '*.parquet' -printf '%f\n' | sort)
+  local name
+  for name in "${hot_files[@]}"; do
+    if is_bad_parquet_name "$name" || is_processed_parquet_name "$name"; then
+      continue
+    fi
+    out_ref+=("$name")
+  done
+}
+
 mark_bad_parquet() {
   local parquet_path="$1"
   local reason="$2"
@@ -982,6 +1021,42 @@ if field not in table.schema.names:
 PY
 }
 
+validate_parquet_file_deep() {
+  local parquet_path="$1"
+  local field_name="$2"
+  local scan_batch_size="$3"
+  local scan_max_batches="$4"
+  PYTHONPATH=src .venv/bin/python - "$parquet_path" "$field_name" "$scan_batch_size" "$scan_max_batches" <<'PY'
+import sys
+from pyarrow import parquet as pq
+
+path = sys.argv[1]
+field = sys.argv[2]
+batch_size = int(sys.argv[3])
+max_batches = int(sys.argv[4])
+
+table = pq.ParquetFile(path)
+meta = table.metadata
+if meta is None or meta.num_row_groups <= 0:
+    raise RuntimeError("missing row groups")
+if meta.num_rows <= 0:
+    raise RuntimeError("no rows")
+if field not in table.schema.names:
+    raise RuntimeError(f"missing field '{field}'")
+
+batches = 0
+for batch in table.iter_batches(columns=[field], batch_size=batch_size):
+    # Force decode of payload buffers so snappy/page corruption is surfaced early.
+    _ = batch.column(0).to_pylist()
+    batches += 1
+    if max_batches > 0 and batches >= max_batches:
+        break
+
+if batches <= 0:
+    raise RuntimeError("no batches decoded")
+PY
+}
+
 preflight_selected_files() {
   local -n in_ref="$1"
   local -n out_ref="$2"
@@ -1053,9 +1128,17 @@ stage_once() {
 
   local hot_count
   local eligible_hot_count
+  local -a eligible_before=()
+  local -a eligible_after=()
+  local -A eligible_before_set=()
   hot_count="$(find "$HOT_PARQUET_DIR" -maxdepth 1 -type f -name '*.parquet' | wc -l | tr -d ' ')"
   eligible_hot_count="$(count_hot_eligible_files)"
   local stage_files="$STAGE_MAX_FILES"
+  list_hot_eligible_files eligible_before
+  local name
+  for name in "${eligible_before[@]}"; do
+    eligible_before_set["$name"]=1
+  done
 
   if [[ "$HOT_QUEUE_MIN_FILES" -gt 0 ]]; then
     if [[ "$eligible_hot_count" -ge "$HOT_QUEUE_MIN_FILES" ]]; then
@@ -1107,6 +1190,33 @@ stage_once() {
     )
   fi
   log "stage_done"
+
+  if [[ "$DRY_RUN" -eq 1 || "$DEEP_VALIDATE_STAGE_NEW_FILES" -ne 1 ]]; then
+    return 0
+  fi
+
+  list_hot_eligible_files eligible_after
+  local checked=0
+  local failed=0
+  for name in "${eligible_after[@]}"; do
+    if [[ -n "${eligible_before_set[$name]+x}" ]]; then
+      continue
+    fi
+    local hot_path="$HOT_PARQUET_DIR/$name"
+    checked=$((checked + 1))
+    if validate_parquet_file_deep "$hot_path" "$FIELD" "$DEEP_VALIDATE_BATCH_SIZE" "$DEEP_VALIDATE_MAX_BATCHES" >> "$LOG_FILE" 2>&1; then
+      log "stage_deep_validate_ok file=$name batches=$DEEP_VALIDATE_MAX_BATCHES batch_size=$DEEP_VALIDATE_BATCH_SIZE"
+      continue
+    fi
+    failed=$((failed + 1))
+    mark_bad_parquet "$hot_path" "stage_deep_validation_failed"
+  done
+  if [[ "$checked" -gt 0 ]]; then
+    log "stage_deep_validate_done checked=$checked failed=$failed max_batches=$DEEP_VALIDATE_MAX_BATCHES batch_size=$DEEP_VALIDATE_BATCH_SIZE"
+    if [[ "$failed" -gt 0 ]]; then
+      refresh_stage_skip_list
+    fi
+  fi
 }
 
 select_unprocessed_files() {
@@ -1518,7 +1628,7 @@ process_batch() {
 }
 
 log "loop_start warm_parquet_dir=$WARM_PARQUET_DIR hot_parquet_dir=$HOT_PARQUET_DIR"
-log "loop_config shards_root=$SHARDS_ROOT tokenizer_path=$TOKENIZER_PATH iterations=$ITERATIONS hot_queue_min_files=$HOT_QUEUE_MIN_FILES stage_copy_jobs=$STAGE_COPY_JOBS stage_min_free_gib=$STAGE_MIN_FREE_GIB shard_jobs=$SHARD_JOBS tokenizer_threads=$TOKENIZER_THREADS shard_size_tokens=$SHARD_SIZE_TOKENS shard_retry_on_oom=$SHARD_RETRY_ON_OOM shard_restage_on_corrupt=$SHARD_RESTAGE_ON_CORRUPT sync_to_warm=$SYNC_TO_WARM sync_background=$SYNC_BACKGROUND sync_max_inflight=$SYNC_MAX_INFLIGHT auto_tune_shard_jobs=$AUTO_TUNE_SHARD_JOBS auto_tune_bounds=${AUTO_TUNE_MIN_SHARD_JOBS}-${AUTO_TUNE_MAX_SHARD_JOBS} auto_tune_load_pct=${AUTO_TUNE_LOW_LOAD_PCT}-${AUTO_TUNE_HIGH_LOAD_PCT} auto_tune_core_budget=$AUTO_TUNE_CORE_BUDGET auto_tune_stage_copy_jobs=$AUTO_TUNE_STAGE_COPY_JOBS auto_tune_copy_bounds=${AUTO_TUNE_MIN_COPY_JOBS}-${AUTO_TUNE_MAX_COPY_JOBS} auto_tune_iowait_pct=${AUTO_TUNE_IOWAIT_LOW_PCT}-${AUTO_TUNE_IOWAIT_HIGH_PCT} expected_unique_input_files=$EXPECTED_UNIQUE_INPUT_FILES coverage_complete_mode=$COVERAGE_COMPLETE_MODE coverage_complete_sleep_seconds=$COVERAGE_COMPLETE_SLEEP_SECONDS bad_parquet_file=$BAD_PARQUET_FILE quarantine_dir=$QUARANTINE_DIR"
+log "loop_config shards_root=$SHARDS_ROOT tokenizer_path=$TOKENIZER_PATH iterations=$ITERATIONS hot_queue_min_files=$HOT_QUEUE_MIN_FILES stage_copy_jobs=$STAGE_COPY_JOBS stage_min_free_gib=$STAGE_MIN_FREE_GIB shard_jobs=$SHARD_JOBS tokenizer_threads=$TOKENIZER_THREADS shard_size_tokens=$SHARD_SIZE_TOKENS shard_retry_on_oom=$SHARD_RETRY_ON_OOM shard_restage_on_corrupt=$SHARD_RESTAGE_ON_CORRUPT deep_validate_stage_new_files=$DEEP_VALIDATE_STAGE_NEW_FILES deep_validate_max_batches=$DEEP_VALIDATE_MAX_BATCHES deep_validate_batch_size=$DEEP_VALIDATE_BATCH_SIZE sync_to_warm=$SYNC_TO_WARM sync_background=$SYNC_BACKGROUND sync_max_inflight=$SYNC_MAX_INFLIGHT auto_tune_shard_jobs=$AUTO_TUNE_SHARD_JOBS auto_tune_bounds=${AUTO_TUNE_MIN_SHARD_JOBS}-${AUTO_TUNE_MAX_SHARD_JOBS} auto_tune_load_pct=${AUTO_TUNE_LOW_LOAD_PCT}-${AUTO_TUNE_HIGH_LOAD_PCT} auto_tune_core_budget=$AUTO_TUNE_CORE_BUDGET auto_tune_stage_copy_jobs=$AUTO_TUNE_STAGE_COPY_JOBS auto_tune_copy_bounds=${AUTO_TUNE_MIN_COPY_JOBS}-${AUTO_TUNE_MAX_COPY_JOBS} auto_tune_iowait_pct=${AUTO_TUNE_IOWAIT_LOW_PCT}-${AUTO_TUNE_IOWAIT_HIGH_PCT} expected_unique_input_files=$EXPECTED_UNIQUE_INPUT_FILES coverage_complete_mode=$COVERAGE_COMPLETE_MODE coverage_complete_sleep_seconds=$COVERAGE_COMPLETE_SLEEP_SECONDS bad_parquet_file=$BAD_PARQUET_FILE quarantine_dir=$QUARANTINE_DIR"
 trap 'on_loop_signal INT' INT
 trap 'on_loop_signal TERM' TERM
 reconcile_bad_parquet_from_warm

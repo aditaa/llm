@@ -163,6 +163,7 @@ Keep PR scope narrow; split refactors and features into separate PRs.
 - `fineweb_stage_shard_loop.sh` now preflights selected parquet files and quarantines failures into `artifacts/reports/fineweb_stage_shard_loop/quarantine_bad_parquet/`
 - Known-bad parquet basenames are tracked in `artifacts/reports/fineweb_stage_shard_loop/bad_parquet_files.txt` and skipped in future stage cycles
 - On shard-build non-OOM corruption failures, `fineweb_stage_shard_loop.sh` now attempts one warm->hot restage retry for that job before quarantining inputs as bad
+- Stage-loop now deep-validates newly staged parquet files before shard build (`--deep-validate-max-batches`, `--deep-validate-batch-size`) and quarantines early failures as `stage_deep_validation_failed`
 - On startup, `fineweb_stage_shard_loop.sh` reconciles bad parquet entries against warm-source validity to avoid permanent false-positive skips
 - `fineweb_stage_shard_loop.sh` now bootstraps processed parquet basenames from existing manifests at startup, merges `processed + bad` into a stage skip list, and removes known files from hot storage before staging
 - Stage-loop batch guardrails now require valid report + manifest + non-empty shard files before marking files as processed/purging hot copies

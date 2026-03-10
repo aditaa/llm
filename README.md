@@ -299,6 +299,9 @@ processed or purged from hot storage.
 If a shard build fails with non-OOM corruption errors (for example parquet decode errors),
 the loop first attempts a one-time warm->hot restage retry for that job's inputs.
 If retry still fails, inputs are quarantined as bad and the loop continues with remaining files.
+Additionally, newly staged parquet files are deep-validated before shard build
+(configurable via `--deep-validate-max-batches` and `--deep-validate-batch-size`)
+to catch decode corruption earlier and quarantine files sooner.
 Guardrail checks are implemented in `src/llm/fineweb_guardrails.py` and are unit-tested.
 For 20-core hosts, `--shard-jobs 2 --tokenizer-threads 10 --encode-batch-size 1024` is the
 current high-throughput profile.

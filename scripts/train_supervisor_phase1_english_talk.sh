@@ -4,6 +4,7 @@ set -euo pipefail
 # Phase-1 profile: optimize for English conversational quality before code specialization.
 # You can override any default by appending flags when invoking this script.
 exec bash scripts/train_supervisor_rtx5070_350bt.sh \
+  --state-dir artifacts/reports/train_supervisor_phase1_talk \
   --step-chunk 2000 \
   --poll-seconds 60 \
   --batch-size 12 \
@@ -19,6 +20,8 @@ exec bash scripts/train_supervisor_rtx5070_350bt.sh \
   --eval-suite configs/eval/english_talk_suite_v1.json \
   --eval-promotion-policy configs/eval/promotion_policy_talk_v1.json \
   --generation-suite configs/eval/generation_talk_smoke_v1.json \
+  --generation-temperature 0.2 \
+  --generation-top-k 1 \
   --generation-every-chunks 1 \
   --no-train-fail-on-eval-regression \
   "$@"

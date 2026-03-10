@@ -172,6 +172,8 @@ Keep PR scope narrow; split refactors and features into separate PRs.
 - Use `--no-train-fail-on-eval-regression` in supervisor when you want train chunks to continue and rely on post-chunk prompt-suite gates
 - Supervisor baseline selection now matches the active suite (`suite_name`/`suite_path`) for both eval and generation gates so suite changes do not compare against mismatched historical reports
 - For phase-1 talking quality, use `scripts/train_supervisor_phase1_english_talk.sh` (`english_talk_suite_v1` + `generation_talk_smoke_v1`) before code-specialization passes
+- Phase-1 launcher writes supervisor state to `artifacts/reports/train_supervisor_phase1_talk`; pass `--supervisor-state-dir` accordingly to pipeline status tools
+- Phase-1 launcher uses lower-variance generation gating (`--generation-temperature 0.2 --generation-top-k 1`)
 - On 12 GB RTX 5070 profiles, start supervisor with `--batch-size 12 --target-effective-batch 24 --min-batch-size 6 --max-batch-size 20 --batch-step 2` to avoid early OOM churn
 - Supervisor writes chunk trends to `artifacts/reports/train_supervisor_350bt/train_trend.tsv` and post-chunk eval trends to `artifacts/reports/train_supervisor_350bt/eval_trend.tsv`
 - Supervisor also writes scheduled generation-gate trends to `artifacts/reports/train_supervisor_350bt/generation_trend.tsv`

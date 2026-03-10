@@ -574,6 +574,12 @@ bash scripts/train_supervisor_phase1_english_talk.sh
 This uses `configs/eval/english_talk_suite_v1.json`,
 `configs/eval/generation_talk_smoke_v1.json`, and
 `configs/eval/promotion_policy_talk_v1.json`.
+It also uses a dedicated state dir (`artifacts/reports/train_supervisor_phase1_talk`) and
+lower-variance generation-gate settings (`--generation-temperature 0.2 --generation-top-k 1`).
+When monitoring this profile, point status tools at that state dir:
+`PYTHONPATH=src .venv/bin/python scripts/pipeline_live_view.py --supervisor-state-dir artifacts/reports/train_supervisor_phase1_talk`
+and
+`PYTHONPATH=src .venv/bin/python scripts/pipeline_eta_report.py --supervisor-state-dir artifacts/reports/train_supervisor_phase1_talk`.
 For continuous 350BT ingestion/training, keep exactly one stage watchdog and one train supervisor running.
 Avoid launching one-off `llm.cli train --max-steps ...` jobs in parallel with the supervisor.
 Stage watchdog now performs stale worker cleanup before relaunch, so restarted controllers

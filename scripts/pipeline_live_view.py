@@ -441,6 +441,36 @@ def _manifest_input_coverage(shards_root: Path) -> tuple[int, int, int]:
     return (len(file_counts), overlap_inputs, overlap_manifests)
 
 
+def _manifest_hot_state(shards_root: Path) -> tuple[int, int, int]:
+    if not shards_root.exists():
+        return (0, 0, 0)
+    active_manifests = sorted(shards_root.rglob("manifest.json"))
+    offloaded_manifests = list(shards_root.rglob("manifest.offloaded.json"))
+    active_with_symlink_bins = 0
+    for manifest_path in active_manifests:
+        try:
+            payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        rels: list[str] = []
+        for split in ("train", "val"):
+            split_meta = payload.get(split, {})
+            if not isinstance(split_meta, dict):
+                continue
+            shards = split_meta.get("shards", [])
+            if not isinstance(shards, list):
+                continue
+            for row in shards:
+                if not isinstance(row, dict):
+                    continue
+                rel = row.get("path")
+                if isinstance(rel, str) and rel.strip():
+                    rels.append(rel)
+        if any((manifest_path.parent / rel).is_symlink() for rel in rels):
+            active_with_symlink_bins += 1
+    return (len(active_manifests), len(offloaded_manifests), active_with_symlink_bins)
+
+
 def _cpu_snapshot() -> tuple[int, int]:
     with open("/proc/stat", "r", encoding="utf-8") as handle:
         line = handle.readline().strip()
@@ -748,7 +778,11 @@ def _render(
     manifest_unique_inputs, manifest_overlap_inputs, manifest_overlap_manifests = (
         _manifest_input_coverage(shards_root)
     )
+    active_manifests, offloaded_manifests, active_symlink_manifests = _manifest_hot_state(
+        shards_root
+    )
     processed_parquet = _count_nonempty_lines(stage_state)
+    trained_batch_count = _count_nonempty_lines(sup_dir / "trained_batch_names.txt")
     train_step = _latest_train_step(sup_dir)
     train_target_step = _effective_train_target_step(args.train_target_step, sup_dir, train_step)
     supervisor_gate = _latest_supervisor_gate(sup_dir)
@@ -935,6 +969,11 @@ def _render(
         alerts.append(f"multiple trainers detected ({task_counts.get('trainer', 0)})")
     if task_counts.get("trainer", 0) > 0 and task_counts.get("train-supervisor", 0) == 0:
         alerts.append("trainer active without supervisor process")
+    if active_symlink_manifests > 0:
+        alerts.append(
+            f"active manifests include symlink bins ({active_symlink_manifests}); "
+            "training may stall on Ceph reads"
+        )
     if (
         not coverage_complete
         and task_counts.get("stage-loop", 0) > 0
@@ -996,6 +1035,12 @@ def _render(
     lines.append(
         f"  Shards:   manifests={manifest_count} "
         f"download_file_eta={_eta(rem_files, download_pps)}"
+    )
+    lines.append(
+        f"  HotSet:   active_manifests={active_manifests} "
+        f"offloaded_manifests={offloaded_manifests} "
+        f"active_symlink_manifests={active_symlink_manifests} "
+        f"trained_batches={trained_batch_count}"
     )
     lines.append(
         f"  Coverage: manifest_unique={manifest_unique_inputs}/{args.expected_parquet_files} "

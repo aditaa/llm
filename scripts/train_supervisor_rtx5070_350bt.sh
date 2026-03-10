@@ -620,6 +620,54 @@ update_trained_batch_registry() {
   log "trained_batches_update step=$step trained_batches=$trained_count registry=$TRAINED_BATCHES_FILE"
 }
 
+backfill_trained_batch_registry() {
+  "$PYTHON_BIN" - <<'PY' "$TRAIN_TREND_TSV" "$STATE_DIR" "$TRAINED_BATCHES_FILE" >> "$SUP_LOG" 2>&1
+from pathlib import Path
+import sys
+
+trend_path = Path(sys.argv[1])
+state_dir = Path(sys.argv[2])
+registry_path = Path(sys.argv[3])
+
+existing: set[str] = set()
+if registry_path.exists():
+    for line in registry_path.read_text(encoding="utf-8", errors="replace").splitlines():
+        value = line.strip()
+        if value:
+            existing.add(value)
+
+added = 0
+if trend_path.exists():
+    for row in trend_path.read_text(encoding="utf-8", errors="replace").splitlines():
+        if not row or row.startswith("run_tag\t"):
+            continue
+        parts = row.split("\t")
+        if len(parts) < 5:
+            continue
+        run_tag = parts[0].strip()
+        rc = parts[4].strip()
+        if not run_tag or rc != "0":
+            continue
+        for chunk_file in sorted(state_dir.glob(f"chunk_batches_*_{run_tag}.txt")):
+            for line in chunk_file.read_text(encoding="utf-8", errors="replace").splitlines():
+                batch = line.strip()
+                if not batch or batch in existing:
+                    continue
+                existing.add(batch)
+                added += 1
+
+registry_path.parent.mkdir(parents=True, exist_ok=True)
+registry_path.write_text(
+    "".join(f"{name}\n" for name in sorted(existing)),
+    encoding="utf-8",
+)
+print(
+    f"trained_batches_backfill added={added} total={len(existing)} "
+    f"registry={registry_path}"
+)
+PY
+}
+
 manifest_coverage_counts() {
   "$PYTHON_BIN" - <<'PY' "$SHARDS_PATH"
 import json
@@ -667,6 +715,26 @@ overlap_manifests = sum(
 )
 print(len(file_to_manifests), overlap_inputs, overlap_manifests, train_tokens)
 PY
+}
+
+run_hot_manifest_guard() {
+  local guard_report="$STATE_DIR/hot_manifest_guard_latest.json"
+  local guard_out
+  set +e
+  guard_out="$(
+    PYTHONPATH=src \
+    "$PYTHON_BIN" scripts/enforce_hot_only_manifests.py \
+      --shards-root "$SHARDS_PATH" \
+      --report-output "$guard_report" \
+      2>&1
+  )"
+  local rc=$?
+  set -e
+  if [[ "$rc" -ne 0 ]]; then
+    log "hot_manifest_guard_failed rc=$rc detail=$(echo "$guard_out" | tr '\n' ' ')"
+    return 0
+  fi
+  log "$guard_out"
 }
 
 run_manifest_dedupe() {
@@ -1134,10 +1202,12 @@ failure_streak=0
 successful_chunks=0
 log "supervisor_start shards_path=$SHARDS_PATH output_dir=$OUTPUT_DIR step_chunk=$STEP_CHUNK"
 log "tuning_start batch_size=$BATCH_SIZE grad_accum=$GRAD_ACCUM_STEPS auto_tune=$AUTO_TUNE target_effective_batch=$TARGET_EFFECTIVE_BATCH train_fail_on_eval_regression=$TRAIN_FAIL_ON_EVAL_REGRESSION checkpoint_keep_last=$CHECKPOINT_KEEP_LAST checkpoint_keep_every=$CHECKPOINT_KEEP_EVERY allow_context_extension=$ALLOW_CONTEXT_EXTENSION ema_decay=$EMA_DECAY ema_update_every=$EMA_UPDATE_EVERY ema_start_step=$EMA_START_STEP generation_gate=$GENERATION_GATE generation_every_chunks=$GENERATION_EVERY_CHUNKS generation_stop_on_fail=$GENERATION_STOP_ON_FAIL dedupe_overlap_manifests=$DEDUPE_OVERLAP_MANIFESTS dedupe_keep=$DEDUPE_KEEP dedupe_dry_run=$DEDUPE_DRY_RUN min_train_tokens=$MIN_TRAIN_TOKENS"
+backfill_trained_batch_registry
 ensure_single_supervisor_process
 
 while true; do
   ensure_single_supervisor_process
+  run_hot_manifest_guard
   run_manifest_dedupe
   prune_manifest_dedupe_artifacts
   mcount="$(manifest_count)"

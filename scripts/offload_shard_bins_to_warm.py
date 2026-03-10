@@ -89,6 +89,24 @@ def parse_args() -> argparse.Namespace:
             "Useful to guarantee a batch was already included in a successful train chunk."
         ),
     )
+    parser.add_argument(
+        "--min-active-manifests",
+        type=int,
+        default=0,
+        help=(
+            "When --disable-offloaded-manifests is enabled, keep at least this many "
+            "active manifest.json batches visible to training (default: 0)"
+        ),
+    )
+    parser.add_argument(
+        "--min-active-train-tokens",
+        type=int,
+        default=0,
+        help=(
+            "When --disable-offloaded-manifests is enabled, keep at least this many "
+            "aggregate train tokens in active manifest.json batches (default: 0)"
+        ),
+    )
     return parser.parse_args()
 
 
@@ -125,6 +143,26 @@ def _manifest_shard_relpaths(manifest_path: Path) -> list[Path]:
         seen.add(rel)
         uniq.append(rel)
     return uniq
+
+
+def _manifest_train_tokens(manifest_path: Path) -> int:
+    payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    train_meta = payload.get("train")
+    total = 0
+    if not isinstance(train_meta, dict):
+        return 0
+    top_total = train_meta.get("total_tokens")
+    if isinstance(top_total, int):
+        return max(0, top_total)
+    shards = train_meta.get("shards")
+    if isinstance(shards, list):
+        for row in shards:
+            if not isinstance(row, dict):
+                continue
+            tokens = row.get("tokens")
+            if isinstance(tokens, int):
+                total += max(0, tokens)
+    return total
 
 
 def _batch_sort_key(batch_dir: Path) -> float:
@@ -228,6 +266,8 @@ def main() -> int:
 
     free_before = _free_bytes(shards_root)
     target_free_bytes = int(args.target_free_gib) * 1024 * 1024 * 1024
+    min_active_manifests = max(0, int(args.min_active_manifests))
+    min_active_train_tokens = max(0, int(args.min_active_train_tokens))
 
     batch_dirs = _iter_manifest_dirs(shards_root)
     batch_dirs = sorted(batch_dirs, key=_batch_sort_key, reverse=True)
@@ -255,6 +295,17 @@ def main() -> int:
     total_freed = 0
     manifests_disabled = 0
     skipped_untrained = 0
+    skipped_floor_manifests = 0
+    skipped_floor_tokens = 0
+    active_manifests_current = len(batch_dirs)
+    active_train_tokens_current = 0
+    if args.disable_offloaded_manifests and min_active_train_tokens > 0:
+        for batch_dir in batch_dirs:
+            manifest = batch_dir / "manifest.json"
+            try:
+                active_train_tokens_current += _manifest_train_tokens(manifest)
+            except Exception:
+                continue
 
     for batch_dir in candidates:
         if target_free_bytes > 0 and _free_bytes(shards_root) >= target_free_bytes:
@@ -296,6 +347,42 @@ def main() -> int:
             results.append(BatchResult(batch=batch_dir.name, status="skip_validation_failed", detail=detail))
             continue
 
+        batch_train_tokens = 0
+        if args.disable_offloaded_manifests and min_active_train_tokens > 0:
+            try:
+                batch_train_tokens = _manifest_train_tokens(manifest)
+            except Exception:
+                batch_train_tokens = 0
+
+        if args.disable_offloaded_manifests and min_active_manifests > 0:
+            projected_active = active_manifests_current - 1
+            if projected_active < min_active_manifests:
+                skipped_floor_manifests += 1
+                results.append(
+                    BatchResult(
+                        batch=batch_dir.name,
+                        status="skip_min_active_manifests",
+                        detail=f"projected_active={projected_active} min_active_manifests={min_active_manifests}",
+                    )
+                )
+                continue
+
+        if args.disable_offloaded_manifests and min_active_train_tokens > 0:
+            projected_tokens = active_train_tokens_current - batch_train_tokens
+            if projected_tokens < min_active_train_tokens:
+                skipped_floor_tokens += 1
+                results.append(
+                    BatchResult(
+                        batch=batch_dir.name,
+                        status="skip_min_active_train_tokens",
+                        detail=(
+                            f"projected_train_tokens={projected_tokens} "
+                            f"min_active_train_tokens={min_active_train_tokens}"
+                        ),
+                    )
+                )
+                continue
+
         batch_linked = 0
         batch_freed = 0
         for rel in relpaths:
@@ -317,6 +404,12 @@ def main() -> int:
             manifest_disabled = changed
             if changed:
                 manifests_disabled += 1
+                active_manifests_current = max(0, active_manifests_current - 1)
+                if min_active_train_tokens > 0:
+                    active_train_tokens_current = max(
+                        0,
+                        active_train_tokens_current - batch_train_tokens,
+                    )
             result_detail = disable_detail
 
         total_linked += batch_linked
@@ -343,6 +436,12 @@ def main() -> int:
         "bytes_freed_estimate": total_freed,
         "require_trained_batches_file": args.require_trained_batches_file,
         "skip_untrained_batch_count": skipped_untrained,
+        "min_active_manifests": min_active_manifests,
+        "min_active_train_tokens": min_active_train_tokens,
+        "skip_min_active_manifests_count": skipped_floor_manifests,
+        "skip_min_active_train_tokens_count": skipped_floor_tokens,
+        "active_manifests_remaining": active_manifests_current,
+        "active_train_tokens_remaining": active_train_tokens_current,
         "disable_offloaded_manifests": bool(args.disable_offloaded_manifests),
         "manifest_disabled_suffix": args.manifest_disabled_suffix,
         "manifests_disabled": manifests_disabled,
@@ -363,6 +462,8 @@ def main() -> int:
         f"linked={total_linked}",
         f"bytes_freed={total_freed}",
         f"skipped_untrained={skipped_untrained}",
+        f"skipped_floor_manifests={skipped_floor_manifests}",
+        f"skipped_floor_tokens={skipped_floor_tokens}",
         f"manifests_disabled={manifests_disabled}",
         f"free_before={free_before}",
         f"free_after={free_after}",

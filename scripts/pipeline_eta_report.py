@@ -301,6 +301,44 @@ def _manifest_input_coverage(shards_root: Path) -> dict[str, int]:
     }
 
 
+def _manifest_hot_state(shards_root: Path) -> dict[str, int]:
+    if not shards_root.exists():
+        return {
+            "active_manifests": 0,
+            "offloaded_manifests": 0,
+            "active_manifests_with_symlink_bins": 0,
+        }
+    active = sorted(shards_root.rglob("manifest.json"))
+    offloaded = list(shards_root.rglob("manifest.offloaded.json"))
+    active_with_symlink = 0
+    for manifest_path in active:
+        try:
+            payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        rels: list[str] = []
+        for split in ("train", "val"):
+            split_meta = payload.get(split, {})
+            if not isinstance(split_meta, dict):
+                continue
+            shards = split_meta.get("shards", [])
+            if not isinstance(shards, list):
+                continue
+            for row in shards:
+                if not isinstance(row, dict):
+                    continue
+                rel = row.get("path")
+                if isinstance(rel, str) and rel.strip():
+                    rels.append(rel)
+        if any((manifest_path.parent / rel).is_symlink() for rel in rels):
+            active_with_symlink += 1
+    return {
+        "active_manifests": len(active),
+        "offloaded_manifests": len(offloaded),
+        "active_manifests_with_symlink_bins": active_with_symlink,
+    }
+
+
 def _latest_supervisor_gate(supervisor_state_dir: Path) -> str:
     if not supervisor_state_dir.exists():
         return "unknown"
@@ -480,10 +518,12 @@ def collect_status(args: argparse.Namespace) -> dict[str, Any]:
     warm_bytes = _du_bytes(warm_dir)
     manifests = _count_find(shards_root, "manifest.json")
     manifest_coverage = _manifest_input_coverage(shards_root)
+    manifest_hot_state = _manifest_hot_state(shards_root)
     manifest_unique_inputs = int(manifest_coverage["unique_input_files"])
     manifest_overlap_inputs = int(manifest_coverage["overlap_input_files"])
     manifest_overlap_manifests = int(manifest_coverage["overlap_manifests"])
     sharded_parquet = _count_nonempty_lines(stage_state_dir / "processed_parquet_files.txt")
+    trained_batch_count = _count_nonempty_lines(sup_dir / "trained_batch_names.txt")
     train_step = _latest_train_step(sup_dir)
     train_target_step = _effective_train_target_step(args.train_target_step, sup_dir, train_step)
     supervisor_gate = _latest_supervisor_gate(sup_dir)
@@ -635,6 +675,12 @@ def collect_status(args: argparse.Namespace) -> dict[str, Any]:
             "manifest_overlap_input_files": manifest_overlap_inputs,
             "manifest_overlap_manifests": manifest_overlap_manifests,
             "manifest_parse_errors": int(manifest_coverage["manifest_parse_errors"]),
+            "active_manifests": int(manifest_hot_state["active_manifests"]),
+            "offloaded_manifests": int(manifest_hot_state["offloaded_manifests"]),
+            "active_manifests_with_symlink_bins": int(
+                manifest_hot_state["active_manifests_with_symlink_bins"]
+            ),
+            "trained_batch_names_count": trained_batch_count,
             "sharded_parquet_count": sharded_parquet,
             "train_step": train_step,
             "coverage_complete": coverage_complete,
@@ -729,6 +775,10 @@ def write_reports(status: dict[str, Any], output_json: Path, output_text: Path) 
             f" sharding={status['eta_human']['sharding']} manifest_unique_inputs={status['eta_human']['manifest_unique_inputs']} train={status['eta_human']['train']}",
             "coverage:"
             f" complete={int(m['coverage_complete'])} overlap_input_files={m['manifest_overlap_input_files']} overlap_manifests={m['manifest_overlap_manifests']}",
+            "hotset:"
+            f" active_manifests={m['active_manifests']} offloaded_manifests={m['offloaded_manifests']}"
+            f" active_manifests_with_symlink_bins={m['active_manifests_with_symlink_bins']}"
+            f" trained_batch_names_count={m['trained_batch_names_count']}",
             "active:"
             f" hf_watchdog={p['hf_watchdog']} download_worker={p['download_worker']} prefetch_worker={p['prefetch_worker']} stage_watchdog={p['stage_watchdog']} stage_loop={p['stage_loop']}"
             f" shard_builder={p['shard_builder']} train_supervisor={p['train_supervisor']}"

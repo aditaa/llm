@@ -578,6 +578,8 @@ It also uses a dedicated state dir (`artifacts/reports/train_supervisor_phase1_t
 lower-variance generation-gate settings (`--generation-temperature 0.2 --generation-top-k 1`).
 Successful chunks update `artifacts/reports/train_supervisor_phase1_talk/trained_batch_names.txt`,
 which can be used to gate shard offload so only already-trained batches move to warm storage.
+On each supervisor loop, hot-only manifest guard now runs automatically and disables any
+active manifest that references symlinked shard bins.
 When monitoring this profile, point status tools at that state dir:
 `PYTHONPATH=src .venv/bin/python scripts/pipeline_live_view.py --supervisor-state-dir artifacts/reports/train_supervisor_phase1_talk`
 and
@@ -622,6 +624,8 @@ Outputs:
 - `artifacts/reports/pipeline_status.txt`
 Includes embedded snapshots of `top -b -n1`, `free -h`, `nvidia-smi`, and `df -h`.
 Also reports manifest coverage metrics (`manifest_unique_input_files`, overlap counts, `coverage_complete`).
+Also reports hot-manifest metrics (`active_manifests`, `offloaded_manifests`,
+`active_manifests_with_symlink_bins`, `trained_batch_names_count`).
 Also includes per-task `RUN/STOP` state with stop reasons (for example `download complete`,
 `staging handled by stage-loop`, `idle between chunks/eval`, or gate waits).
 Task process counts are root-deduped (controller processes), so wrapper/child shells do not inflate `RUN xN`.
@@ -634,6 +638,7 @@ This is a live-only monitor (no report/status files written) and includes:
 - system status (CPU, memory, GPU, disk mounts)
 - pipeline progress (download/staging/sharding/training)
 - staging line includes `hot_parquet` and `hot_incomplete` to show active warm->hot copy progress
+- hot-set status (`active_manifests`, `offloaded_manifests`, `active_symlink_manifests`, `trained_batches`)
 - manifest coverage status (`unique/510`, overlap inputs/manifests, coverage rate + ETA, completion flag)
 - supervisor gate status (for example waiting on `min_unique_input_files`)
 - running project task states with pid/runtime/cpu/mem summaries
@@ -645,6 +650,7 @@ Coverage ETA/rate now falls back to sharding throughput when manifest overlap is
 ETA remains visible between manifest update bursts.
 Alerts also flag duplicate train controllers (`train-supervisor`/`trainer`) and unmanaged
 stage-loop runs (stage-loop active without stage-watchdog).
+Alerts also flag active manifests that still reference symlinked shard bins.
 The train supervisor also self-checks process singleton by PID age within the same
 `--state-dir` scope and exits newer duplicates, so accidental second launches do not persist.
 
@@ -705,13 +711,16 @@ PYTHONPATH=src .venv/bin/python scripts/offload_shard_bins_to_warm.py \
   --target-free-gib 180 \
   --max-batches 40 \
   --disable-offloaded-manifests \
-  --require-trained-batches-file artifacts/reports/train_supervisor_phase1_talk/trained_batch_names.txt
+  --require-trained-batches-file artifacts/reports/train_supervisor_phase1_talk/trained_batch_names.txt \
+  --min-active-manifests 48
 ```
 This replaces older local shard `.bin` files with warm-storage symlinks and renames
 their `manifest.json` to `manifest.offloaded.json`, so `llm.cli train` only sees
 local hot-disk manifests while disk usage stays bounded.
 The `--require-trained-batches-file` guard prevents offloading any batch that has
 not yet been included in a successful supervisor training chunk.
+Use `--min-active-manifests` (and optional `--min-active-train-tokens`) as an offload
+safety floor so hot-local training coverage never drops below your target.
 
 Environment template:
 - `deploy/systemd/llm.env.example` (installed to `/etc/llm/llm.env`)

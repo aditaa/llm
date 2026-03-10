@@ -267,7 +267,9 @@ def _manifest_input_coverage(shards_root: Path) -> dict[str, int]:
             "manifest_parse_errors": 0,
         }
 
-    manifests = sorted(shards_root.rglob("manifest.json"))
+    manifests = list(shards_root.rglob("manifest.json"))
+    manifests.extend(shards_root.rglob("manifest.offloaded.json"))
+    manifests = sorted(manifests)
     file_counts: dict[str, int] = {}
     per_manifest_files: list[set[str]] = []
     parse_errors = 0
@@ -384,6 +386,24 @@ def _offload_eligibility(
         "max_offloadable_batches": max_offloadable,
         "trained_registry_present": trained_registry_present,
     }
+
+
+def _default_offload_trained_file(
+    supervisor_state_dir: Path,
+    configured_path: str,
+) -> Path:
+    if configured_path:
+        return Path(configured_path)
+    primary = supervisor_state_dir / "trained_batch_names.txt"
+    if primary.exists():
+        return primary
+    phase1 = Path("artifacts/reports/train_supervisor_phase1_talk/trained_batch_names.txt")
+    if phase1.exists():
+        return phase1
+    standard = Path("artifacts/reports/train_supervisor_350bt/trained_batch_names.txt")
+    if standard.exists():
+        return standard
+    return primary
 
 
 def _latest_supervisor_gate(supervisor_state_dir: Path) -> str:
@@ -589,10 +609,9 @@ def collect_status(args: argparse.Namespace) -> dict[str, Any]:
     manifest_overlap_manifests = int(manifest_coverage["overlap_manifests"])
     sharded_parquet = _count_nonempty_lines(stage_state_dir / "processed_parquet_files.txt")
     trained_batch_count = _count_nonempty_lines(sup_dir / "trained_batch_names.txt")
-    offload_trained_file = (
-        Path(args.offload_trained_batches_file)
-        if args.offload_trained_batches_file
-        else (sup_dir / "trained_batch_names.txt")
+    offload_trained_file = _default_offload_trained_file(
+        sup_dir,
+        args.offload_trained_batches_file,
     )
     offload_eligibility = _offload_eligibility(
         shards_root,

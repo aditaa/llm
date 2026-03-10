@@ -285,6 +285,8 @@ It also reconciles `bad_parquet_files.txt` against warm-source parquet validity 
 transient hot-copy failures do not permanently blacklist valid warm files.
 `--hot-queue-min-files` keeps a small parquet queue staged locally so shard building is less likely to idle on copy waits.
 `--stage-copy-jobs` controls warm->hot copy parallelism for staging throughput.
+Stage copy workers can now auto-tune from queue deficit + host iowait
+(`--no-auto-tune-stage-copy-jobs` to pin manually).
 `--stage-min-free-gib` prevents staging from filling hot disk below a safety floor.
 `--auto-tune-shard-jobs` adapts `--shard-jobs` (and matching tokenizer threads) from loadavg + batch runtime.
 `--sync-background` overlaps warm-storage sync with the next shard batch to reduce idle gaps.
@@ -297,6 +299,8 @@ are quarantined as bad and the loop continues with remaining files.
 Guardrail checks are implemented in `src/llm/fineweb_guardrails.py` and are unit-tested.
 For 20-core hosts, `--shard-jobs 2 --tokenizer-threads 10 --encode-batch-size 1024` is the
 current high-throughput profile.
+After full coverage (`--expected-unique-input-files`, default `510`), the loop now
+switches into training-focused mode and pauses additional stage/shard churn.
 
 3ad. Optional watchdog for stage/shard loop auto-restart on exit/stall:
 ```bash
@@ -312,6 +316,8 @@ watchdog restarts do not leave direct loop runs unmanaged. Use `--no-adopt-exist
 to force launching a fresh worker process.
 Watchdog progress snapshots now include hot `.incomplete` file count/bytes, so long warm->hot
 copy phases are treated as active progress (not false stalls).
+Watchdog now also suppresses stall restarts after coverage completion
+(`--expected-unique-input-files`).
 
 3ad. Build tokenizer + token shards directly from FineWeb parquet:
 ```bash
@@ -628,6 +634,7 @@ Outputs:
 - `artifacts/reports/pipeline_status.txt`
 Includes embedded snapshots of `top -b -n1`, `free -h`, `nvidia-smi`, and `df -h`.
 Also reports manifest coverage metrics (`manifest_unique_input_files`, overlap counts, `coverage_complete`).
+Coverage metrics now include both active and offloaded manifests, so progress does not drop after safe offload.
 Also reports hot-manifest metrics (`active_manifests`, `offloaded_manifests`,
 `active_manifests_with_symlink_bins`, `trained_batch_names_count`).
 Also reports `trainer_stall_seconds` and shard offload eligibility
@@ -727,15 +734,21 @@ PYTHONPATH=src .venv/bin/python scripts/offload_shard_bins_to_warm.py \
   --target-free-gib 180 \
   --max-batches 40 \
   --disable-offloaded-manifests \
-  --require-trained-batches-file artifacts/reports/train_supervisor_phase1_talk/trained_batch_names.txt \
-  --min-active-manifests 48
+  --require-trained-batches-file artifacts/reports/train_supervisor_phase1_talk/trained_batch_names.txt,artifacts/reports/train_supervisor_350bt/trained_batch_names.txt \
+  --skip-if-trained-file-missing \
+  --min-manifest-unique-input-files 510 \
+  --min-active-manifests 48 \
+  --min-active-train-tokens 40000000000
 ```
 This replaces older local shard `.bin` files with warm-storage symlinks and renames
 their `manifest.json` to `manifest.offloaded.json`, so `llm.cli train` only sees
 local hot-disk manifests while disk usage stays bounded.
 The `--require-trained-batches-file` guard prevents offloading any batch that has
 not yet been included in a successful supervisor training chunk.
-Use `--min-active-manifests` (and optional `--min-active-train-tokens`) as an offload
+You can pass a comma-separated fallback list of trained-batch registry files
+(for example phase1 + standard state dirs).
+Use `--min-manifest-unique-input-files` to block offload until dataset coverage is complete.
+Use `--min-active-manifests` and `--min-active-train-tokens` as offload
 safety floor so hot-local training coverage never drops below your target.
 
 Environment template:
@@ -743,11 +756,11 @@ Environment template:
 
 Recommended `LLM_STAGE_SHARD_LOOP_ARGS` baseline for 20-core hosts:
 ```bash
-LLM_STAGE_SHARD_LOOP_ARGS="--hot-queue-min-files 10 --stage-max-files 8 --stage-copy-jobs 4 --stage-min-free-gib 80 --process-max-files 15 --shard-jobs 2 --auto-tune-shard-jobs --auto-tune-min-shard-jobs 2 --auto-tune-max-shard-jobs 3 --auto-tune-low-load-pct 80 --auto-tune-high-load-pct 95 --auto-tune-min-batch-seconds 300 --tokenizer-threads 10 --encode-batch-size 1024 --shard-size-tokens 20000000 --sync-background --sync-max-inflight 2 --sleep-seconds 60 --shard-min-batch-size 512"
+LLM_STAGE_SHARD_LOOP_ARGS="--hot-queue-min-files 10 --stage-max-files 8 --stage-copy-jobs 4 --stage-min-free-gib 80 --process-max-files 15 --shard-jobs 2 --auto-tune-shard-jobs --auto-tune-min-shard-jobs 2 --auto-tune-max-shard-jobs 3 --auto-tune-low-load-pct 80 --auto-tune-high-load-pct 95 --auto-tune-min-batch-seconds 300 --tokenizer-threads 10 --encode-batch-size 1024 --shard-size-tokens 20000000 --expected-unique-input-files 510 --coverage-complete-sleep-seconds 300 --sync-background --sync-max-inflight 2 --sleep-seconds 60 --shard-min-batch-size 512"
 ```
 Recommended stage watchdog wrapper:
 ```bash
-LLM_STAGE_SHARD_WATCHDOG_ARGS="--worker-args \"${LLM_STAGE_SHARD_LOOP_ARGS}\" --check-interval-seconds 120 --stall-seconds 5400 --watchdog-log-file artifacts/reports/fineweb_stage_shard_loop/watchdog.log"
+LLM_STAGE_SHARD_WATCHDOG_ARGS="--worker-args \"${LLM_STAGE_SHARD_LOOP_ARGS}\" --expected-unique-input-files 510 --check-interval-seconds 120 --stall-seconds 5400 --watchdog-log-file artifacts/reports/fineweb_stage_shard_loop/watchdog.log"
 ```
 
 ## Inference Bundle Packaging

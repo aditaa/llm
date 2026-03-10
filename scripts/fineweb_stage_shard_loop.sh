@@ -31,6 +31,9 @@ STAGE_COPY_JOBS=1
 STAGE_MIN_FREE_GIB=0
 HOT_QUEUE_MIN_FILES=8
 PROCESS_MAX_FILES=10
+EXPECTED_UNIQUE_INPUT_FILES=510
+COVERAGE_COMPLETE_MODE=1
+COVERAGE_COMPLETE_SLEEP_SECONDS=300
 
 AUTO_TUNE_SHARD_JOBS=0
 AUTO_TUNE_MIN_SHARD_JOBS=1
@@ -86,6 +89,12 @@ Options:
   --hot-queue-min-files N     Try to keep at least N parquet files staged on hot disk
                               (default: 8)
   --process-max-files N       Max staged files to shard per batch (default: 10)
+  --expected-unique-input-files N
+                              Coverage target for manifest unique input files
+                              (default: 510, 0 disables)
+  --no-coverage-complete-mode Disable training-focused mode switch after full coverage
+  --coverage-complete-sleep-seconds N
+                              Sleep interval after coverage completion (default: 300)
 
   --field NAME                Parquet text field (default: text)
   --batch-size N              Parquet read batch size (default: 8192)
@@ -206,6 +215,18 @@ while [[ $# -gt 0 ]]; do
       ;;
     --process-max-files)
       PROCESS_MAX_FILES="$2"
+      shift 2
+      ;;
+    --expected-unique-input-files)
+      EXPECTED_UNIQUE_INPUT_FILES="$2"
+      shift 2
+      ;;
+    --no-coverage-complete-mode)
+      COVERAGE_COMPLETE_MODE=0
+      shift
+      ;;
+    --coverage-complete-sleep-seconds)
+      COVERAGE_COMPLETE_SLEEP_SECONDS="$2"
       shift 2
       ;;
     --field)
@@ -377,6 +398,8 @@ require_positive_int "stage-copy-jobs" "$STAGE_COPY_JOBS"
 require_nonneg_int "stage-min-free-gib" "$STAGE_MIN_FREE_GIB"
 require_nonneg_int "hot-queue-min-files" "$HOT_QUEUE_MIN_FILES"
 require_nonneg_int "process-max-files" "$PROCESS_MAX_FILES"
+require_nonneg_int "expected-unique-input-files" "$EXPECTED_UNIQUE_INPUT_FILES"
+require_positive_int "coverage-complete-sleep-seconds" "$COVERAGE_COMPLETE_SLEEP_SECONDS"
 require_positive_int "batch-size" "$BATCH_SIZE"
 require_positive_int "encode-batch-size" "$ENCODE_BATCH_SIZE"
 require_positive_int "tokenizer-threads" "$TOKENIZER_THREADS"
@@ -505,6 +528,7 @@ declare -a ACTIVE_SHARD_PIDS=()
 SHOULD_STOP=0
 IOWAIT_PREV_TOTAL=""
 IOWAIT_PREV_WAIT=""
+COVERAGE_COMPLETE_REACHED=0
 
 retune_tokenizer_threads() {
   local jobs="$1"
@@ -651,6 +675,54 @@ maybe_auto_tune_stage_copy_jobs() {
 
   STAGE_COPY_JOBS="$desired"
   log "auto_tune_copy_update reason=$reason eligible_hot_count=$eligible_hot_count queue_min=$HOT_QUEUE_MIN_FILES deficit=$deficit iowait_pct=$iowait_pct copy_jobs=$old_jobs->$STAGE_COPY_JOBS"
+}
+
+manifest_unique_input_count() {
+  PYTHONPATH=src .venv/bin/python - "$SHARDS_ROOT" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+root = Path(sys.argv[1])
+unique: set[str] = set()
+manifests = list(root.rglob("manifest.json"))
+manifests.extend(root.rglob("manifest.offloaded.json"))
+for manifest_path in manifests:
+    try:
+        payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except Exception:
+        continue
+    raw_files = payload.get("input_files", [])
+    if not isinstance(raw_files, list):
+        continue
+    for raw in raw_files:
+        name = Path(str(raw)).name
+        if name:
+            unique.add(name)
+print(len(unique))
+PY
+}
+
+maybe_enter_coverage_complete_mode() {
+  if [[ "$COVERAGE_COMPLETE_MODE" -ne 1 ]]; then
+    return
+  fi
+  if [[ "$EXPECTED_UNIQUE_INPUT_FILES" -le 0 ]]; then
+    return
+  fi
+  local unique_inputs
+  unique_inputs="$(manifest_unique_input_count)"
+  if ! [[ "$unique_inputs" =~ ^[0-9]+$ ]]; then
+    return
+  fi
+  if [[ "$unique_inputs" -lt "$EXPECTED_UNIQUE_INPUT_FILES" ]]; then
+    return
+  fi
+  if [[ "$COVERAGE_COMPLETE_REACHED" -eq 1 ]]; then
+    return
+  fi
+  COVERAGE_COMPLETE_REACHED=1
+  log "coverage_complete_mode_enter unique_inputs=$unique_inputs expected=$EXPECTED_UNIQUE_INPUT_FILES action=pause_stage_and_shard"
 }
 
 is_bad_parquet_name() {
@@ -1354,7 +1426,7 @@ process_batch() {
 }
 
 log "loop_start warm_parquet_dir=$WARM_PARQUET_DIR hot_parquet_dir=$HOT_PARQUET_DIR"
-log "loop_config shards_root=$SHARDS_ROOT tokenizer_path=$TOKENIZER_PATH iterations=$ITERATIONS hot_queue_min_files=$HOT_QUEUE_MIN_FILES stage_copy_jobs=$STAGE_COPY_JOBS stage_min_free_gib=$STAGE_MIN_FREE_GIB shard_jobs=$SHARD_JOBS tokenizer_threads=$TOKENIZER_THREADS shard_size_tokens=$SHARD_SIZE_TOKENS sync_to_warm=$SYNC_TO_WARM sync_background=$SYNC_BACKGROUND sync_max_inflight=$SYNC_MAX_INFLIGHT auto_tune_shard_jobs=$AUTO_TUNE_SHARD_JOBS auto_tune_bounds=${AUTO_TUNE_MIN_SHARD_JOBS}-${AUTO_TUNE_MAX_SHARD_JOBS} auto_tune_load_pct=${AUTO_TUNE_LOW_LOAD_PCT}-${AUTO_TUNE_HIGH_LOAD_PCT} auto_tune_core_budget=$AUTO_TUNE_CORE_BUDGET auto_tune_stage_copy_jobs=$AUTO_TUNE_STAGE_COPY_JOBS auto_tune_copy_bounds=${AUTO_TUNE_MIN_COPY_JOBS}-${AUTO_TUNE_MAX_COPY_JOBS} auto_tune_iowait_pct=${AUTO_TUNE_IOWAIT_LOW_PCT}-${AUTO_TUNE_IOWAIT_HIGH_PCT} bad_parquet_file=$BAD_PARQUET_FILE quarantine_dir=$QUARANTINE_DIR"
+log "loop_config shards_root=$SHARDS_ROOT tokenizer_path=$TOKENIZER_PATH iterations=$ITERATIONS hot_queue_min_files=$HOT_QUEUE_MIN_FILES stage_copy_jobs=$STAGE_COPY_JOBS stage_min_free_gib=$STAGE_MIN_FREE_GIB shard_jobs=$SHARD_JOBS tokenizer_threads=$TOKENIZER_THREADS shard_size_tokens=$SHARD_SIZE_TOKENS sync_to_warm=$SYNC_TO_WARM sync_background=$SYNC_BACKGROUND sync_max_inflight=$SYNC_MAX_INFLIGHT auto_tune_shard_jobs=$AUTO_TUNE_SHARD_JOBS auto_tune_bounds=${AUTO_TUNE_MIN_SHARD_JOBS}-${AUTO_TUNE_MAX_SHARD_JOBS} auto_tune_load_pct=${AUTO_TUNE_LOW_LOAD_PCT}-${AUTO_TUNE_HIGH_LOAD_PCT} auto_tune_core_budget=$AUTO_TUNE_CORE_BUDGET auto_tune_stage_copy_jobs=$AUTO_TUNE_STAGE_COPY_JOBS auto_tune_copy_bounds=${AUTO_TUNE_MIN_COPY_JOBS}-${AUTO_TUNE_MAX_COPY_JOBS} auto_tune_iowait_pct=${AUTO_TUNE_IOWAIT_LOW_PCT}-${AUTO_TUNE_IOWAIT_HIGH_PCT} expected_unique_input_files=$EXPECTED_UNIQUE_INPUT_FILES coverage_complete_mode=$COVERAGE_COMPLETE_MODE coverage_complete_sleep_seconds=$COVERAGE_COMPLETE_SLEEP_SECONDS bad_parquet_file=$BAD_PARQUET_FILE quarantine_dir=$QUARANTINE_DIR"
 trap 'on_loop_signal INT' INT
 trap 'on_loop_signal TERM' TERM
 reconcile_bad_parquet_from_warm
@@ -1369,6 +1441,13 @@ while true; do
   fi
   if [[ "$SYNC_BACKGROUND" -eq 1 ]]; then
     prune_sync_jobs
+  fi
+  maybe_enter_coverage_complete_mode
+  if [[ "$COVERAGE_COMPLETE_REACHED" -eq 1 ]]; then
+    drain_sync_jobs
+    log "coverage_complete_idle sleep_seconds=$COVERAGE_COMPLETE_SLEEP_SECONDS"
+    sleep "$COVERAGE_COMPLETE_SLEEP_SECONDS"
+    continue
   fi
   purge_hot_known_files
   selected=()

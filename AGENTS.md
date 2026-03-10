@@ -124,7 +124,7 @@ Keep PR scope narrow; split refactors and features into separate PRs.
 - `sync_warm_storage.sh` covers raw + training data: `data/raw_zim`, `data/fineweb`, `data/cleaned`, `data/extracted`, `data/shards`, `data/shards_global`, `artifacts/tokenizer`, `artifacts/checkpoints`, `artifacts/reports`
 - Use `bash scripts/zim_offload_worker.sh data/raw_zim /mnt/ceph/llm/data/raw_zim 120` for continuous hot->warm raw ZIM offload
 - Use `bash scripts/hydrate_from_warm_storage.sh /mnt/ceph/llm/data` to restore local artifacts from warm storage
-- Use `python3 scripts/offload_shard_bins_to_warm.py --disable-offloaded-manifests --require-trained-batches-file <state_dir>/trained_batch_names.txt --min-active-manifests <N> [--min-active-train-tokens <TOKENS>]` to move only already-trained older shard bins to warm storage while keeping active manifests hot-local only
+- Use `python3 scripts/offload_shard_bins_to_warm.py --disable-offloaded-manifests --require-trained-batches-file <phase1_state>/trained_batch_names.txt,<standard_state>/trained_batch_names.txt --skip-if-trained-file-missing --min-manifest-unique-input-files <N> --min-active-manifests <N> --min-active-train-tokens <TOKENS>` to move only already-trained older shard bins to warm storage while keeping active manifests hot-local only
 - For bounded external pulls (for example FineWeb samples), use `python3 scripts/pull_hf_rows.py` and write to warm storage first
 - For long-running Hugging Face parquet pulls, use `scripts/hf_download_resumable.sh` instead of one-shot `hf download` (prefer `--enable-hf-transfer`, `--max-workers 6`, `--skip-dry-run`, and `--attempt-timeout-seconds` for 350BT-scale pulls)
 - For unattended long pulls, prefer `scripts/hf_download_watchdog.sh` to restart stalled/exited resumable workers based on progress checks (`--stall-seconds`, `--check-interval-seconds`)
@@ -136,7 +136,9 @@ Keep PR scope narrow; split refactors and features into separate PRs.
 - Use `stage_fineweb_from_warm.sh --min-free-gib <N>` to keep a hot-disk free-space floor during staging
 - Use `stage_fineweb_from_warm.sh --skip-list <bad_file_list>` to avoid re-staging known-bad parquet basenames
 - For long-running 350BT ingestion on limited hot disk, use `scripts/fineweb_stage_shard_loop.sh` for staged processing and automatic hot-space reclaim
+- `fineweb_stage_shard_loop.sh` supports automatic training-focused mode after full coverage (`--expected-unique-input-files 510` + default coverage-complete mode) to pause staging/sharding churn once all inputs are represented
 - For unattended long 350BT ingestion, run `scripts/fineweb_stage_shard_watchdog.sh` to auto-restart stage-loop worker exits/stalls
+- `fineweb_stage_shard_watchdog.sh` now holds worker restarts when manifest unique-input coverage reaches target (`--expected-unique-input-files`)
 - For long shard batches, use a higher stage-watchdog stall timeout (for example `--stall-seconds 5400`) to avoid false restarts mid-batch
 - `fineweb_stage_shard_watchdog.sh` enforces a singleton lock in the stage state dir (`watchdog.lock`) and stops worker process groups (not only the parent shell)
 - `fineweb_stage_shard_watchdog.sh` progress snapshot includes hot `.incomplete` file count/bytes so active warm->hot copy phases are not treated as stalls

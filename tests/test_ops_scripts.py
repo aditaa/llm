@@ -79,6 +79,7 @@ class ScriptTests(unittest.TestCase):
         self.assertIn("--stage-min-free-gib", proc.stdout)
         self.assertIn("--auto-tune-shard-jobs", proc.stdout)
         self.assertIn("--no-auto-tune-stage-copy-jobs", proc.stdout)
+        self.assertIn("--expected-unique-input-files", proc.stdout)
         self.assertIn("--sync-background", proc.stdout)
 
     def test_install_user_systemd_services_help(self) -> None:
@@ -103,6 +104,7 @@ class ScriptTests(unittest.TestCase):
         )
         self.assertEqual(proc.returncode, 0, msg=proc.stderr)
         self.assertIn("--no-cleanup-stale-workers", proc.stdout)
+        self.assertIn("--expected-unique-input-files", proc.stdout)
         self.assertIn("--lock-file", proc.stdout)
         self.assertIn("--no-adopt-existing-loop", proc.stdout)
 
@@ -259,6 +261,33 @@ class ScriptTests(unittest.TestCase):
         self.assertEqual(proc.returncode, 0, msg=proc.stderr)
         self.assertIn("--restage-valid", proc.stdout)
         self.assertIn("--no-rewrite-bad-list", proc.stdout)
+
+    def test_offload_shard_bins_skip_if_missing_trained_registry(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            shards_root = root / "shards"
+            warm_root = root / "warm"
+            shards_root.mkdir(parents=True, exist_ok=True)
+            warm_root.mkdir(parents=True, exist_ok=True)
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    "scripts/offload_shard_bins_to_warm.py",
+                    "--shards-root",
+                    str(shards_root),
+                    "--warm-shards-root",
+                    str(warm_root),
+                    "--require-trained-batches-file",
+                    str(root / "missing_trained.txt"),
+                    "--skip-if-trained-file-missing",
+                ],
+                cwd=Path(__file__).resolve().parents[1],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(proc.returncode, 0, msg=proc.stderr)
+            self.assertIn("shard_offload_skip", proc.stdout)
 
     def test_set_swappiness_help(self) -> None:
         proc = subprocess.run(
@@ -772,6 +801,57 @@ class ScriptTests(unittest.TestCase):
                 "sharding_fallback_no_overlap",
             )
             self.assertNotEqual(payload["eta_human"]["manifest_unique_inputs"], "unknown")
+
+    def test_pipeline_eta_report_counts_offloaded_manifests_in_coverage(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            warm = root / "warm"
+            shards = root / "shards"
+            stage_dir = root / "stage"
+            sup_dir = root / "supervisor"
+            for path in [warm, shards, stage_dir, sup_dir]:
+                path.mkdir(parents=True, exist_ok=True)
+
+            (shards / "batch_0001").mkdir(parents=True, exist_ok=True)
+            (shards / "batch_0001" / "manifest.offloaded.json").write_text(
+                json.dumps({"input_files": ["000_00077.parquet"]}),
+                encoding="utf-8",
+            )
+
+            out_json = root / "status.json"
+            out_txt = root / "status.txt"
+            state_json = root / "state.json"
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    "scripts/pipeline_eta_report.py",
+                    "--warm-dir",
+                    str(warm),
+                    "--shards-root",
+                    str(shards),
+                    "--stage-state-dir",
+                    str(stage_dir),
+                    "--supervisor-state-dir",
+                    str(sup_dir),
+                    "--expected-parquet-files",
+                    "10",
+                    "--expected-bytes",
+                    "100",
+                    "--output-json",
+                    str(out_json),
+                    "--output-text",
+                    str(out_txt),
+                    "--state-file",
+                    str(state_json),
+                ],
+                cwd=Path(__file__).resolve().parents[1],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(proc.returncode, 0, msg=proc.stderr)
+            payload = json.loads(out_json.read_text(encoding="utf-8"))
+            self.assertEqual(payload["metrics"]["manifest_unique_input_files"], 1)
 
     def test_pipeline_live_view_uses_eta_status_rate_fallback(self) -> None:
         if (

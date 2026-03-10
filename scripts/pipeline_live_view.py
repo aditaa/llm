@@ -209,7 +209,9 @@ def _latest_manifest_mtime(shards_root: Path) -> float | None:
     if not shards_root.exists():
         return None
     latest: float | None = None
-    for manifest_path in shards_root.rglob("manifest.json"):
+    manifests = list(shards_root.rglob("manifest.json"))
+    manifests.extend(shards_root.rglob("manifest.offloaded.json"))
+    for manifest_path in manifests:
         try:
             mtime = manifest_path.stat().st_mtime
         except OSError:
@@ -443,7 +445,9 @@ def _latest_supervisor_gate(supervisor_state_dir: Path) -> str:
 def _manifest_input_coverage(shards_root: Path) -> tuple[int, int, int]:
     if not shards_root.exists():
         return (0, 0, 0)
-    manifests = sorted(shards_root.rglob("manifest.json"))
+    manifests = list(shards_root.rglob("manifest.json"))
+    manifests.extend(shards_root.rglob("manifest.offloaded.json"))
+    manifests = sorted(manifests)
     file_counts: dict[str, int] = {}
     per_manifest: list[set[str]] = []
     for manifest_path in manifests:
@@ -532,6 +536,24 @@ def _offload_eligibility(
     max_offloadable = max(0, len(batch_names) - max(0, min_active_manifests))
     effective_eligible = min(raw_eligible, max_offloadable)
     return (effective_eligible, raw_eligible, max_offloadable, trained_registry_present)
+
+
+def _default_offload_trained_file(
+    supervisor_state_dir: Path,
+    configured_path: str,
+) -> Path:
+    if configured_path:
+        return Path(configured_path)
+    primary = supervisor_state_dir / "trained_batch_names.txt"
+    if primary.exists():
+        return primary
+    phase1 = Path("artifacts/reports/train_supervisor_phase1_talk/trained_batch_names.txt")
+    if phase1.exists():
+        return phase1
+    standard = Path("artifacts/reports/train_supervisor_350bt/trained_batch_names.txt")
+    if standard.exists():
+        return standard
+    return primary
 
 
 def _cpu_snapshot() -> tuple[int, int]:
@@ -854,11 +876,7 @@ def _render(
     )
     processed_parquet = _count_nonempty_lines(stage_state)
     trained_batch_count = _count_nonempty_lines(sup_dir / "trained_batch_names.txt")
-    offload_trained_file = (
-        Path(args.offload_trained_batches_file)
-        if args.offload_trained_batches_file
-        else (sup_dir / "trained_batch_names.txt")
-    )
+    offload_trained_file = _default_offload_trained_file(sup_dir, args.offload_trained_batches_file)
     (
         offload_eligible_batches,
         offload_eligible_raw,

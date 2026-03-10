@@ -599,6 +599,7 @@ Combined pipeline ETA/status reporter:
 ```bash
 PYTHONPATH=src .venv/bin/python scripts/pipeline_eta_report.py --loop --interval-seconds 60
 ```
+Use `--once` for explicit single-snapshot mode (default behavior when `--loop` is not set).
 Outputs:
 - `artifacts/reports/pipeline_status.json`
 - `artifacts/reports/pipeline_status.txt`
@@ -621,6 +622,7 @@ This is a live-only monitor (no report/status files written) and includes:
 - running project task states with pid/runtime/cpu/mem summaries
 - explicit stop reasons for tasks that are not running
 - alert rows for stage-controller health and shard-manifest stall conditions
+- training ETA fallback from `pipeline_status.json` (`--eta-status-file`) when live step deltas are temporarily flat
 
 Coverage ETA/rate now falls back to sharding throughput when manifest overlap is zero, so
 ETA remains visible between manifest update bursts.

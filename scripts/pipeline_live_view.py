@@ -75,6 +75,17 @@ def parse_args() -> argparse.Namespace:
         help="Comma-separated mount paths for disk usage rows",
     )
     parser.add_argument("--top-procs", type=int, default=5)
+    parser.add_argument(
+        "--eta-status-file",
+        default="artifacts/reports/pipeline_status.json",
+        help="Optional pipeline_eta_report JSON for step-rate fallback when live sampling is flat",
+    )
+    parser.add_argument(
+        "--eta-status-max-age-seconds",
+        type=int,
+        default=300,
+        help="Maximum age for eta-status-file fallback data",
+    )
     parser.add_argument("--no-alt-screen", action="store_true")
     parser.add_argument("--once", action="store_true")
     return parser.parse_args()
@@ -342,6 +353,37 @@ def _latest_generation_summary(supervisor_state_dir: Path) -> tuple[str, str, st
     if len(parts) < 9:
         return ("NA", "NA", "NA")
     return (parts[2], parts[3], parts[8])
+
+
+def _eta_status_train_rate(status_path: Path, max_age_seconds: int, now_ts: float) -> float | None:
+    if max_age_seconds <= 0 or not status_path.exists():
+        return None
+    try:
+        payload = json.loads(status_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+
+    rates = payload.get("rates")
+    if not isinstance(rates, dict):
+        return None
+    raw_rate = rates.get("train_steps_per_sec")
+    if not isinstance(raw_rate, (int, float)):
+        return None
+    rate = float(raw_rate)
+    if rate <= 0:
+        return None
+
+    raw_ts = payload.get("timestamp_utc")
+    if not isinstance(raw_ts, str) or not raw_ts.strip():
+        return None
+    try:
+        parsed = datetime.fromisoformat(raw_ts.replace("Z", "+00:00"))
+        age_seconds = max(0.0, now_ts - parsed.timestamp())
+    except ValueError:
+        return None
+    if age_seconds > float(max_age_seconds):
+        return None
+    return rate
 
 
 def _latest_supervisor_gate(supervisor_state_dir: Path) -> str:
@@ -738,6 +780,15 @@ def _render(
         train_sps = state.train_sps_estimate
         if train_sps is not None:
             train_rate_note = " (rolling)"
+    if train_sps is None or train_sps <= 0:
+        eta_rate = _eta_status_train_rate(
+            Path(args.eta_status_file),
+            int(args.eta_status_max_age_seconds),
+            now,
+        )
+        if eta_rate is not None:
+            train_sps = eta_rate
+            train_rate_note = " (from eta-report)"
 
     if coverage_pps is None:
         if state.coverage_change_value is None:

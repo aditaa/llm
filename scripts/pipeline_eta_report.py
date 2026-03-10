@@ -445,6 +445,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--command-timeout-seconds", type=int, default=20)
     parser.add_argument("--command-max-lines", type=int, default=200)
     parser.add_argument("--interval-seconds", type=int, default=60)
+    parser.add_argument(
+        "--once",
+        action="store_true",
+        help="Run one snapshot and exit (same behavior as default when --loop is unset)",
+    )
     parser.add_argument("--loop", action="store_true")
     return parser.parse_args()
 
@@ -752,6 +757,8 @@ def write_reports(status: dict[str, Any], output_json: Path, output_text: Path) 
 
 def main() -> int:
     args = parse_args()
+    if args.once:
+        args.loop = False
     output_json = Path(args.output_json)
     output_text = Path(args.output_text)
     state_path = Path(args.state_file)

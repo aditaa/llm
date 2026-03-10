@@ -175,9 +175,11 @@ Keep PR scope narrow; split refactors and features into separate PRs.
 - Supervisor also renders `artifacts/reports/train_supervisor_350bt/eval_dashboard.html` and exports `best.pt` aliases after successful eval promotions
 - Use `--generation-suite configs/eval/generation_smoke_suite_v1.json` and `--generation-every-chunks <N>` to run prompt-generation drift gates every chunk (or every N chunks)
 - Use `scripts/pipeline_eta_report.py --loop` for combined ETA snapshots in `artifacts/reports/pipeline_status.{json,txt}` (includes `top`, `free -h`, `nvidia-smi`, and `df -h` captures)
+- `pipeline_eta_report.py` accepts `--once` for explicit single-snapshot mode
 - `pipeline_eta_report.py` also tracks manifest coverage quality (`manifest_unique_input_files`, overlap counts, `coverage_complete`)
 - `pipeline_eta_report.py` now includes per-task `RUN/STOP` state with stop reasons and `supervisor_gate` in JSON/text output
 - Use `scripts/pipeline_live_view.py --refresh-seconds 5` for a live-only terminal monitor (system + pipeline task status, no report writes; includes watchdog/prefetch/stage-loop/generation-gate task rows; add `--no-alt-screen` if needed)
+- `pipeline_live_view.py` can reuse fresh ETA report train-step rates via `--eta-status-file`/`--eta-status-max-age-seconds` to keep training ETA visible when live step deltas are flat
 - `pipeline_live_view.py` staging line includes `hot_parquet` + `hot_incomplete` so cache refill progress is visible during warm->hot copies
 - `pipeline_live_view.py` includes manifest coverage line (`unique/510`, overlap inputs/manifests, completion flag)
 - `pipeline_live_view.py` includes manifest coverage rate/ETA to gauge when coverage gates will clear

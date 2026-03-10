@@ -7,6 +7,7 @@ import sys
 import tempfile
 import time
 import unittest
+from datetime import datetime, timezone
 from pathlib import Path
 
 try:
@@ -618,6 +619,48 @@ class ScriptTests(unittest.TestCase):
             self.assertEqual(payload["expected"]["train_target_step"], 140000)
             self.assertEqual(payload["remaining"]["train_steps"], 100)
 
+    def test_pipeline_eta_report_accepts_once_flag(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            warm = root / "warm"
+            shards = root / "shards"
+            stage_dir = root / "stage"
+            sup_dir = root / "supervisor"
+            for path in [warm, shards, stage_dir, sup_dir]:
+                path.mkdir(parents=True, exist_ok=True)
+
+            out_json = root / "status.json"
+            out_txt = root / "status.txt"
+            state_json = root / "state.json"
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    "scripts/pipeline_eta_report.py",
+                    "--once",
+                    "--warm-dir",
+                    str(warm),
+                    "--shards-root",
+                    str(shards),
+                    "--stage-state-dir",
+                    str(stage_dir),
+                    "--supervisor-state-dir",
+                    str(sup_dir),
+                    "--output-json",
+                    str(out_json),
+                    "--output-text",
+                    str(out_txt),
+                    "--state-file",
+                    str(state_json),
+                ],
+                cwd=Path(__file__).resolve().parents[1],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(proc.returncode, 0, msg=proc.stderr)
+            self.assertTrue(out_json.exists())
+            self.assertIn("status_written", proc.stdout)
+
     def test_pipeline_eta_report_uses_coverage_fallback_rate(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -712,6 +755,87 @@ class ScriptTests(unittest.TestCase):
                 "sharding_fallback_no_overlap",
             )
             self.assertNotEqual(payload["eta_human"]["manifest_unique_inputs"], "unknown")
+
+    def test_pipeline_live_view_uses_eta_status_rate_fallback(self) -> None:
+        if (
+            subprocess.run(
+                ["pgrep", "-af", r"llm\.cli train"],
+                capture_output=True,
+                text=True,
+                check=False,
+            ).returncode
+            == 0
+        ):
+            self.skipTest("trainer already running on host")
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            warm = root / "warm"
+            hot = root / "hot"
+            shards = root / "shards"
+            stage_dir = root / "stage"
+            sup_dir = root / "supervisor"
+            for path in [warm, hot, shards, stage_dir, sup_dir]:
+                path.mkdir(parents=True, exist_ok=True)
+
+            (sup_dir / "supervisor_20260309_130904.log").write_text(
+                (
+                    "[2026-03-09T13:09:09-05:00] "
+                    "train_launch manifests=11 step_now=138000 target_step=140000 "
+                    "batch_size=12 grad_accum=2\n"
+                ),
+                encoding="utf-8",
+            )
+            (sup_dir / "train_138000_to_140000_20260309_130909.log").write_text(
+                "step=139900 train_loss=3.12 lr=0.00003 tokens_seen=123 toks_per_sec=28000\n",
+                encoding="utf-8",
+            )
+
+            eta_status = root / "pipeline_status.json"
+            eta_status.write_text(
+                json.dumps(
+                    {
+                        "timestamp_utc": datetime.now(timezone.utc).isoformat(),
+                        "rates": {"train_steps_per_sec": 2.0},
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    "scripts/pipeline_live_view.py",
+                    "--once",
+                    "--no-alt-screen",
+                    "--refresh-seconds",
+                    "0.1",
+                    "--warm-dir",
+                    str(warm),
+                    "--hot-dir",
+                    str(hot),
+                    "--shards-root",
+                    str(shards),
+                    "--stage-state-dir",
+                    str(stage_dir),
+                    "--supervisor-state-dir",
+                    str(sup_dir),
+                    "--train-target-step",
+                    "140000",
+                    "--eta-status-file",
+                    str(eta_status),
+                    "--eta-status-max-age-seconds",
+                    "300",
+                ],
+                cwd=Path(__file__).resolve().parents[1],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(proc.returncode, 0, msg=proc.stderr)
+            self.assertIn(
+                "Training: step=139900/140000 rate=2.000 step/s (from eta-report)",
+                proc.stdout,
+            )
 
     def test_pipeline_eta_report_pgrep_root_count_dedupes_children(self) -> None:
         marker = f"eta_root_count_{int(time.time() * 1_000_000)}"

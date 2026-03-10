@@ -1,0 +1,19 @@
+[Unit]
+Description=LLM FineWeb Stage+Shard Watchdog
+After=network-online.target
+Wants=network-online.target
+Conflicts=llm-fineweb-stage-shard-loop.service
+
+[Service]
+Type=simple
+WorkingDirectory=__REPO_DIR__
+EnvironmentFile=-%h/.config/llm/llm.env
+ExecStart=/bin/bash -lc 'cd __REPO_DIR__ && exec bash scripts/fineweb_stage_shard_watchdog.sh ${LLM_STAGE_SHARD_WATCHDOG_ARGS:-"--worker-args \"--hot-queue-min-files 10 --stage-max-files 8 --stage-copy-jobs 4 --stage-min-free-gib 80 --process-max-files 15 --shard-jobs 2 --auto-tune-shard-jobs --auto-tune-min-shard-jobs 2 --auto-tune-max-shard-jobs 3 --auto-tune-low-load-pct 80 --auto-tune-high-load-pct 95 --auto-tune-min-batch-seconds 300 --tokenizer-threads 10 --encode-batch-size 1024 --shard-size-tokens 20000000 --sync-background --sync-max-inflight 2 --sleep-seconds 60 --shard-min-batch-size 512\" --check-interval-seconds 120 --stall-seconds 5400 --watchdog-log-file artifacts/reports/fineweb_stage_shard_loop/watchdog.log"}'
+Restart=always
+RestartSec=10
+KillSignal=SIGINT
+TimeoutStopSec=120
+NoNewPrivileges=true
+
+[Install]
+WantedBy=default.target

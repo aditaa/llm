@@ -43,6 +43,7 @@ bash scripts/bootstrap_dev.sh
 ```bash
 make setup-infer # install inference/deploy dependencies
 make install-systemd-services # install/reload long-run systemd units
+make install-user-systemd-services # install/reload user-level systemd units (no sudo)
 make test        # run unit tests
 make lint        # run Ruff checks
 make format      # run Black formatter
@@ -92,7 +93,7 @@ make doctor      # verify binaries and Python deps
 
 ## CI/CD
 GitHub Actions workflows are defined in `.github/workflows/`:
-- `ci.yml`: lint, typecheck, unit tests, smoke checks on pull requests and pushes to `main`
+- `ci.yml`: script sanity (`bash -n` + `py_compile`), lint, typecheck, unit tests, smoke checks on pull requests and pushes to `main`
 - `wiki-sync.yml`: publish `wiki/*.md` changes to the GitHub Wiki
 - Dependabot config: `.github/dependabot.yml` (weekly updates for `pip`, `requirements/`, and GitHub Actions)
 
@@ -110,6 +111,9 @@ Recommended branch protection for `main`:
    `bash scripts/bootstrap_train.sh`
 4. Run health check:
    `bash scripts/doctor.sh`
+5. Install persistent workers:
+   - system units (root): `bash scripts/install_systemd_services.sh --install-watchdog`
+   - user units (no sudo): `bash scripts/install_user_systemd_services.sh --install-watchdog`
 
 Detailed guide: `docs/SERVER_SETUP.md`
 
@@ -626,6 +630,8 @@ Includes embedded snapshots of `top -b -n1`, `free -h`, `nvidia-smi`, and `df -h
 Also reports manifest coverage metrics (`manifest_unique_input_files`, overlap counts, `coverage_complete`).
 Also reports hot-manifest metrics (`active_manifests`, `offloaded_manifests`,
 `active_manifests_with_symlink_bins`, `trained_batch_names_count`).
+Also reports `trainer_stall_seconds` and shard offload eligibility
+(`offload_eligible_batches`, raw/capped counts, trained-registry presence).
 Also includes per-task `RUN/STOP` state with stop reasons (for example `download complete`,
 `staging handled by stage-loop`, `idle between chunks/eval`, or gate waits).
 Task process counts are root-deduped (controller processes), so wrapper/child shells do not inflate `RUN xN`.
@@ -639,8 +645,10 @@ This is a live-only monitor (no report/status files written) and includes:
 - pipeline progress (download/staging/sharding/training)
 - staging line includes `hot_parquet` and `hot_incomplete` to show active warm->hot copy progress
 - hot-set status (`active_manifests`, `offloaded_manifests`, `active_symlink_manifests`, `trained_batches`)
+- hot-set also shows shard offload readiness (`offload_eligible_batches`, raw eligible, cap)
 - manifest coverage status (`unique/510`, overlap inputs/manifests, coverage rate + ETA, completion flag)
 - supervisor gate status (for example waiting on `min_unique_input_files`)
+- training row includes `stall=<seconds since last step progress>` for direct trainer stall visibility
 - running project task states with pid/runtime/cpu/mem summaries
 - explicit stop reasons for tasks that are not running
 - alert rows for stage-controller health and shard-manifest stall conditions
@@ -664,6 +672,11 @@ For reboot-safe long runs, install service units for supervisor + stage watchdog
 make install-systemd-services
 ```
 
+No-sudo alternative (user units):
+```bash
+make install-user-systemd-services
+```
+
 If you launch supervisor as a transient user unit (`systemd-run --user`), set a high
 open-files limit (for example `--property=LimitNOFILE=1048576`) so large shard sets
 do not fail with `OSError: [Errno 24] Too many open files`.
@@ -677,7 +690,10 @@ Templates:
 - `deploy/systemd/llm-checkpoint-offload-prune.timer`
 - `deploy/systemd/llm-bad-parquet-revalidate.service`
 - `deploy/systemd/llm-bad-parquet-revalidate.timer`
+- `deploy/systemd/llm-shard-offload.service`
+- `deploy/systemd/llm-shard-offload.timer`
 - `deploy/systemd/llm-vm-swappiness.service`
+- user equivalents under `deploy/systemd/user/`
 
 Note: prefetch is optional when stage-loop already uses hot-queue staging flags
 (`--hot-queue-min-files`, `--stage-max-files`, `--stage-copy-jobs`, `--stage-min-free-gib`).

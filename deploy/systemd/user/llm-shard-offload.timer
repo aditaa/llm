@@ -1,0 +1,12 @@
+[Unit]
+Description=LLM shard offload schedule
+
+[Timer]
+OnBootSec=15min
+OnUnitActiveSec=20min
+AccuracySec=2min
+Persistent=true
+Unit=llm-shard-offload.service
+
+[Install]
+WantedBy=timers.target

@@ -15,6 +15,29 @@ permissions:
   contents: read
 
 jobs:
+  script-sanity:
+    name: Script Sanity
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Shell script syntax check
+        run: |
+          set -euo pipefail
+          for script in scripts/*.sh; do
+            bash -n "$script"
+          done
+
+      - name: Python script compile check
+        run: |
+          python -m py_compile scripts/*.py
+
   lint:
     name: Lint (Ruff)
     runs-on: ubuntu-latest
@@ -120,6 +143,7 @@ jobs:
     runs-on: ubuntu-latest
     if: always()
     needs:
+      - script-sanity
       - lint
       - typecheck
       - tests
@@ -127,11 +151,13 @@ jobs:
     steps:
       - name: Verify all required jobs passed
         run: |
+          echo "script-sanity=${{ needs.script-sanity.result }}"
           echo "lint=${{ needs.lint.result }}"
           echo "typecheck=${{ needs.typecheck.result }}"
           echo "tests=${{ needs.tests.result }}"
           echo "smoke=${{ needs.smoke.result }}"
 
+          [[ "${{ needs.script-sanity.result }}" == "success" ]] || exit 1
           [[ "${{ needs.lint.result }}" == "success" ]] || exit 1
           [[ "${{ needs.typecheck.result }}" == "success" ]] || exit 1
           [[ "${{ needs.tests.result }}" == "success" ]] || exit 1

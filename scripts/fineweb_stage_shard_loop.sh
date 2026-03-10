@@ -40,6 +40,11 @@ AUTO_TUNE_MIN_BATCH_SECONDS=300
 AUTO_TUNE_CORE_BUDGET=0
 AUTO_TUNE_LOW_LOAD_PCT=65
 AUTO_TUNE_HIGH_LOAD_PCT=90
+AUTO_TUNE_STAGE_COPY_JOBS=1
+AUTO_TUNE_MIN_COPY_JOBS=2
+AUTO_TUNE_MAX_COPY_JOBS=10
+AUTO_TUNE_IOWAIT_LOW_PCT=10
+AUTO_TUNE_IOWAIT_HIGH_PCT=30
 
 SLEEP_SECONDS=120
 ITERATIONS=0
@@ -105,6 +110,14 @@ Options:
                               (default: 65)
   --auto-tune-high-load-pct N Decrease shard-jobs when load1 >= N% of cores
                               (default: 90)
+  --no-auto-tune-stage-copy-jobs
+                              Disable stage copy-worker tuning by queue/iowait
+  --auto-tune-min-copy-jobs N Lower stage copy-worker bound (default: 2)
+  --auto-tune-max-copy-jobs N Upper stage copy-worker bound (default: 10)
+  --auto-tune-iowait-low-pct N
+                              Allow copy scale-up when iowait <= N (default: 10)
+  --auto-tune-iowait-high-pct N
+                              Force copy scale-down when iowait >= N (default: 30)
   --no-shard-retry-on-oom     Disable automatic shard build retry on OOM/memory errors
   --shard-min-batch-size N    Lower bound for batch-size backoff on OOM (default: 512)
   --shard-size-tokens N       Tokens per output shard (default: 5000000)
@@ -247,6 +260,26 @@ while [[ $# -gt 0 ]]; do
       AUTO_TUNE_HIGH_LOAD_PCT="$2"
       shift 2
       ;;
+    --no-auto-tune-stage-copy-jobs)
+      AUTO_TUNE_STAGE_COPY_JOBS=0
+      shift
+      ;;
+    --auto-tune-min-copy-jobs)
+      AUTO_TUNE_MIN_COPY_JOBS="$2"
+      shift 2
+      ;;
+    --auto-tune-max-copy-jobs)
+      AUTO_TUNE_MAX_COPY_JOBS="$2"
+      shift 2
+      ;;
+    --auto-tune-iowait-low-pct)
+      AUTO_TUNE_IOWAIT_LOW_PCT="$2"
+      shift 2
+      ;;
+    --auto-tune-iowait-high-pct)
+      AUTO_TUNE_IOWAIT_HIGH_PCT="$2"
+      shift 2
+      ;;
     --no-shard-retry-on-oom)
       SHARD_RETRY_ON_OOM=0
       shift
@@ -364,6 +397,10 @@ require_nonneg_int "auto-tune-min-batch-seconds" "$AUTO_TUNE_MIN_BATCH_SECONDS"
 require_nonneg_int "auto-tune-core-budget" "$AUTO_TUNE_CORE_BUDGET"
 require_nonneg_int "auto-tune-low-load-pct" "$AUTO_TUNE_LOW_LOAD_PCT"
 require_nonneg_int "auto-tune-high-load-pct" "$AUTO_TUNE_HIGH_LOAD_PCT"
+require_positive_int "auto-tune-min-copy-jobs" "$AUTO_TUNE_MIN_COPY_JOBS"
+require_positive_int "auto-tune-max-copy-jobs" "$AUTO_TUNE_MAX_COPY_JOBS"
+require_nonneg_int "auto-tune-iowait-low-pct" "$AUTO_TUNE_IOWAIT_LOW_PCT"
+require_nonneg_int "auto-tune-iowait-high-pct" "$AUTO_TUNE_IOWAIT_HIGH_PCT"
 
 if [[ "$AUTO_TUNE_MIN_SHARD_JOBS" -gt "$AUTO_TUNE_MAX_SHARD_JOBS" ]]; then
   echo "error: auto-tune-min-shard-jobs must be <= auto-tune-max-shard-jobs" >&2
@@ -375,6 +412,18 @@ if [[ "$AUTO_TUNE_LOW_LOAD_PCT" -ge "$AUTO_TUNE_HIGH_LOAD_PCT" ]]; then
 fi
 if [[ "$AUTO_TUNE_HIGH_LOAD_PCT" -gt 100 ]]; then
   echo "error: auto-tune-high-load-pct must be <= 100" >&2
+  exit 2
+fi
+if [[ "$AUTO_TUNE_MIN_COPY_JOBS" -gt "$AUTO_TUNE_MAX_COPY_JOBS" ]]; then
+  echo "error: auto-tune-min-copy-jobs must be <= auto-tune-max-copy-jobs" >&2
+  exit 2
+fi
+if [[ "$AUTO_TUNE_IOWAIT_LOW_PCT" -ge "$AUTO_TUNE_IOWAIT_HIGH_PCT" ]]; then
+  echo "error: auto-tune-iowait-low-pct must be < auto-tune-iowait-high-pct" >&2
+  exit 2
+fi
+if [[ "$AUTO_TUNE_IOWAIT_HIGH_PCT" -gt 100 ]]; then
+  echo "error: auto-tune-iowait-high-pct must be <= 100" >&2
   exit 2
 fi
 
@@ -439,6 +488,14 @@ if [[ "$AUTO_TUNE_SHARD_JOBS" -eq 1 ]]; then
     SHARD_JOBS="$AUTO_TUNE_MAX_SHARD_JOBS"
   fi
 fi
+if [[ "$AUTO_TUNE_STAGE_COPY_JOBS" -eq 1 ]]; then
+  if [[ "$STAGE_COPY_JOBS" -lt "$AUTO_TUNE_MIN_COPY_JOBS" ]]; then
+    STAGE_COPY_JOBS="$AUTO_TUNE_MIN_COPY_JOBS"
+  fi
+  if [[ "$STAGE_COPY_JOBS" -gt "$AUTO_TUNE_MAX_COPY_JOBS" ]]; then
+    STAGE_COPY_JOBS="$AUTO_TUNE_MAX_COPY_JOBS"
+  fi
+fi
 
 warm_shards_root="$WARM_ROOT/shards_global/$(basename "$SHARDS_ROOT")"
 warm_tokenizer_dir="$WARM_ROOT/tokenizer"
@@ -446,6 +503,8 @@ warm_reports_dir="$WARM_ROOT/reports/fineweb_stage_shard_loop"
 declare -a SYNC_PIDS=()
 declare -a ACTIVE_SHARD_PIDS=()
 SHOULD_STOP=0
+IOWAIT_PREV_TOTAL=""
+IOWAIT_PREV_WAIT=""
 
 retune_tokenizer_threads() {
   local jobs="$1"
@@ -506,6 +565,93 @@ maybe_auto_tune_parallelism() {
 if [[ "$AUTO_TUNE_SHARD_JOBS" -eq 1 ]]; then
   retune_tokenizer_threads "$SHARD_JOBS"
 fi
+
+sample_iowait_pct() {
+  local cpu user nice system idle iowait irq softirq steal guest guest_nice
+  if ! read -r cpu user nice system idle iowait irq softirq steal guest guest_nice < /proc/stat; then
+    echo "-1"
+    return
+  fi
+  local total=$((user + nice + system + idle + iowait + irq + softirq + steal))
+  if [[ -z "$IOWAIT_PREV_TOTAL" ]] || [[ -z "$IOWAIT_PREV_WAIT" ]]; then
+    IOWAIT_PREV_TOTAL="$total"
+    IOWAIT_PREV_WAIT="$iowait"
+    echo "-1"
+    return
+  fi
+
+  local d_total=$((total - IOWAIT_PREV_TOTAL))
+  local d_iowait=$((iowait - IOWAIT_PREV_WAIT))
+  IOWAIT_PREV_TOTAL="$total"
+  IOWAIT_PREV_WAIT="$iowait"
+
+  if [[ "$d_total" -le 0 ]]; then
+    echo "-1"
+    return
+  fi
+  if [[ "$d_iowait" -lt 0 ]]; then
+    d_iowait=0
+  fi
+  local pct=$((100 * d_iowait / d_total))
+  if [[ "$pct" -lt 0 ]]; then
+    pct=0
+  elif [[ "$pct" -gt 100 ]]; then
+    pct=100
+  fi
+  echo "$pct"
+}
+
+maybe_auto_tune_stage_copy_jobs() {
+  local eligible_hot_count="$1"
+  if [[ "$AUTO_TUNE_STAGE_COPY_JOBS" -ne 1 ]]; then
+    return
+  fi
+  if [[ "$HOT_QUEUE_MIN_FILES" -le 0 ]]; then
+    return
+  fi
+
+  local deficit=0
+  if [[ "$eligible_hot_count" -lt "$HOT_QUEUE_MIN_FILES" ]]; then
+    deficit=$((HOT_QUEUE_MIN_FILES - eligible_hot_count))
+  fi
+
+  local iowait_pct
+  iowait_pct="$(sample_iowait_pct)"
+  local old_jobs="$STAGE_COPY_JOBS"
+  local desired="$STAGE_COPY_JOBS"
+  local reason="hold"
+
+  if [[ "$iowait_pct" =~ ^[0-9]+$ ]] \
+    && [[ "$iowait_pct" -ge "$AUTO_TUNE_IOWAIT_HIGH_PCT" ]] \
+    && [[ "$desired" -gt "$AUTO_TUNE_MIN_COPY_JOBS" ]]; then
+    desired=$((desired - 1))
+    reason="high_iowait_scale_down"
+  elif [[ "$deficit" -gt 0 ]] && [[ "$desired" -lt "$AUTO_TUNE_MAX_COPY_JOBS" ]]; then
+    if [[ "$iowait_pct" == "-1" ]] || [[ "$iowait_pct" -le "$AUTO_TUNE_IOWAIT_LOW_PCT" ]]; then
+      desired=$((desired + 1))
+      reason="queue_deficit_scale_up"
+    elif [[ "$deficit" -ge "$desired" ]] && [[ "$iowait_pct" -lt "$AUTO_TUNE_IOWAIT_HIGH_PCT" ]]; then
+      desired=$((desired + 1))
+      reason="deep_queue_deficit_scale_up"
+    fi
+  fi
+
+  if [[ "$desired" -lt "$AUTO_TUNE_MIN_COPY_JOBS" ]]; then
+    desired="$AUTO_TUNE_MIN_COPY_JOBS"
+  elif [[ "$desired" -gt "$AUTO_TUNE_MAX_COPY_JOBS" ]]; then
+    desired="$AUTO_TUNE_MAX_COPY_JOBS"
+  fi
+
+  if [[ "$desired" -eq "$old_jobs" ]]; then
+    if [[ "$deficit" -gt 0 ]]; then
+      log "auto_tune_copy_hold reason=$reason eligible_hot_count=$eligible_hot_count queue_min=$HOT_QUEUE_MIN_FILES deficit=$deficit iowait_pct=$iowait_pct copy_jobs=$old_jobs"
+    fi
+    return
+  fi
+
+  STAGE_COPY_JOBS="$desired"
+  log "auto_tune_copy_update reason=$reason eligible_hot_count=$eligible_hot_count queue_min=$HOT_QUEUE_MIN_FILES deficit=$deficit iowait_pct=$iowait_pct copy_jobs=$old_jobs->$STAGE_COPY_JOBS"
+}
 
 is_bad_parquet_name() {
   local name="$1"
@@ -775,6 +921,7 @@ stage_once() {
     return 0
   fi
 
+  maybe_auto_tune_stage_copy_jobs "$eligible_hot_count"
   log "stage_start max_files=$stage_files max_gib=$STAGE_MAX_GIB copy_jobs=$STAGE_COPY_JOBS min_free_gib=$STAGE_MIN_FREE_GIB hot_count=$hot_count eligible_hot_count=$eligible_hot_count queue_min=$HOT_QUEUE_MIN_FILES"
   if [[ "$DRY_RUN" -eq 1 ]]; then
     (
@@ -1207,7 +1354,7 @@ process_batch() {
 }
 
 log "loop_start warm_parquet_dir=$WARM_PARQUET_DIR hot_parquet_dir=$HOT_PARQUET_DIR"
-log "loop_config shards_root=$SHARDS_ROOT tokenizer_path=$TOKENIZER_PATH iterations=$ITERATIONS hot_queue_min_files=$HOT_QUEUE_MIN_FILES stage_copy_jobs=$STAGE_COPY_JOBS stage_min_free_gib=$STAGE_MIN_FREE_GIB shard_jobs=$SHARD_JOBS tokenizer_threads=$TOKENIZER_THREADS shard_size_tokens=$SHARD_SIZE_TOKENS sync_to_warm=$SYNC_TO_WARM sync_background=$SYNC_BACKGROUND sync_max_inflight=$SYNC_MAX_INFLIGHT auto_tune_shard_jobs=$AUTO_TUNE_SHARD_JOBS auto_tune_bounds=${AUTO_TUNE_MIN_SHARD_JOBS}-${AUTO_TUNE_MAX_SHARD_JOBS} auto_tune_load_pct=${AUTO_TUNE_LOW_LOAD_PCT}-${AUTO_TUNE_HIGH_LOAD_PCT} auto_tune_core_budget=$AUTO_TUNE_CORE_BUDGET bad_parquet_file=$BAD_PARQUET_FILE quarantine_dir=$QUARANTINE_DIR"
+log "loop_config shards_root=$SHARDS_ROOT tokenizer_path=$TOKENIZER_PATH iterations=$ITERATIONS hot_queue_min_files=$HOT_QUEUE_MIN_FILES stage_copy_jobs=$STAGE_COPY_JOBS stage_min_free_gib=$STAGE_MIN_FREE_GIB shard_jobs=$SHARD_JOBS tokenizer_threads=$TOKENIZER_THREADS shard_size_tokens=$SHARD_SIZE_TOKENS sync_to_warm=$SYNC_TO_WARM sync_background=$SYNC_BACKGROUND sync_max_inflight=$SYNC_MAX_INFLIGHT auto_tune_shard_jobs=$AUTO_TUNE_SHARD_JOBS auto_tune_bounds=${AUTO_TUNE_MIN_SHARD_JOBS}-${AUTO_TUNE_MAX_SHARD_JOBS} auto_tune_load_pct=${AUTO_TUNE_LOW_LOAD_PCT}-${AUTO_TUNE_HIGH_LOAD_PCT} auto_tune_core_budget=$AUTO_TUNE_CORE_BUDGET auto_tune_stage_copy_jobs=$AUTO_TUNE_STAGE_COPY_JOBS auto_tune_copy_bounds=${AUTO_TUNE_MIN_COPY_JOBS}-${AUTO_TUNE_MAX_COPY_JOBS} auto_tune_iowait_pct=${AUTO_TUNE_IOWAIT_LOW_PCT}-${AUTO_TUNE_IOWAIT_HIGH_PCT} bad_parquet_file=$BAD_PARQUET_FILE quarantine_dir=$QUARANTINE_DIR"
 trap 'on_loop_signal INT' INT
 trap 'on_loop_signal TERM' TERM
 reconcile_bad_parquet_from_warm

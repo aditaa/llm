@@ -18,6 +18,8 @@ MIN_MANIFESTS=1
 MIN_UNIQUE_INPUT_FILES=0
 MIN_TRAIN_TOKENS=0
 MAX_FAILURE_STREAK=0  # 0 = unlimited retries
+TRAIN_STALL_CHECK_SECONDS=60
+TRAIN_STALL_KILL_SECONDS=1200
 
 DEVICE="cuda"
 BATCH_SIZE=34
@@ -103,6 +105,10 @@ Core options:
   --min-unique-input-files N   Wait until at least N unique manifest input files exist (default: 0)
   --min-train-tokens N         Wait until manifests cover at least N train tokens (default: 0)
   --max-failure-streak N       Stop after N consecutive train failures (0 = never)
+  --train-stall-check-seconds N
+                               Poll interval for train-step stall detection (default: 60)
+  --train-stall-kill-seconds N
+                               Restart train chunk if no step progress for N seconds (0 = disabled, default: 1200)
   --no-dedupe-overlap-manifests
                                Disable manifest overlap dedupe before each train chunk
   --dedupe-keep MODE           Overlap dedupe strategy: newest|oldest (default: newest)
@@ -207,6 +213,8 @@ while [[ $# -gt 0 ]]; do
     --min-unique-input-files) MIN_UNIQUE_INPUT_FILES="$2"; shift 2 ;;
     --min-train-tokens) MIN_TRAIN_TOKENS="$2"; shift 2 ;;
     --max-failure-streak) MAX_FAILURE_STREAK="$2"; shift 2 ;;
+    --train-stall-check-seconds) TRAIN_STALL_CHECK_SECONDS="$2"; shift 2 ;;
+    --train-stall-kill-seconds) TRAIN_STALL_KILL_SECONDS="$2"; shift 2 ;;
     --no-dedupe-overlap-manifests) DEDUPE_OVERLAP_MANIFESTS=0; shift ;;
     --dedupe-keep) DEDUPE_KEEP="$2"; shift 2 ;;
     --dedupe-dry-run) DEDUPE_DRY_RUN=1; shift ;;
@@ -303,6 +311,14 @@ if [[ "$MIN_MANIFESTS" -lt 0 || "$MIN_UNIQUE_INPUT_FILES" -lt 0 || "$MIN_TRAIN_T
 fi
 if [[ "$POLL_SECONDS" -le 0 ]]; then
   echo "error: poll-seconds must be > 0" >&2
+  exit 1
+fi
+if [[ "$TRAIN_STALL_CHECK_SECONDS" -le 0 ]]; then
+  echo "error: train-stall-check-seconds must be > 0" >&2
+  exit 1
+fi
+if [[ "$TRAIN_STALL_KILL_SECONDS" -lt 0 ]]; then
+  echo "error: train-stall-kill-seconds must be >= 0" >&2
   exit 1
 fi
 if [[ "$BATCH_SIZE" -le 0 || "$GRAD_ACCUM_STEPS" -le 0 ]]; then
@@ -586,6 +602,70 @@ log_has_resume_checkpoint_error() {
   grep -Eqi \
     "pytorchstreamreader|failed finding central directory|pickle data was truncated|unexpected eof|zip archive|invalid load key|optimizer_state|resume checkpoint|load_state_dict" \
     "$run_log"
+}
+
+latest_step_from_log() {
+  local run_log="$1"
+  if [[ ! -f "$run_log" ]]; then
+    echo "0"
+    return 0
+  fi
+  local step
+  step="$(
+    grep -oE 'step=[0-9]+' "$run_log" | tail -n 1 | cut -d= -f2 || true
+  )"
+  if [[ -z "$step" ]]; then
+    echo "0"
+    return 0
+  fi
+  echo "$step"
+}
+
+wait_for_train_with_stall_guard() {
+  local train_pid="$1"
+  local run_log="$2"
+  local start_step="$3"
+  local stall_flag_file="$4"
+  : > "$stall_flag_file"
+
+  local last_step="$start_step"
+  local last_progress_epoch
+  last_progress_epoch="$(date +%s)"
+
+  while kill -0 "$train_pid" 2>/dev/null; do
+    sleep "$TRAIN_STALL_CHECK_SECONDS"
+    if ! kill -0 "$train_pid" 2>/dev/null; then
+      break
+    fi
+    local observed_step
+    observed_step="$(latest_step_from_log "$run_log")"
+    if [[ "$observed_step" =~ ^[0-9]+$ ]] && [[ "$observed_step" -gt "$last_step" ]]; then
+      last_step="$observed_step"
+      last_progress_epoch="$(date +%s)"
+      continue
+    fi
+    if [[ "$TRAIN_STALL_KILL_SECONDS" -le 0 ]]; then
+      continue
+    fi
+    local now_epoch
+    now_epoch="$(date +%s)"
+    local stalled_for=$((now_epoch - last_progress_epoch))
+    if [[ "$stalled_for" -lt "$TRAIN_STALL_KILL_SECONDS" ]]; then
+      continue
+    fi
+
+    log "train_stall_detected stalled_for=${stalled_for}s kill_after=${TRAIN_STALL_KILL_SECONDS}s last_step=$last_step action=terminate_chunk"
+    echo "1" > "$stall_flag_file"
+    kill -TERM "$train_pid" 2>/dev/null || true
+    sleep 5
+    if kill -0 "$train_pid" 2>/dev/null; then
+      kill -KILL "$train_pid" 2>/dev/null || true
+    fi
+    break
+  done
+
+  wait "$train_pid"
+  return $?
 }
 
 manifest_count() {
@@ -1201,7 +1281,7 @@ fi
 failure_streak=0
 successful_chunks=0
 log "supervisor_start shards_path=$SHARDS_PATH output_dir=$OUTPUT_DIR step_chunk=$STEP_CHUNK"
-log "tuning_start batch_size=$BATCH_SIZE grad_accum=$GRAD_ACCUM_STEPS auto_tune=$AUTO_TUNE target_effective_batch=$TARGET_EFFECTIVE_BATCH train_fail_on_eval_regression=$TRAIN_FAIL_ON_EVAL_REGRESSION checkpoint_keep_last=$CHECKPOINT_KEEP_LAST checkpoint_keep_every=$CHECKPOINT_KEEP_EVERY allow_context_extension=$ALLOW_CONTEXT_EXTENSION ema_decay=$EMA_DECAY ema_update_every=$EMA_UPDATE_EVERY ema_start_step=$EMA_START_STEP generation_gate=$GENERATION_GATE generation_every_chunks=$GENERATION_EVERY_CHUNKS generation_stop_on_fail=$GENERATION_STOP_ON_FAIL dedupe_overlap_manifests=$DEDUPE_OVERLAP_MANIFESTS dedupe_keep=$DEDUPE_KEEP dedupe_dry_run=$DEDUPE_DRY_RUN min_train_tokens=$MIN_TRAIN_TOKENS"
+log "tuning_start batch_size=$BATCH_SIZE grad_accum=$GRAD_ACCUM_STEPS auto_tune=$AUTO_TUNE target_effective_batch=$TARGET_EFFECTIVE_BATCH train_fail_on_eval_regression=$TRAIN_FAIL_ON_EVAL_REGRESSION checkpoint_keep_last=$CHECKPOINT_KEEP_LAST checkpoint_keep_every=$CHECKPOINT_KEEP_EVERY allow_context_extension=$ALLOW_CONTEXT_EXTENSION ema_decay=$EMA_DECAY ema_update_every=$EMA_UPDATE_EVERY ema_start_step=$EMA_START_STEP generation_gate=$GENERATION_GATE generation_every_chunks=$GENERATION_EVERY_CHUNKS generation_stop_on_fail=$GENERATION_STOP_ON_FAIL dedupe_overlap_manifests=$DEDUPE_OVERLAP_MANIFESTS dedupe_keep=$DEDUPE_KEEP dedupe_dry_run=$DEDUPE_DRY_RUN min_train_tokens=$MIN_TRAIN_TOKENS train_stall_check_seconds=$TRAIN_STALL_CHECK_SECONDS train_stall_kill_seconds=$TRAIN_STALL_KILL_SECONDS"
 backfill_trained_batch_registry
 ensure_single_supervisor_process
 
@@ -1258,6 +1338,7 @@ while true; do
   fi
 
   set +e
+  stall_flag_file="$STATE_DIR/train_stall_${run_tag}.flag"
   (
     PYTORCH_ALLOC_CONF=expandable_segments:True \
     PYTHONPATH=src \
@@ -1292,8 +1373,13 @@ while true; do
   train_pid=$!
   start_gpu_monitor "$train_pid" "$gpu_log"
   monitor_pid="${GPU_MONITOR_PID:-}"
-  wait "$train_pid"
+  wait_for_train_with_stall_guard "$train_pid" "$run_log" "$step_now" "$stall_flag_file"
   rc=$?
+  stalled_chunk=0
+  if [[ -f "$stall_flag_file" ]] && [[ "$(cat "$stall_flag_file" 2>/dev/null || true)" == "1" ]]; then
+    stalled_chunk=1
+  fi
+  rm -f "$stall_flag_file" || true
   if [[ -n "${monitor_pid:-}" ]]; then
     kill "$monitor_pid" 2>/dev/null || true
     wait "$monitor_pid" 2>/dev/null || true
@@ -1328,7 +1414,11 @@ while true; do
       quarantine_bad_checkpoint "$resume_ckpt" "resume_failure"
     fi
     failure_streak=$((failure_streak + 1))
-    log "train_failed rc=$rc failure_streak=$failure_streak best_val_ppl=$best_val_ppl gpu_avg_util=$gpu_avg_util gpu_max_mem=$gpu_max_mem"
+    if [[ "$stalled_chunk" -eq 1 ]]; then
+      log "train_failed rc=$rc failure_streak=$failure_streak reason=stall_killed best_val_ppl=$best_val_ppl gpu_avg_util=$gpu_avg_util gpu_max_mem=$gpu_max_mem"
+    else
+      log "train_failed rc=$rc failure_streak=$failure_streak best_val_ppl=$best_val_ppl gpu_avg_util=$gpu_avg_util gpu_max_mem=$gpu_max_mem"
+    fi
     if [[ "$MAX_FAILURE_STREAK" -gt 0 && "$failure_streak" -ge "$MAX_FAILURE_STREAK" ]]; then
       log "supervisor_stop reason=max_failure_streak_reached"
       exit 10

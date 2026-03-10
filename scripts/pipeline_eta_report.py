@@ -339,6 +339,53 @@ def _manifest_hot_state(shards_root: Path) -> dict[str, int]:
     }
 
 
+def _offload_eligibility(
+    shards_root: Path,
+    trained_batches_file: Path,
+    *,
+    keep_local_batches: int,
+    min_active_manifests: int,
+) -> dict[str, Any]:
+    if not shards_root.exists():
+        return {
+            "eligible_batches": 0,
+            "raw_eligible_batches": 0,
+            "max_offloadable_batches": 0,
+            "trained_registry_present": False,
+        }
+
+    manifests = sorted(
+        shards_root.rglob("manifest.json"),
+        key=lambda p: p.stat().st_mtime if p.exists() else 0.0,
+        reverse=True,
+    )
+    batch_names = [path.parent.name for path in manifests]
+    keep_n = max(0, keep_local_batches)
+    keep_set = set(batch_names[:keep_n])
+    candidates = [name for name in batch_names if name not in keep_set]
+
+    trained_registry_present = trained_batches_file.exists()
+    trained_batches: set[str] = set()
+    if trained_registry_present:
+        with trained_batches_file.open("r", encoding="utf-8", errors="replace") as handle:
+            for line in handle:
+                value = line.strip()
+                if value and not value.startswith("#"):
+                    trained_batches.add(value)
+
+    raw_eligible = (
+        sum(1 for name in candidates if name in trained_batches) if trained_registry_present else 0
+    )
+    max_offloadable = max(0, len(batch_names) - max(0, min_active_manifests))
+    eligible = min(raw_eligible, max_offloadable)
+    return {
+        "eligible_batches": eligible,
+        "raw_eligible_batches": raw_eligible,
+        "max_offloadable_batches": max_offloadable,
+        "trained_registry_present": trained_registry_present,
+    }
+
+
 def _latest_supervisor_gate(supervisor_state_dir: Path) -> str:
     if not supervisor_state_dir.exists():
         return "unknown"
@@ -382,6 +429,8 @@ def _task_stop_reason(
     train_step: int,
     train_target_step: int | None,
     supervisor_gate: str,
+    offload_eligible_batches: int,
+    trained_registry_present: bool,
 ) -> str:
     if task_name == "hf_watchdog":
         if warm_parquet >= expected_parquet_files:
@@ -435,6 +484,12 @@ def _task_stop_reason(
         return "runs only during eval windows"
     if task_name == "generation_gate_runner":
         return "runs only on scheduled gate interval"
+    if task_name == "shard_offload":
+        if not trained_registry_present:
+            return "trained-batch registry missing"
+        if offload_eligible_batches <= 0:
+            return "no eligible trained batches"
+        return f"awaiting timer trigger (eligible={offload_eligible_batches})"
     return "not started"
 
 
@@ -484,6 +539,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--command-max-lines", type=int, default=200)
     parser.add_argument("--interval-seconds", type=int, default=60)
     parser.add_argument(
+        "--offload-trained-batches-file",
+        default="",
+        help=(
+            "Optional trained-batches registry for shard offload eligibility. "
+            "Default: <supervisor-state-dir>/trained_batch_names.txt"
+        ),
+    )
+    parser.add_argument("--offload-keep-local-batches", type=int, default=24)
+    parser.add_argument("--offload-min-active-manifests", type=int, default=48)
+    parser.add_argument(
         "--once",
         action="store_true",
         help="Run one snapshot and exit (same behavior as default when --loop is unset)",
@@ -524,6 +589,17 @@ def collect_status(args: argparse.Namespace) -> dict[str, Any]:
     manifest_overlap_manifests = int(manifest_coverage["overlap_manifests"])
     sharded_parquet = _count_nonempty_lines(stage_state_dir / "processed_parquet_files.txt")
     trained_batch_count = _count_nonempty_lines(sup_dir / "trained_batch_names.txt")
+    offload_trained_file = (
+        Path(args.offload_trained_batches_file)
+        if args.offload_trained_batches_file
+        else (sup_dir / "trained_batch_names.txt")
+    )
+    offload_eligibility = _offload_eligibility(
+        shards_root,
+        offload_trained_file,
+        keep_local_batches=int(args.offload_keep_local_batches),
+        min_active_manifests=int(args.offload_min_active_manifests),
+    )
     train_step = _latest_train_step(sup_dir)
     train_target_step = _effective_train_target_step(args.train_target_step, sup_dir, train_step)
     supervisor_gate = _latest_supervisor_gate(sup_dir)
@@ -542,6 +618,7 @@ def collect_status(args: argparse.Namespace) -> dict[str, Any]:
         "generation_gate_runner": _pgrep_root_count(
             r"scripts/eval_checkpoint_prompts\.py .*generation_smoke_suite_v1\.json"
         ),
+        "shard_offload": _pgrep_root_count(r"scripts/offload_shard_bins_to_warm\.py"),
     }
     system_commands = {
         "top": _capture_command(
@@ -602,6 +679,24 @@ def collect_status(args: argparse.Namespace) -> dict[str, Any]:
             if d_steps > 0:
                 step_rate = d_steps / dt
 
+    trainer_stall_seconds: int | None = None
+    train_step_change_ts = now
+    train_step_change_value = train_step
+    if prev is not None:
+        prev_change_ts = prev.get("train_step_change_ts")
+        prev_change_value = prev.get("train_step_change_value")
+        if isinstance(prev_change_ts, (int, float)) and isinstance(prev_change_value, int):
+            train_step_change_ts = float(prev_change_ts)
+            train_step_change_value = int(prev_change_value)
+    if active.get("trainer", 0) > 0:
+        if train_step != train_step_change_value:
+            train_step_change_value = train_step
+            train_step_change_ts = now
+        trainer_stall_seconds = int(max(0.0, now - train_step_change_ts))
+    else:
+        train_step_change_value = train_step
+        train_step_change_ts = now
+
     rem_bytes = max(0, int(args.expected_bytes) - warm_bytes)
     rem_download_parquet = max(0, int(args.expected_parquet_files) - warm_parquet)
     rem_sharded_parquet = max(0, int(args.expected_parquet_files) - sharded_parquet)
@@ -624,6 +719,7 @@ def collect_status(args: argparse.Namespace) -> dict[str, Any]:
         "trainer",
         "eval_runner",
         "generation_gate_runner",
+        "shard_offload",
     ]
     task_status: dict[str, dict[str, Any]] = {}
     for task_name in task_order:
@@ -640,6 +736,8 @@ def collect_status(args: argparse.Namespace) -> dict[str, Any]:
             train_step=train_step,
             train_target_step=train_target_step,
             supervisor_gate=supervisor_gate,
+            offload_eligible_batches=int(offload_eligibility["eligible_batches"]),
+            trained_registry_present=bool(offload_eligibility["trained_registry_present"]),
         )
         task_status[task_name] = {"state": "STOP", "count": 0, "reason": reason}
 
@@ -681,8 +779,15 @@ def collect_status(args: argparse.Namespace) -> dict[str, Any]:
                 manifest_hot_state["active_manifests_with_symlink_bins"]
             ),
             "trained_batch_names_count": trained_batch_count,
+            "offload_eligible_batches": int(offload_eligibility["eligible_batches"]),
+            "offload_raw_eligible_batches": int(offload_eligibility["raw_eligible_batches"]),
+            "offload_max_offloadable_batches": int(offload_eligibility["max_offloadable_batches"]),
+            "offload_trained_registry_present": bool(
+                offload_eligibility["trained_registry_present"]
+            ),
             "sharded_parquet_count": sharded_parquet,
             "train_step": train_step,
+            "trainer_stall_seconds": trainer_stall_seconds,
             "coverage_complete": coverage_complete,
         },
         "expected": {
@@ -749,6 +854,7 @@ def write_reports(status: dict[str, Any], output_json: Path, output_text: Path) 
         "trainer",
         "eval_runner",
         "generation_gate_runner",
+        "shard_offload",
     ]
     task_lines: list[str] = []
     for name in task_order:
@@ -778,11 +884,16 @@ def write_reports(status: dict[str, Any], output_json: Path, output_text: Path) 
             "hotset:"
             f" active_manifests={m['active_manifests']} offloaded_manifests={m['offloaded_manifests']}"
             f" active_manifests_with_symlink_bins={m['active_manifests_with_symlink_bins']}"
-            f" trained_batch_names_count={m['trained_batch_names_count']}",
+            f" trained_batch_names_count={m['trained_batch_names_count']}"
+            f" offload_eligible_batches={m['offload_eligible_batches']}"
+            f" offload_raw_eligible_batches={m['offload_raw_eligible_batches']}"
+            f" offload_max_offloadable_batches={m['offload_max_offloadable_batches']}",
+            f"trainer_stall_seconds={m['trainer_stall_seconds']}",
             "active:"
             f" hf_watchdog={p['hf_watchdog']} download_worker={p['download_worker']} prefetch_worker={p['prefetch_worker']} stage_watchdog={p['stage_watchdog']} stage_loop={p['stage_loop']}"
             f" shard_builder={p['shard_builder']} train_supervisor={p['train_supervisor']}"
-            f" trainer={p['trainer']} eval_runner={p['eval_runner']} generation_gate_runner={p['generation_gate_runner']}",
+            f" trainer={p['trainer']} eval_runner={p['eval_runner']} generation_gate_runner={p['generation_gate_runner']}"
+            f" shard_offload={p['shard_offload']}",
             f"supervisor_gate={supervisor_gate}",
             "tasks:",
             *task_lines,
@@ -824,6 +935,12 @@ def main() -> int:
             "manifest_count": status["metrics"]["manifest_count"],
             "manifest_unique_input_files": status["metrics"]["manifest_unique_input_files"],
             "train_step": status["metrics"]["train_step"],
+            "train_step_change_ts": (
+                time.time() - float(status["metrics"]["trainer_stall_seconds"])
+                if status["metrics"]["trainer_stall_seconds"] is not None
+                else time.time()
+            ),
+            "train_step_change_value": status["metrics"]["train_step"],
         }
         _write_state(state_path, state_snapshot)
         print(

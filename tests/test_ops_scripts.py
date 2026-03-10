@@ -63,6 +63,7 @@ class ScriptTests(unittest.TestCase):
         self.assertEqual(proc.returncode, 0, msg=proc.stderr)
         self.assertIn("--min-unique-input-files", proc.stdout)
         self.assertIn("--min-train-tokens", proc.stdout)
+        self.assertIn("--train-stall-kill-seconds", proc.stdout)
         self.assertIn("--dedupe-report-keep", proc.stdout)
 
     def test_stage_loop_help_lists_stage_copy_jobs(self) -> None:
@@ -77,7 +78,20 @@ class ScriptTests(unittest.TestCase):
         self.assertIn("--stage-copy-jobs", proc.stdout)
         self.assertIn("--stage-min-free-gib", proc.stdout)
         self.assertIn("--auto-tune-shard-jobs", proc.stdout)
+        self.assertIn("--no-auto-tune-stage-copy-jobs", proc.stdout)
         self.assertIn("--sync-background", proc.stdout)
+
+    def test_install_user_systemd_services_help(self) -> None:
+        proc = subprocess.run(
+            ["bash", "scripts/install_user_systemd_services.sh", "--help"],
+            cwd=Path(__file__).resolve().parents[1],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(proc.returncode, 0, msg=proc.stderr)
+        self.assertIn("--user-systemd-dir", proc.stdout)
+        self.assertIn("--install-watchdog", proc.stdout)
 
     def test_stage_watchdog_help_lists_cleanup_option(self) -> None:
         proc = subprocess.run(
@@ -660,6 +674,9 @@ class ScriptTests(unittest.TestCase):
             self.assertEqual(proc.returncode, 0, msg=proc.stderr)
             self.assertTrue(out_json.exists())
             self.assertIn("status_written", proc.stdout)
+            payload = json.loads(out_json.read_text(encoding="utf-8"))
+            self.assertIn("trainer_stall_seconds", payload["metrics"])
+            self.assertIn("offload_eligible_batches", payload["metrics"])
 
     def test_pipeline_eta_report_uses_coverage_fallback_rate(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

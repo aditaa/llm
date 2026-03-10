@@ -86,6 +86,32 @@ def parse_args() -> argparse.Namespace:
         default=300,
         help="Maximum age for eta-status-file fallback data",
     )
+    parser.add_argument(
+        "--offload-trained-batches-file",
+        default="",
+        help=(
+            "Optional trained-batches registry for shard offload eligibility. "
+            "Default: <supervisor-state-dir>/trained_batch_names.txt"
+        ),
+    )
+    parser.add_argument(
+        "--offload-keep-local-batches",
+        type=int,
+        default=24,
+        help="Keep newest N active manifests local when estimating shard-offload eligibility",
+    )
+    parser.add_argument(
+        "--offload-min-active-manifests",
+        type=int,
+        default=48,
+        help="Keep at least N active manifests when estimating shard-offload eligibility",
+    )
+    parser.add_argument(
+        "--trainer-stall-alert-seconds",
+        type=int,
+        default=1200,
+        help="Alert when trainer step has not advanced for this many seconds",
+    )
     parser.add_argument("--no-alt-screen", action="store_true")
     parser.add_argument("--once", action="store_true")
     return parser.parse_args()
@@ -471,6 +497,43 @@ def _manifest_hot_state(shards_root: Path) -> tuple[int, int, int]:
     return (len(active_manifests), len(offloaded_manifests), active_with_symlink_bins)
 
 
+def _offload_eligibility(
+    shards_root: Path,
+    trained_batches_file: Path,
+    *,
+    keep_local_batches: int,
+    min_active_manifests: int,
+) -> tuple[int, int, int, bool]:
+    if not shards_root.exists():
+        return (0, 0, 0, False)
+
+    manifests = sorted(
+        shards_root.rglob("manifest.json"),
+        key=lambda p: p.stat().st_mtime if p.exists() else 0.0,
+        reverse=True,
+    )
+    batch_names = [path.parent.name for path in manifests]
+    keep_n = max(0, keep_local_batches)
+    keep_set = set(batch_names[:keep_n])
+    candidates = [name for name in batch_names if name not in keep_set]
+
+    trained_registry_present = trained_batches_file.exists()
+    trained_batches: set[str] = set()
+    if trained_registry_present:
+        with trained_batches_file.open("r", encoding="utf-8", errors="replace") as handle:
+            for line in handle:
+                value = line.strip()
+                if value and not value.startswith("#"):
+                    trained_batches.add(value)
+
+    raw_eligible = (
+        sum(1 for name in candidates if name in trained_batches) if trained_registry_present else 0
+    )
+    max_offloadable = max(0, len(batch_names) - max(0, min_active_manifests))
+    effective_eligible = min(raw_eligible, max_offloadable)
+    return (effective_eligible, raw_eligible, max_offloadable, trained_registry_present)
+
+
 def _cpu_snapshot() -> tuple[int, int]:
     with open("/proc/stat", "r", encoding="utf-8") as handle:
         line = handle.readline().strip()
@@ -642,6 +705,8 @@ def _stop_reason(
     train_target_step: int | None,
     supervisor_gate: str,
     task_counts: dict[str, int],
+    offload_eligible_batches: int,
+    trained_registry_present: bool,
 ) -> str:
     if task_name == "hf-watchdog":
         if warm_parquet >= expected_parquet_files:
@@ -713,6 +778,12 @@ def _stop_reason(
         return "runs only on scheduled gate interval"
     if task_name == "zim-offload":
         return "offload worker not started"
+    if task_name == "shard-offload":
+        if not trained_registry_present:
+            return "trained-batch registry missing"
+        if offload_eligible_batches <= 0:
+            return "no eligible trained batches"
+        return f"awaiting timer trigger (eligible={offload_eligible_batches})"
     return "not started"
 
 
@@ -783,6 +854,22 @@ def _render(
     )
     processed_parquet = _count_nonempty_lines(stage_state)
     trained_batch_count = _count_nonempty_lines(sup_dir / "trained_batch_names.txt")
+    offload_trained_file = (
+        Path(args.offload_trained_batches_file)
+        if args.offload_trained_batches_file
+        else (sup_dir / "trained_batch_names.txt")
+    )
+    (
+        offload_eligible_batches,
+        offload_eligible_raw,
+        offload_max_batches,
+        offload_registry_present,
+    ) = _offload_eligibility(
+        shards_root,
+        offload_trained_file,
+        keep_local_batches=int(args.offload_keep_local_batches),
+        min_active_manifests=int(args.offload_min_active_manifests),
+    )
     train_step = _latest_train_step(sup_dir)
     train_target_step = _effective_train_target_step(args.train_target_step, sup_dir, train_step)
     supervisor_gate = _latest_supervisor_gate(sup_dir)
@@ -795,22 +882,20 @@ def _render(
     coverage_pps = _rate(manifest_unique_inputs, state.manifest_unique_inputs, dt)
     train_sps = _rate(train_step, state.train_step, dt)
     train_rate_note = ""
-    if train_sps is None:
-        if state.train_step_change_value is None:
-            state.train_step_change_value = train_step
-            state.train_step_change_ts = now
-        elif train_step > state.train_step_change_value:
-            if state.train_step_change_ts is not None:
-                d_steps = train_step - state.train_step_change_value
-                d_secs = now - state.train_step_change_ts
-                if d_steps > 0 and d_secs > 0:
-                    state.train_sps_estimate = d_steps / d_secs
-            state.train_step_change_value = train_step
-            state.train_step_change_ts = now
-        elif train_step < state.train_step_change_value:
-            state.train_step_change_value = train_step
-            state.train_step_change_ts = now
+    if state.train_step_change_value is None or state.train_step_change_ts is None:
+        state.train_step_change_value = train_step
+        state.train_step_change_ts = now
+    elif train_step != state.train_step_change_value:
+        if train_step > state.train_step_change_value:
+            d_steps = train_step - state.train_step_change_value
+            d_secs = now - state.train_step_change_ts
+            if d_steps > 0 and d_secs > 0:
+                state.train_sps_estimate = d_steps / d_secs
+        else:
             state.train_sps_estimate = None
+        state.train_step_change_value = train_step
+        state.train_step_change_ts = now
+    if train_sps is None:
         train_sps = state.train_sps_estimate
         if train_sps is not None:
             train_rate_note = " (rolling)"
@@ -899,6 +984,7 @@ def _render(
         ("trainer", r"llm\.cli train"),
         ("eval-runner", r"eval_checkpoint_prompts\.py"),
         ("generation-gate", r"eval_checkpoint_prompts\.py .*generation_smoke_suite_v1\.json"),
+        ("shard-offload", r"scripts/offload_shard_bins_to_warm\.py"),
         ("zim-offload", r"zim_offload_worker\.sh"),
     ]
 
@@ -929,6 +1015,8 @@ def _render(
                 train_target_step=train_target_step,
                 supervisor_gate=supervisor_gate,
                 task_counts=task_counts,
+                offload_eligible_batches=offload_eligible_batches,
+                trained_registry_present=offload_registry_present,
             )
             task_lines.append(f"{name:16} STOP | {reason}")
             continue
@@ -969,6 +1057,17 @@ def _render(
         alerts.append(f"multiple trainers detected ({task_counts.get('trainer', 0)})")
     if task_counts.get("trainer", 0) > 0 and task_counts.get("train-supervisor", 0) == 0:
         alerts.append("trainer active without supervisor process")
+    trainer_stall_seconds: int | None = None
+    if task_counts.get("trainer", 0) > 0 and state.train_step_change_ts is not None:
+        trainer_stall_seconds = int(max(0.0, now - state.train_step_change_ts))
+    if (
+        trainer_stall_seconds is not None
+        and trainer_stall_seconds >= int(args.trainer_stall_alert_seconds)
+    ):
+        alerts.append(
+            f"trainer step stalled for {trainer_stall_seconds}s "
+            f"(threshold={args.trainer_stall_alert_seconds}s)"
+        )
     if active_symlink_manifests > 0:
         alerts.append(
             f"active manifests include symlink bins ({active_symlink_manifests}); "
@@ -1040,7 +1139,9 @@ def _render(
         f"  HotSet:   active_manifests={active_manifests} "
         f"offloaded_manifests={offloaded_manifests} "
         f"active_symlink_manifests={active_symlink_manifests} "
-        f"trained_batches={trained_batch_count}"
+        f"trained_batches={trained_batch_count} "
+        f"offload_eligible_batches={offload_eligible_batches} "
+        f"(raw={offload_eligible_raw} cap={offload_max_batches})"
     )
     lines.append(
         f"  Coverage: manifest_unique={manifest_unique_inputs}/{args.expected_parquet_files} "
@@ -1054,7 +1155,8 @@ def _render(
     lines.append(
         f"  Training: step={train_step}/{train_target_text} "
         f"rate={f'{train_sps:.3f} step/s{train_rate_note}' if train_sps is not None else 'n/a'} "
-        f"eta={_eta(rem_steps, train_sps)}"
+        f"eta={_eta(rem_steps, train_sps)} "
+        f"stall={f'{trainer_stall_seconds}s' if trainer_stall_seconds is not None else 'n/a'}"
     )
     if manifest_stall_age is not None:
         processed_stall_secs = int(processed_stall_age or 0)

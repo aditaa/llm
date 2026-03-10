@@ -18,6 +18,7 @@ Use the `Makefile` as the source of truth:
 - `make setup-infer`: install inference/deploy extras
 - `make install-server-system`: install Ubuntu/Debian system packages
 - `make install-systemd-services`: install/reload systemd service units for long-running workers
+- `make install-user-systemd-services`: install/reload user-level systemd service units (no sudo path)
 - `make doctor`: environment/tooling diagnostics
 - `make test`: run `unittest` test suite
 - `make lint`: run Ruff lint checks
@@ -65,10 +66,10 @@ Server setup reference:
 `docs/SERVER_SETUP.md`
 
 CI/CD workflows:
-- `.github/workflows/ci.yml`: lint, typecheck, tests, smoke, and gate job
+- `.github/workflows/ci.yml`: script sanity (`bash -n` + `py_compile`), lint, typecheck, tests, smoke, and gate job
 - `.github/workflows/wiki-sync.yml`: publishes wiki pages on `main` doc changes
 - `.github/dependabot.yml`: weekly dependency update PRs for `pip`, `requirements/`, and GitHub Actions
-- maintenance units: `deploy/systemd/llm-checkpoint-offload-prune.service` + `.timer`, `deploy/systemd/llm-vm-swappiness.service`
+- maintenance units: `deploy/systemd/llm-checkpoint-offload-prune.service` + `.timer`, `deploy/systemd/llm-bad-parquet-revalidate.service` + `.timer`, `deploy/systemd/llm-shard-offload.service` + `.timer`, `deploy/systemd/llm-vm-swappiness.service`
 
 ## Coding Style & Naming Conventions
 - Python 3.10+, 4-space indentation, UTF-8 files
@@ -146,6 +147,7 @@ Keep PR scope narrow; split refactors and features into separate PRs.
 - `stage_fineweb_from_warm.sh --lock-wait-seconds 0` (default) skips quickly when another staging call holds the lock; tune if you want blocking behavior
 - `stage_fineweb_from_warm.sh` only applies rsync `--contimeout` for rsync-daemon sources (`rsync://` or `::`); local/NFS paths avoid this flag
 - Use `fineweb_stage_shard_loop.sh --stage-copy-jobs <N>` to forward parallel staging copy workers into each stage cycle
+- Use `fineweb_stage_shard_loop.sh --no-auto-tune-stage-copy-jobs` to pin copy workers, or keep default copy auto-tune enabled (`--auto-tune-min-copy-jobs`, `--auto-tune-max-copy-jobs`, `--auto-tune-iowait-low-pct`, `--auto-tune-iowait-high-pct`) for queue/iowait-driven staging throughput control
 - Use `fineweb_stage_shard_loop.sh --stage-min-free-gib <N>` so staging never drives hot disk below a free-space guardrail
 - Use `fineweb_stage_shard_loop.sh --auto-tune-shard-jobs` to adapt shard parallelism and tokenizer threads from CPU load + batch runtime
 - Use `fineweb_stage_shard_loop.sh --sync-background --sync-max-inflight <N>` to overlap warm sync with next shard batches and reduce idle wait
@@ -178,6 +180,7 @@ Keep PR scope narrow; split refactors and features into separate PRs.
 - Phase-1 launcher uses lower-variance generation gating (`--generation-temperature 0.2 --generation-top-k 1`)
 - Supervisor now runs hot-manifest guard each loop (`scripts/enforce_hot_only_manifests.py`) to auto-disable active manifests that reference symlinked shard bins
 - On 12 GB RTX 5070 profiles, start supervisor with `--batch-size 12 --target-effective-batch 24 --min-batch-size 6 --max-batch-size 20 --batch-step 2` to avoid early OOM churn
+- Use supervisor `--train-stall-check-seconds` + `--train-stall-kill-seconds` to auto-restart stuck train chunks when step progress stops
 - Supervisor writes chunk trends to `artifacts/reports/train_supervisor_350bt/train_trend.tsv` and post-chunk eval trends to `artifacts/reports/train_supervisor_350bt/eval_trend.tsv`
 - Supervisor also writes scheduled generation-gate trends to `artifacts/reports/train_supervisor_350bt/generation_trend.tsv`
 - Supervisor also renders `artifacts/reports/train_supervisor_350bt/eval_dashboard.html` and exports `best.pt` aliases after successful eval promotions
@@ -187,11 +190,13 @@ Keep PR scope narrow; split refactors and features into separate PRs.
 - `pipeline_eta_report.py` accepts `--once` for explicit single-snapshot mode
 - `pipeline_eta_report.py` also tracks manifest coverage quality (`manifest_unique_input_files`, overlap counts, `coverage_complete`)
 - `pipeline_eta_report.py` now includes per-task `RUN/STOP` state with stop reasons and `supervisor_gate` in JSON/text output
+- `pipeline_eta_report.py` now also reports `trainer_stall_seconds` and shard offload readiness (`offload_eligible_batches`, raw/capped counts)
 - Use `scripts/pipeline_live_view.py --refresh-seconds 5` for a live-only terminal monitor (system + pipeline task status, no report writes; includes watchdog/prefetch/stage-loop/generation-gate task rows; add `--no-alt-screen` if needed)
 - `pipeline_live_view.py` can reuse fresh ETA report train-step rates via `--eta-status-file`/`--eta-status-max-age-seconds` to keep training ETA visible when live step deltas are flat
 - `pipeline_live_view.py` staging line includes `hot_parquet` + `hot_incomplete` so cache refill progress is visible during warm->hot copies
 - `pipeline_live_view.py` includes manifest coverage line (`unique/510`, overlap inputs/manifests, completion flag)
 - `pipeline_live_view.py` also shows hot-manifest state (`active`, `offloaded`, `active_symlink_manifests`) and trained-batch registry count
+- `pipeline_live_view.py` now also shows shard offload readiness (`offload_eligible_batches`) and training stall age (`stall=<seconds>`)
 - `pipeline_live_view.py` includes manifest coverage rate/ETA to gauge when coverage gates will clear
 - `pipeline_live_view.py` also shows supervisor gate state (for example `waiting_unique_inputs <have>/<need>` or `waiting_train_tokens <have_tokens>/<need_tokens>`)
 - `pipeline_live_view.py` coverage ETA/rate falls back to sharding throughput when manifest overlap is zero, so ETA remains visible between manifest-update bursts

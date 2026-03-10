@@ -626,8 +626,8 @@ Coverage ETA/rate now falls back to sharding throughput when manifest overlap is
 ETA remains visible between manifest update bursts.
 Alerts also flag duplicate train controllers (`train-supervisor`/`trainer`) and unmanaged
 stage-loop runs (stage-loop active without stage-watchdog).
-The train supervisor also self-checks process singleton by PID age and exits newer duplicates,
-so accidental second launches do not persist.
+The train supervisor also self-checks process singleton by PID age within the same
+`--state-dir` scope and exits newer duplicates, so accidental second launches do not persist.
 
 It refreshes in-place (full-screen mode). If your terminal does not handle full-screen
 escape codes well, add `--no-alt-screen`.

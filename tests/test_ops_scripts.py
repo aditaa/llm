@@ -983,6 +983,106 @@ class ScriptTests(unittest.TestCase):
             self.assertEqual(proc.returncode, 124, msg=proc.stderr)
             self.assertIn("waiting_for_train_tokens", proc.stdout)
 
+    @unittest.skipIf(shutil.which("timeout") is None, "timeout is required")
+    def test_train_supervisor_singleton_scope_is_state_dir(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+        if not (repo_root / ".venv" / "bin" / "python").exists():
+            self.skipTest(".venv/bin/python not available in this test environment")
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            shards = root / "shards"
+            batch = shards / "batch_0001"
+            output_a = root / "out_a"
+            output_b = root / "out_b"
+            state_a = root / "state_a"
+            state_b = root / "state_b"
+            batch.mkdir(parents=True, exist_ok=True)
+
+            (batch / "manifest.json").write_text(
+                json.dumps(
+                    {
+                        "input_files": ["000_00001.parquet"],
+                        "train": {"total_tokens": 123, "shards": []},
+                        "val": {"total_tokens": 0, "shards": []},
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            proc_a = subprocess.Popen(
+                [
+                    "timeout",
+                    "12",
+                    "bash",
+                    "scripts/train_supervisor_rtx5070_350bt.sh",
+                    "--shards-path",
+                    str(shards),
+                    "--output-dir",
+                    str(output_a),
+                    "--state-dir",
+                    str(state_a),
+                    "--poll-seconds",
+                    "1",
+                    "--min-manifests",
+                    "1",
+                    "--min-unique-input-files",
+                    "0",
+                    "--min-train-tokens",
+                    "999",
+                    "--no-auto-tune",
+                    "--no-eval-after-chunk",
+                    "--no-generation-gate",
+                ],
+                cwd=repo_root,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+            try:
+                time.sleep(1.0)
+                proc_b = subprocess.run(
+                    [
+                        "timeout",
+                        "3",
+                        "bash",
+                        "scripts/train_supervisor_rtx5070_350bt.sh",
+                        "--shards-path",
+                        str(shards),
+                        "--output-dir",
+                        str(output_b),
+                        "--state-dir",
+                        str(state_b),
+                        "--poll-seconds",
+                        "1",
+                        "--min-manifests",
+                        "1",
+                        "--min-unique-input-files",
+                        "0",
+                        "--min-train-tokens",
+                        "999",
+                        "--no-auto-tune",
+                        "--no-eval-after-chunk",
+                        "--no-generation-gate",
+                    ],
+                    cwd=repo_root,
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+                self.assertEqual(proc_b.returncode, 124, msg=proc_b.stderr)
+                self.assertIn("waiting_for_train_tokens", proc_b.stdout)
+            finally:
+                proc_a.terminate()
+                try:
+                    proc_a.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    proc_a.kill()
+                    proc_a.wait(timeout=5)
+                if proc_a.stdout is not None:
+                    proc_a.stdout.close()
+                if proc_a.stderr is not None:
+                    proc_a.stderr.close()
+
 
 @unittest.skipIf(torch is None, "torch is not installed")
 class PackagingScriptTests(unittest.TestCase):

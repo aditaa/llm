@@ -359,18 +359,34 @@ log() {
 }
 
 find_oldest_supervisor_pid() {
-  ps -eo pid=,ppid=,etimes=,args= | awk '
+  ps -eo pid=,ppid=,etimes=,args= | awk -v target_state="$STATE_DIR" -v self_pid="$$" '
 {
   pid = $1
+  ppid = $2
   etimes = $3
   $1 = ""; $2 = ""; $3 = ""
   sub(/^ +/, "", $0)
   cmd = $0
-  if (cmd ~ /^bash scripts\/train_supervisor_rtx5070_350bt\.sh( |$)/) {
-    if (best_pid == "" || etimes > best_etime) {
-      best_pid = pid
-      best_etime = etimes
+  if (pid == self_pid || ppid == self_pid) {
+    next
+  }
+  if (cmd !~ /^bash scripts\/train_supervisor_rtx5070_350bt\.sh( |$)/) {
+    next
+  }
+  process_state = "artifacts/reports/train_supervisor_350bt"
+  arg_count = split(cmd, args, /[[:space:]]+/)
+  for (i = 1; i <= arg_count; i++) {
+    if (args[i] == "--state-dir" && (i + 1) <= arg_count) {
+      process_state = args[i + 1]
+      break
     }
+  }
+  if (process_state != target_state) {
+    next
+  }
+  if (best_pid == "" || etimes > best_etime || (etimes == best_etime && pid < best_pid)) {
+    best_pid = pid
+    best_etime = etimes
   }
 }
 END {
@@ -389,7 +405,7 @@ ensure_single_supervisor_process() {
     return 0
   fi
   if [[ "$oldest_pid" != "$$" ]]; then
-    log "singleton_exit reason=older_supervisor_running self=$$ keeper=$oldest_pid"
+    log "singleton_exit reason=older_supervisor_running same_state_dir=$STATE_DIR self=$$ keeper=$oldest_pid"
     exit 0
   fi
 }

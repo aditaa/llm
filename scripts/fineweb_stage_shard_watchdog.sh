@@ -114,15 +114,25 @@ log() {
 }
 
 progress_snapshot() {
-  local hot_count manifest_count processed_count
+  local hot_count manifest_count processed_count incomplete_count incomplete_bytes
   hot_count="$(find "$HOT_PARQUET_DIR" -maxdepth 1 -type f -name '*.parquet' 2>/dev/null | wc -l | tr -d ' ')"
+  incomplete_count="$(find "$HOT_PARQUET_DIR" -maxdepth 1 -type f -name '*.incomplete' 2>/dev/null | wc -l | tr -d ' ')"
+  incomplete_bytes="$(
+    find "$HOT_PARQUET_DIR" -maxdepth 1 -type f -name '*.incomplete' -printf '%s\n' 2>/dev/null \
+      | awk '{s+=$1} END {print s+0}'
+  )"
   manifest_count="$(find "$SHARDS_ROOT" -name manifest.json 2>/dev/null | wc -l | tr -d ' ')"
   if [[ -f "$PROCESSED_FILE" ]]; then
     processed_count="$(awk 'NF {c+=1} END {print c+0}' "$PROCESSED_FILE")"
   else
     processed_count=0
   fi
-  printf '%s:%s:%s' "$hot_count" "$manifest_count" "$processed_count"
+  printf '%s:%s:%s:%s:%s' \
+    "$hot_count" \
+    "$manifest_count" \
+    "$processed_count" \
+    "$incomplete_count" \
+    "$incomplete_bytes"
 }
 
 WORKER_PID=""

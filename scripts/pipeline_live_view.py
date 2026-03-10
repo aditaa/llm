@@ -565,6 +565,7 @@ def _stop_reason(
     warm_parquet: int,
     expected_parquet_files: int,
     hot_parquet: int,
+    hot_incomplete: int,
     train_step: int,
     train_target_step: int | None,
     supervisor_gate: str,
@@ -609,6 +610,8 @@ def _stop_reason(
             return "all expected parquet processed"
         if task_counts.get("stage-loop", 0) > 0:
             if hot_parquet <= 0:
+                if hot_incomplete > 0:
+                    return "finalizing staged parquet copies"
                 return "waiting for staged hot parquet"
             return "idle between shard batches"
         return "not started"
@@ -697,6 +700,7 @@ def _render(
     warm_incomplete = _count_find(warm_dir, "*.incomplete")
     warm_bytes = _du_bytes(warm_dir)
     hot_parquet = _count_find(hot_dir, "*.parquet")
+    hot_incomplete = _count_find(hot_dir, "*.incomplete")
     hot_bytes = _du_bytes(hot_dir)
     manifest_count = _count_find(shards_root, "manifest.json")
     manifest_unique_inputs, manifest_overlap_inputs, manifest_overlap_manifests = (
@@ -835,6 +839,7 @@ def _render(
                 warm_parquet=warm_parquet,
                 expected_parquet_files=int(args.expected_parquet_files),
                 hot_parquet=hot_parquet,
+                hot_incomplete=hot_incomplete,
                 train_step=train_step,
                 train_target_step=train_target_step,
                 supervisor_gate=supervisor_gate,
@@ -930,7 +935,8 @@ def _render(
         f"eta={_eta(rem_bytes, download_bps)}"
     )
     lines.append(
-        f"  Staging:  hot_parquet={hot_parquet} hot_size={_human_bytes(hot_bytes)} "
+        f"  Staging:  hot_parquet={hot_parquet} hot_incomplete={hot_incomplete} "
+        f"hot_size={_human_bytes(hot_bytes)} "
         f"processed={processed_parquet}/{args.expected_parquet_files} "
         f"rate={f'{shard_pps:.3f} files/s' if shard_pps is not None else 'n/a'}"
     )

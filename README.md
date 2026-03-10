@@ -304,6 +304,8 @@ The stage-watchdog now enforces a singleton lock in the stage state directory
 the log filename. It also adopts an already-running stage-loop controller by default so
 watchdog restarts do not leave direct loop runs unmanaged. Use `--no-adopt-existing-loop`
 to force launching a fresh worker process.
+Watchdog progress snapshots now include hot `.incomplete` file count/bytes, so long warm->hot
+copy phases are treated as active progress (not false stalls).
 
 3ad. Build tokenizer + token shards directly from FineWeb parquet:
 ```bash
@@ -612,6 +614,7 @@ PYTHONPATH=src .venv/bin/python scripts/pipeline_live_view.py --refresh-seconds 
 This is a live-only monitor (no report/status files written) and includes:
 - system status (CPU, memory, GPU, disk mounts)
 - pipeline progress (download/staging/sharding/training)
+- staging line includes `hot_parquet` and `hot_incomplete` to show active warm->hot copy progress
 - manifest coverage status (`unique/510`, overlap inputs/manifests, coverage rate + ETA, completion flag)
 - supervisor gate status (for example waiting on `min_unique_input_files`)
 - running project task states with pid/runtime/cpu/mem summaries

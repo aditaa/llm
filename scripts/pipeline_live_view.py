@@ -612,6 +612,12 @@ def _stop_reason(
                 return "waiting for staged hot parquet"
             return "idle between shard batches"
         return "not started"
+    if task_name == "shard-verify":
+        if coverage_complete:
+            return "all expected parquet processed"
+        if task_counts.get("stage-loop", 0) > 0:
+            return "idle between guardrail checks"
+        return "not started"
     if task_name == "train-supervisor":
         if train_target_step is not None and train_step >= train_target_step:
             return "target step reached"
@@ -799,6 +805,7 @@ def _render(
         ("hf-download", r"\.venv/bin/hf download HuggingFaceFW/fineweb"),
         ("stage-loop", r"fineweb_stage_shard_loop\.sh"),
         ("shard-builder", r"scripts/fineweb_parquet_to_shards\.py"),
+        ("shard-verify", r"llm\.cli verify-shards"),
         ("train-supervisor", r"bash scripts/train_supervisor_rtx5070_350bt\.sh"),
         ("trainer", r"llm\.cli train"),
         ("eval-runner", r"eval_checkpoint_prompts\.py"),
@@ -857,6 +864,9 @@ def _render(
     mem_pct = (100.0 * mem_used / mem_total) if mem_total > 0 else 0.0
     swap_pct = (100.0 * swap_used / swap_total) if swap_total > 0 else 0.0
     alerts: list[str] = []
+    sharding_active = (
+        task_counts.get("shard-builder", 0) > 0 or task_counts.get("shard-verify", 0) > 0
+    )
     if task_counts.get("stage-watchdog", 0) > 1:
         alerts.append(f"multiple stage watchdogs detected ({task_counts.get('stage-watchdog', 0)})")
     if task_counts.get("stage-loop", 0) > 1:
@@ -880,7 +890,7 @@ def _render(
     if (
         not coverage_complete
         and task_counts.get("stage-loop", 0) > 0
-        and task_counts.get("shard-builder", 0) == 0
+        and not sharding_active
         and manifest_stall_age is not None
         and manifest_stall_age >= float(args.manifest_stall_seconds)
     ):
@@ -889,8 +899,10 @@ def _render(
     if (
         not coverage_complete
         and task_counts.get("stage-loop", 0) > 0
-        and task_counts.get("shard-builder", 0) == 0
+        and not sharding_active
         and processed_stall_age is not None
+        and manifest_stall_age is not None
+        and manifest_stall_age >= float(args.manifest_stall_seconds)
         and processed_stall_age >= float(args.manifest_stall_seconds)
     ):
         mins = int(processed_stall_age // 60)

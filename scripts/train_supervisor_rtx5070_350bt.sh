@@ -651,8 +651,8 @@ PY
 start_gpu_monitor() {
   local train_pid="$1"
   local monitor_file="$2"
+  GPU_MONITOR_PID=""
   if ! command -v nvidia-smi >/dev/null 2>&1; then
-    echo ""
     return 0
   fi
   (
@@ -666,7 +666,7 @@ start_gpu_monitor() {
       sleep "$GPU_SAMPLE_SECONDS"
     done
   ) > "$monitor_file" 2>/dev/null &
-  echo "$!"
+  GPU_MONITOR_PID="$!"
 }
 
 gpu_summary() {
@@ -1116,7 +1116,8 @@ while true; do
       "${resume_args[@]}"
   ) > >(tee -a "$run_log") 2>&1 &
   train_pid=$!
-  monitor_pid="$(start_gpu_monitor "$train_pid" "$gpu_log")"
+  start_gpu_monitor "$train_pid" "$gpu_log"
+  monitor_pid="${GPU_MONITOR_PID:-}"
   wait "$train_pid"
   rc=$?
   if [[ -n "${monitor_pid:-}" ]]; then

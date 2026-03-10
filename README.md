@@ -639,6 +639,10 @@ For reboot-safe long runs, install service units for supervisor + stage watchdog
 make install-systemd-services
 ```
 
+If you launch supervisor as a transient user unit (`systemd-run --user`), set a high
+open-files limit (for example `--property=LimitNOFILE=1048576`) so large shard sets
+do not fail with `OSError: [Errno 24] Too many open files`.
+
 Templates:
 - `deploy/systemd/llm-train-supervisor.service`
 - `deploy/systemd/llm-fineweb-stage-shard-loop.service`

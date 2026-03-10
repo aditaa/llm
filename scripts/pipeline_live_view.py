@@ -896,6 +896,7 @@ def _render(
         not coverage_complete
         and task_counts.get("stage-loop", 0) > 0
         and not sharding_active
+        and hot_incomplete == 0
         and manifest_stall_age is not None
         and manifest_stall_age >= float(args.manifest_stall_seconds)
     ):
@@ -905,6 +906,7 @@ def _render(
         not coverage_complete
         and task_counts.get("stage-loop", 0) > 0
         and not sharding_active
+        and hot_incomplete == 0
         and processed_stall_age is not None
         and manifest_stall_age is not None
         and manifest_stall_age >= float(args.manifest_stall_seconds)

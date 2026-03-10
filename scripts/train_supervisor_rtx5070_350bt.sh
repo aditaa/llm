@@ -358,6 +358,42 @@ log() {
   echo "[$(date -Iseconds)] $*" | tee -a "$SUP_LOG"
 }
 
+find_oldest_supervisor_pid() {
+  ps -eo pid=,ppid=,etimes=,args= | awk '
+{
+  pid = $1
+  etimes = $3
+  $1 = ""; $2 = ""; $3 = ""
+  sub(/^ +/, "", $0)
+  cmd = $0
+  if (cmd ~ /^bash scripts\/train_supervisor_rtx5070_350bt\.sh( |$)/) {
+    if (best_pid == "" || etimes > best_etime) {
+      best_pid = pid
+      best_etime = etimes
+    }
+  }
+}
+END {
+  if (best_pid != "") {
+    print best_pid
+    exit 0
+  }
+  exit 1
+}'
+}
+
+ensure_single_supervisor_process() {
+  local oldest_pid
+  oldest_pid="$(find_oldest_supervisor_pid || true)"
+  if [[ -z "$oldest_pid" ]]; then
+    return 0
+  fi
+  if [[ "$oldest_pid" != "$$" ]]; then
+    log "singleton_exit reason=older_supervisor_running self=$$ keeper=$oldest_pid"
+    exit 0
+  fi
+}
+
 ceil_div() {
   local a="$1"
   local b="$2"
@@ -981,8 +1017,10 @@ failure_streak=0
 successful_chunks=0
 log "supervisor_start shards_path=$SHARDS_PATH output_dir=$OUTPUT_DIR step_chunk=$STEP_CHUNK"
 log "tuning_start batch_size=$BATCH_SIZE grad_accum=$GRAD_ACCUM_STEPS auto_tune=$AUTO_TUNE target_effective_batch=$TARGET_EFFECTIVE_BATCH train_fail_on_eval_regression=$TRAIN_FAIL_ON_EVAL_REGRESSION checkpoint_keep_last=$CHECKPOINT_KEEP_LAST checkpoint_keep_every=$CHECKPOINT_KEEP_EVERY allow_context_extension=$ALLOW_CONTEXT_EXTENSION ema_decay=$EMA_DECAY ema_update_every=$EMA_UPDATE_EVERY ema_start_step=$EMA_START_STEP generation_gate=$GENERATION_GATE generation_every_chunks=$GENERATION_EVERY_CHUNKS generation_stop_on_fail=$GENERATION_STOP_ON_FAIL dedupe_overlap_manifests=$DEDUPE_OVERLAP_MANIFESTS dedupe_keep=$DEDUPE_KEEP dedupe_dry_run=$DEDUPE_DRY_RUN min_train_tokens=$MIN_TRAIN_TOKENS"
+ensure_single_supervisor_process
 
 while true; do
+  ensure_single_supervisor_process
   run_manifest_dedupe
   prune_manifest_dedupe_artifacts
   mcount="$(manifest_count)"

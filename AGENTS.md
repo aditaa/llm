@@ -164,6 +164,7 @@ Keep PR scope narrow; split refactors and features into separate PRs.
 - Use supervisor `--dedupe-report-keep <N>` to cap per-chunk dedupe report/log file growth during long coverage waits
 - For continuous 350BT pipeline runs, keep exactly one `fineweb_stage_shard_watchdog.sh` and one `train_supervisor_rtx5070_350bt.sh` process active; avoid concurrent one-off `llm.cli train` runs against the same checkpoint directory
 - `train_supervisor_rtx5070_350bt.sh` now acquires `artifacts/reports/train_supervisor_350bt/supervisor.lock` directly for non-bypassable singleton control
+- `train_supervisor_rtx5070_350bt.sh` also self-demotes newer duplicate supervisor shells by PID age, so accidental second launches exit cleanly
 - Supervisor resume guardrail validates `last.pt`/`ckpt_step_*.pt` and quarantines invalid checkpoint files before retry
 - Use `--no-train-fail-on-eval-regression` in supervisor when you want train chunks to continue and rely on post-chunk prompt-suite gates
 - On 12 GB RTX 5070 profiles, start supervisor with `--batch-size 12 --target-effective-batch 24 --min-batch-size 6 --max-batch-size 20 --batch-step 2` to avoid early OOM churn

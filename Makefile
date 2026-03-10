@@ -4,7 +4,7 @@ ifneq ("$(wildcard .venv/bin/python)","")
 PYTHON=.venv/bin/python
 endif
 
-.PHONY: setup-dev setup-train setup-infer doctor install-server-system install-systemd-services test lint format typecheck smoke extract-zim train-tokenizer train-tokenizer-global corpus-quality-report clean-corpus-batch dataset-risk-report pull-hf-rows parquet-to-corpus fineweb-parquet-to-shards fineweb-manifest-dedupe stage-fineweb-from-warm fineweb-prefetch-hot-queue fineweb-revalidate-bad-parquet fineweb-stage-shard-loop fineweb-stage-shard-watchdog lr-sweep-350bt train-350bt-v2 train-350bt-ctx1024 train-supervisor-350bt pipeline-eta pipeline-live shard-corpus-batch verify-shards train generate average-checkpoints eval-checkpoint render-eval-dashboard package-inference-bundle sync-warm hydrate-warm offload-zim checkpoint-offload-prune set-swappiness hf-download-resumable hf-download-watchdog hf-prepare-publish hf-download-model serve-openai publish-wiki
+.PHONY: setup-dev setup-train setup-infer doctor install-server-system install-systemd-services test lint format typecheck smoke extract-zim train-tokenizer train-tokenizer-global corpus-quality-report clean-corpus-batch dataset-risk-report pull-hf-rows parquet-to-corpus fineweb-parquet-to-shards fineweb-manifest-dedupe stage-fineweb-from-warm fineweb-prefetch-hot-queue fineweb-revalidate-bad-parquet offload-shard-bins-warm fineweb-stage-shard-loop fineweb-stage-shard-watchdog lr-sweep-350bt train-350bt-v2 train-350bt-ctx1024 train-supervisor-350bt pipeline-eta pipeline-live shard-corpus-batch verify-shards train generate average-checkpoints eval-checkpoint render-eval-dashboard package-inference-bundle sync-warm hydrate-warm offload-zim checkpoint-offload-prune set-swappiness hf-download-resumable hf-download-watchdog hf-prepare-publish hf-download-model serve-openai publish-wiki
 
 setup-dev:
 	bash scripts/bootstrap_dev.sh
@@ -91,6 +91,10 @@ fineweb-prefetch-hot-queue:
 fineweb-revalidate-bad-parquet:
 	@echo "Usage:"
 	@echo "  PYTHONPATH=src $(PYTHON) scripts/revalidate_bad_parquet.py --restage-valid --max-restage-files 15 --min-free-gib 80"
+
+offload-shard-bins-warm:
+	@echo "Usage:"
+	@echo "  PYTHONPATH=src $(PYTHON) scripts/offload_shard_bins_to_warm.py --keep-local-batches 24 --target-free-gib 180 --max-batches 40"
 
 fineweb-stage-shard-loop:
 	@echo "Usage:"

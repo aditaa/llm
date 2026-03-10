@@ -41,6 +41,7 @@ Use the `Makefile` as the source of truth:
 - `make stage-fineweb-from-warm`: usage helper for staging FineWeb parquet chunks from warm to hot
 - `make fineweb-prefetch-hot-queue`: usage helper for warm->hot queue prefetch worker
 - `make fineweb-revalidate-bad-parquet`: usage helper for revalidating/restaging bad parquet entries
+- `make offload-shard-bins-warm`: usage helper for replacing older local shard `.bin` files with warm-storage symlinks (keep manifests local)
 - `make fineweb-stage-shard-loop`: usage helper for rolling warm->hot stage + shard + verify + sync + purge
 - `make fineweb-stage-shard-watchdog`: usage helper for auto-restart watchdog around the stage/shard loop
 - `make lr-sweep-350bt`: usage helper for RTX 5070 LR sweep on staged 350BT shards (`2e-4..4e-4`, ctx 512)

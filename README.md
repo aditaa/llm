@@ -65,6 +65,7 @@ make fineweb-manifest-dedupe # print overlap-manifest dedupe helper usage
 make stage-fineweb-from-warm # print warm->hot FineWeb chunk staging usage
 make fineweb-prefetch-hot-queue # print hot-queue prefetch worker usage
 make fineweb-revalidate-bad-parquet # print bad parquet revalidate/restage usage
+make offload-shard-bins-warm # print shard .bin offload-to-warm usage
 make fineweb-stage-shard-loop # print rolling stage->shard->verify->sync->purge usage
 make fineweb-stage-shard-watchdog # print auto-restart watchdog usage for stage/shard loop
 make lr-sweep-350bt # print RTX 5070 LR sweep usage for staged 350BT shards
@@ -673,6 +674,16 @@ This also prunes `artifacts/reports/fineweb_stage_shard_loop/quarantine_bad_parq
 - removes quarantine copies for files no longer marked bad
 - for still-bad files, keeps only the newest copy per basename (`--quarantine-keep-per-name 1`)
 - disable with `--no-prune-quarantine`
+
+Offload older shard binaries to warm storage (keep manifests local):
+```bash
+PYTHONPATH=src .venv/bin/python scripts/offload_shard_bins_to_warm.py \
+  --keep-local-batches 24 \
+  --target-free-gib 180 \
+  --max-batches 40
+```
+This replaces local shard `.bin` files with symlinks to warm copies so training can continue
+from the same manifests while hot-disk usage stays bounded.
 
 Environment template:
 - `deploy/systemd/llm.env.example` (installed to `/etc/llm/llm.env`)

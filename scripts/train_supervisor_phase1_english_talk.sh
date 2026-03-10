@@ -22,6 +22,9 @@ exec bash scripts/train_supervisor_rtx5070_350bt.sh \
   --generation-suite configs/eval/generation_talk_smoke_v1.json \
   --generation-temperature 0.2 \
   --generation-top-k 1 \
+  --generation-fail-below-pass-rate 0.45 \
   --generation-every-chunks 1 \
+  --generation-stop-on-fail \
+  --eval-fail-on-no-promotion \
   --no-train-fail-on-eval-regression \
   "$@"

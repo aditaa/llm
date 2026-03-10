@@ -43,6 +43,10 @@ WAIT_UNIQUE_RE = re.compile(r"waiting_for_unique_inputs have=(\d+) need=(\d+)")
 WAIT_TRAIN_TOKENS_RE = re.compile(r"waiting_for_train_tokens have_tokens=(\d+) need_tokens=(\d+)")
 BATCH_START_RE = re.compile(r"^\[([^\]]+)\]\s+batch_start id=(\S+)\s+files=(\d+)\b")
 BATCH_DONE_RE = re.compile(r"^\[([^\]]+)\]\s+batch_done id=(\S+)\b")
+SUPERVISOR_STATE_CANDIDATES = (
+    "artifacts/reports/train_supervisor_phase1_talk",
+    "artifacts/reports/train_supervisor_350bt",
+)
 
 
 def parse_args() -> argparse.Namespace:
@@ -53,7 +57,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--shards-root", default="data/shards_global/fineweb-global-bpe-v1")
     parser.add_argument("--stage-state-dir", default="artifacts/reports/fineweb_stage_shard_loop")
     parser.add_argument(
-        "--supervisor-state-dir", default="artifacts/reports/train_supervisor_350bt"
+        "--supervisor-state-dir",
+        default="",
+        help=(
+            "Supervisor state dir. Default: auto-detect newest existing path from "
+            "artifacts/reports/train_supervisor_phase1_talk and "
+            "artifacts/reports/train_supervisor_350bt."
+        ),
     )
     parser.add_argument("--expected-parquet-files", type=int, default=510)
     parser.add_argument("--expected-bytes", type=int, default=1061360917731)
@@ -292,6 +302,31 @@ def _file_mtime(path: Path) -> float | None:
         return path.stat().st_mtime
     except OSError:
         return None
+
+
+def _dir_latest_mtime(path: Path) -> float:
+    latest = _file_mtime(path) or 0.0
+    for pattern in ("supervisor_*.log", "train_*.log", "generation_trend.tsv", "eval_trend.tsv"):
+        for candidate in path.glob(pattern):
+            mtime = _file_mtime(candidate)
+            if mtime is not None and mtime > latest:
+                latest = mtime
+    return latest
+
+
+def _resolve_supervisor_state_dir(raw_value: str) -> Path:
+    requested = raw_value.strip()
+    if requested:
+        requested_path = Path(requested)
+        if requested_path.exists():
+            return requested_path
+
+    existing_candidates = [Path(p) for p in SUPERVISOR_STATE_CANDIDATES if Path(p).exists()]
+    if not existing_candidates:
+        if requested:
+            return Path(requested)
+        return Path(SUPERVISOR_STATE_CANDIDATES[-1])
+    return max(existing_candidates, key=_dir_latest_mtime)
 
 
 def _latest_train_step(supervisor_state_dir: Path) -> int:
@@ -859,7 +894,7 @@ def _render(
     shards_root = Path(args.shards_root)
     stage_state_dir = Path(args.stage_state_dir)
     stage_state = stage_state_dir / "processed_parquet_files.txt"
-    sup_dir = Path(args.supervisor_state_dir)
+    sup_dir = _resolve_supervisor_state_dir(args.supervisor_state_dir)
 
     warm_parquet = _count_find(warm_dir, "*.parquet")
     warm_incomplete = _count_find(warm_dir, "*.incomplete")

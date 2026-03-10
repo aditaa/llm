@@ -66,6 +66,8 @@ make fineweb-manifest-dedupe # print overlap-manifest dedupe helper usage
 make stage-fineweb-from-warm # print warm->hot FineWeb chunk staging usage
 make fineweb-prefetch-hot-queue # print hot-queue prefetch worker usage
 make fineweb-revalidate-bad-parquet # print bad parquet revalidate/restage usage
+make reconcile-offloaded-manifests # print offloaded-manifest reconcile usage
+make shard-offload-cycle # print safe reconcile->offload->reconcile usage
 make offload-shard-bins-warm # print shard .bin offload-to-warm usage
 make fineweb-stage-shard-loop # print rolling stage->shard->verify->sync->purge usage
 make fineweb-stage-shard-watchdog # print auto-restart watchdog usage for stage/shard loop
@@ -586,6 +588,9 @@ This uses `configs/eval/english_talk_suite_v1.json`,
 `configs/eval/promotion_policy_talk_v1.json`.
 It also uses a dedicated state dir (`artifacts/reports/train_supervisor_phase1_talk`) and
 lower-variance generation-gate settings (`--generation-temperature 0.2 --generation-top-k 1`).
+Phase-1 launcher now enforces stronger quality gates by default:
+`--generation-fail-below-pass-rate 0.45`, `--generation-stop-on-fail`,
+and `--eval-fail-on-no-promotion`.
 Successful chunks update `artifacts/reports/train_supervisor_phase1_talk/trained_batch_names.txt`,
 which can be used to gate shard offload so only already-trained batches move to warm storage.
 On each supervisor loop, hot-only manifest guard now runs automatically and disables any
@@ -594,6 +599,9 @@ When monitoring this profile, point status tools at that state dir:
 `PYTHONPATH=src .venv/bin/python scripts/pipeline_live_view.py --supervisor-state-dir artifacts/reports/train_supervisor_phase1_talk`
 and
 `PYTHONPATH=src .venv/bin/python scripts/pipeline_eta_report.py --supervisor-state-dir artifacts/reports/train_supervisor_phase1_talk`.
+If `--supervisor-state-dir` is omitted, both tools now auto-detect the newest existing
+state dir between `artifacts/reports/train_supervisor_phase1_talk` and
+`artifacts/reports/train_supervisor_350bt`.
 For continuous 350BT ingestion/training, keep exactly one stage watchdog and one train supervisor running.
 Avoid launching one-off `llm.cli train --max-steps ...` jobs in parallel with the supervisor.
 Stage watchdog now performs stale worker cleanup before relaunch, so restarted controllers
@@ -751,6 +759,22 @@ Use `--min-manifest-unique-input-files` to block offload until dataset coverage 
 Use `--min-active-manifests` and `--min-active-train-tokens` as offload
 safety floor so hot-local training coverage never drops below your target.
 
+Before offloading, reconcile previously offloaded manifests and re-enable any
+batch not proven trained (plus optional hot rehydrate of active symlink bins):
+```bash
+PYTHONPATH=src .venv/bin/python scripts/reconcile_offloaded_manifests.py \
+  --shards-root data/shards_global/fineweb-global-bpe-v1 \
+  --trained-batches-file artifacts/reports/train_supervisor_phase1_talk/trained_batch_names.txt,artifacts/reports/train_supervisor_350bt/trained_batch_names.txt \
+  --skip-if-trained-file-missing \
+  --min-active-unique-input-files 510 \
+  --rehydrate-active-symlink-bins
+```
+
+For timer automation, use the safe cycle wrapper (reconcile -> offload -> reconcile):
+```bash
+bash scripts/shard_offload_cycle.sh
+```
+
 Environment template:
 - `deploy/systemd/llm.env.example` (installed to `/etc/llm/llm.env`)
 
@@ -761,6 +785,11 @@ LLM_STAGE_SHARD_LOOP_ARGS="--hot-queue-min-files 10 --stage-max-files 8 --stage-
 Recommended stage watchdog wrapper:
 ```bash
 LLM_STAGE_SHARD_WATCHDOG_ARGS="--worker-args \"${LLM_STAGE_SHARD_LOOP_ARGS}\" --expected-unique-input-files 510 --check-interval-seconds 120 --stall-seconds 5400 --watchdog-log-file artifacts/reports/fineweb_stage_shard_loop/watchdog.log"
+```
+Recommended shard-offload cycle overrides:
+```bash
+LLM_SHARD_OFFLOAD_RECONCILE_ARGS="--shards-root data/shards_global/fineweb-global-bpe-v1 --trained-batches-file artifacts/reports/train_supervisor_phase1_talk/trained_batch_names.txt,artifacts/reports/train_supervisor_350bt/trained_batch_names.txt --skip-if-trained-file-missing --min-active-unique-input-files 510 --rehydrate-active-symlink-bins"
+LLM_SHARD_OFFLOAD_ARGS="--shards-root data/shards_global/fineweb-global-bpe-v1 --warm-shards-root /mnt/ceph/llm/data/shards_global/fineweb-global-bpe-v1 --keep-local-batches 24 --target-free-gib 180 --max-batches 16 --disable-offloaded-manifests --require-trained-batches-file artifacts/reports/train_supervisor_phase1_talk/trained_batch_names.txt,artifacts/reports/train_supervisor_350bt/trained_batch_names.txt --skip-if-trained-file-missing --min-manifest-unique-input-files 510 --min-active-manifests 48 --min-active-train-tokens 40000000000"
 ```
 
 ## Inference Bundle Packaging

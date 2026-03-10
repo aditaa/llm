@@ -42,6 +42,8 @@ Use the `Makefile` as the source of truth:
 - `make stage-fineweb-from-warm`: usage helper for staging FineWeb parquet chunks from warm to hot
 - `make fineweb-prefetch-hot-queue`: usage helper for warm->hot queue prefetch worker
 - `make fineweb-revalidate-bad-parquet`: usage helper for revalidating/restaging bad parquet entries
+- `make reconcile-offloaded-manifests`: usage helper for restoring risky offloaded manifests and optional bin rehydrate
+- `make shard-offload-cycle`: usage helper for safe reconcile -> offload -> reconcile timer cycle
 - `make offload-shard-bins-warm`: usage helper for replacing older local shard `.bin` files with warm-storage symlinks, disabling offloaded manifests, gating offload by trained-batch registry, and honoring hot-coverage safety floors
 - `make enforce-hot-manifests`: usage helper for disabling active manifests that reference symlinked shard bins
 - `make fineweb-stage-shard-loop`: usage helper for rolling warm->hot stage + shard + verify + sync + purge
@@ -125,6 +127,8 @@ Keep PR scope narrow; split refactors and features into separate PRs.
 - Use `bash scripts/zim_offload_worker.sh data/raw_zim /mnt/ceph/llm/data/raw_zim 120` for continuous hot->warm raw ZIM offload
 - Use `bash scripts/hydrate_from_warm_storage.sh /mnt/ceph/llm/data` to restore local artifacts from warm storage
 - Use `python3 scripts/offload_shard_bins_to_warm.py --disable-offloaded-manifests --require-trained-batches-file <phase1_state>/trained_batch_names.txt,<standard_state>/trained_batch_names.txt --skip-if-trained-file-missing --min-manifest-unique-input-files <N> --min-active-manifests <N> --min-active-train-tokens <TOKENS>` to move only already-trained older shard bins to warm storage while keeping active manifests hot-local only
+- Use `python3 scripts/reconcile_offloaded_manifests.py --trained-batches-file <phase1_state>/trained_batch_names.txt,<standard_state>/trained_batch_names.txt --skip-if-trained-file-missing --min-active-unique-input-files <N> --rehydrate-active-symlink-bins` before offload runs to restore untrained/under-coverage offloaded manifests and rehydrate active symlink bins
+- Prefer `bash scripts/shard_offload_cycle.sh` in automation (pre-reconcile -> gated offload -> post-reconcile) instead of direct one-shot offload calls
 - For bounded external pulls (for example FineWeb samples), use `python3 scripts/pull_hf_rows.py` and write to warm storage first
 - For long-running Hugging Face parquet pulls, use `scripts/hf_download_resumable.sh` instead of one-shot `hf download` (prefer `--enable-hf-transfer`, `--max-workers 6`, `--skip-dry-run`, and `--attempt-timeout-seconds` for 350BT-scale pulls)
 - For unattended long pulls, prefer `scripts/hf_download_watchdog.sh` to restart stalled/exited resumable workers based on progress checks (`--stall-seconds`, `--check-interval-seconds`)
@@ -178,7 +182,8 @@ Keep PR scope narrow; split refactors and features into separate PRs.
 - Use `--no-train-fail-on-eval-regression` in supervisor when you want train chunks to continue and rely on post-chunk prompt-suite gates
 - Supervisor baseline selection now matches the active suite (`suite_name`/`suite_path`) for both eval and generation gates so suite changes do not compare against mismatched historical reports
 - For phase-1 talking quality, use `scripts/train_supervisor_phase1_english_talk.sh` (`english_talk_suite_v1` + `generation_talk_smoke_v1`) before code-specialization passes
-- Phase-1 launcher writes supervisor state to `artifacts/reports/train_supervisor_phase1_talk`; pass `--supervisor-state-dir` accordingly to pipeline status tools
+- Phase-1 launcher now adds stricter quality gates (`--generation-fail-below-pass-rate 0.45`, `--generation-stop-on-fail`, `--eval-fail-on-no-promotion`)
+- Phase-1 launcher writes supervisor state to `artifacts/reports/train_supervisor_phase1_talk`; pipeline status tools now auto-detect between phase1 + standard state dirs (override with `--supervisor-state-dir` when needed)
 - Phase-1 launcher uses lower-variance generation gating (`--generation-temperature 0.2 --generation-top-k 1`)
 - Supervisor now runs hot-manifest guard each loop (`scripts/enforce_hot_only_manifests.py`) to auto-disable active manifests that reference symlinked shard bins
 - On 12 GB RTX 5070 profiles, start supervisor with `--batch-size 12 --target-effective-batch 24 --min-batch-size 6 --max-batch-size 20 --batch-step 2` to avoid early OOM churn

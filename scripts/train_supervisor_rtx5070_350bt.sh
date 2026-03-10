@@ -344,7 +344,9 @@ TRAIN_TREND_TSV="$STATE_DIR/train_trend.tsv"
 EVAL_TREND_TSV="$STATE_DIR/eval_trend.tsv"
 GENERATION_TREND_TSV="$STATE_DIR/generation_trend.tsv"
 BEST_META_JSON="$STATE_DIR/best_checkpoint.json"
+TRAINED_BATCHES_FILE="$STATE_DIR/trained_batch_names.txt"
 touch "$SUP_LOG"
+touch "$TRAINED_BATCHES_FILE"
 
 if [[ ! -f "$TRAIN_TREND_TSV" ]]; then
   echo -e "run_tag\tstep_start\tstep_target\tstep_end\trc\tmanifests\tbatch_size\tgrad_accum\tbest_val_ppl\tgpu_avg_util\tgpu_max_mem_mib\ttrain_log" > "$TRAIN_TREND_TSV"
@@ -588,6 +590,34 @@ log_has_resume_checkpoint_error() {
 
 manifest_count() {
   find "$SHARDS_PATH" -name manifest.json 2>/dev/null | wc -l | tr -d ' '
+}
+
+collect_manifest_batch_names() {
+  "$PYTHON_BIN" - <<'PY' "$SHARDS_PATH"
+from pathlib import Path
+import sys
+
+root = Path(sys.argv[1])
+names: list[str] = []
+for manifest_path in sorted(root.rglob("manifest.json")):
+    names.append(manifest_path.parent.name)
+
+for name in names:
+    print(name)
+PY
+}
+
+update_trained_batch_registry() {
+  local chunk_batches_file="$1"
+  local step="$2"
+  if [[ ! -f "$chunk_batches_file" ]]; then
+    return 0
+  fi
+  cat "$chunk_batches_file" >> "$TRAINED_BATCHES_FILE"
+  sort -u -o "$TRAINED_BATCHES_FILE" "$TRAINED_BATCHES_FILE"
+  local trained_count
+  trained_count="$(wc -l < "$TRAINED_BATCHES_FILE" | tr -d ' ')"
+  log "trained_batches_update step=$step trained_batches=$trained_count registry=$TRAINED_BATCHES_FILE"
 }
 
 manifest_coverage_counts() {
@@ -1138,12 +1168,15 @@ while true; do
   run_tag="$(date +%Y%m%d_%H%M%S)"
   run_log="$STATE_DIR/train_${step_now}_to_${target_step}_${run_tag}.log"
   gpu_log="$STATE_DIR/gpu_${step_now}_to_${target_step}_${run_tag}.csv"
+  chunk_batches_file="$STATE_DIR/chunk_batches_${step_now}_to_${target_step}_${run_tag}.txt"
+  collect_manifest_batch_names > "$chunk_batches_file"
+  chunk_batches_count="$(wc -l < "$chunk_batches_file" | tr -d ' ')"
   resume_args=()
   if [[ -n "$resume_ckpt" ]]; then
     resume_args=(--resume-from "$resume_ckpt")
   fi
 
-  log "train_launch manifests=$mcount unique_inputs=$unique_inputs train_tokens=$train_tokens overlap_inputs=$overlap_inputs overlap_manifests=$overlap_manifests step_now=$step_now target_step=$target_step batch_size=$BATCH_SIZE grad_accum=$GRAD_ACCUM_STEPS resume=${resume_ckpt:-none} run_log=$run_log"
+  log "train_launch manifests=$mcount unique_inputs=$unique_inputs train_tokens=$train_tokens overlap_inputs=$overlap_inputs overlap_manifests=$overlap_manifests step_now=$step_now target_step=$target_step batch_size=$BATCH_SIZE grad_accum=$GRAD_ACCUM_STEPS resume=${resume_ckpt:-none} chunk_batches=$chunk_batches_count chunk_batches_file=$chunk_batches_file run_log=$run_log"
 
   train_gate_args=()
   if [[ "$TRAIN_FAIL_ON_EVAL_REGRESSION" -eq 1 ]]; then
@@ -1211,6 +1244,7 @@ while true; do
     failure_streak=0
     successful_chunks=$((successful_chunks + 1))
     log "train_done rc=0 step_now=$new_step best_val_ppl=$best_val_ppl gpu_avg_util=$gpu_avg_util gpu_max_mem=$gpu_max_mem"
+    update_trained_batch_registry "$chunk_batches_file" "$new_step"
     run_post_chunk_eval "$run_tag" "$new_step"
     if ! run_generation_gate "$run_tag" "$new_step" "$successful_chunks"; then
       log "generation_gate_failed step=$new_step successful_chunks=$successful_chunks"

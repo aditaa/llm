@@ -576,6 +576,8 @@ This uses `configs/eval/english_talk_suite_v1.json`,
 `configs/eval/promotion_policy_talk_v1.json`.
 It also uses a dedicated state dir (`artifacts/reports/train_supervisor_phase1_talk`) and
 lower-variance generation-gate settings (`--generation-temperature 0.2 --generation-top-k 1`).
+Successful chunks update `artifacts/reports/train_supervisor_phase1_talk/trained_batch_names.txt`,
+which can be used to gate shard offload so only already-trained batches move to warm storage.
 When monitoring this profile, point status tools at that state dir:
 `PYTHONPATH=src .venv/bin/python scripts/pipeline_live_view.py --supervisor-state-dir artifacts/reports/train_supervisor_phase1_talk`
 and
@@ -696,15 +698,20 @@ This also prunes `artifacts/reports/fineweb_stage_shard_loop/quarantine_bad_parq
 - for still-bad files, keeps only the newest copy per basename (`--quarantine-keep-per-name 1`)
 - disable with `--no-prune-quarantine`
 
-Offload older shard binaries to warm storage (keep manifests local):
+Offload older shard binaries to warm storage while keeping training hot-only:
 ```bash
 PYTHONPATH=src .venv/bin/python scripts/offload_shard_bins_to_warm.py \
   --keep-local-batches 24 \
   --target-free-gib 180 \
-  --max-batches 40
+  --max-batches 40 \
+  --disable-offloaded-manifests \
+  --require-trained-batches-file artifacts/reports/train_supervisor_phase1_talk/trained_batch_names.txt
 ```
-This replaces local shard `.bin` files with symlinks to warm copies so training can continue
-from the same manifests while hot-disk usage stays bounded.
+This replaces older local shard `.bin` files with warm-storage symlinks and renames
+their `manifest.json` to `manifest.offloaded.json`, so `llm.cli train` only sees
+local hot-disk manifests while disk usage stays bounded.
+The `--require-trained-batches-file` guard prevents offloading any batch that has
+not yet been included in a successful supervisor training chunk.
 
 Environment template:
 - `deploy/systemd/llm.env.example` (installed to `/etc/llm/llm.env`)

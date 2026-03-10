@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Offload shard .bin files to warm storage by replacing local files with symlinks.
 
-Keeps manifest files local so manifest discovery continues to work under shards root.
+Optionally disables manifests for offloaded batches so training stays hot-disk only.
 """
 
 from __future__ import annotations
@@ -22,6 +22,7 @@ class BatchResult:
     detail: str
     files_linked: int = 0
     bytes_freed: int = 0
+    manifest_disabled: bool = False
 
 
 def parse_args() -> argparse.Namespace:
@@ -66,6 +67,27 @@ def parse_args() -> argparse.Namespace:
         "--dry-run",
         action="store_true",
         help="Preview actions without changing files",
+    )
+    parser.add_argument(
+        "--disable-offloaded-manifests",
+        action="store_true",
+        help=(
+            "Rename manifest.json for offloaded candidate batches so training "
+            "does not read Ceph-backed shard symlinks"
+        ),
+    )
+    parser.add_argument(
+        "--manifest-disabled-suffix",
+        default=".offloaded.json",
+        help="Suffix appended to disabled manifests (default: .offloaded.json)",
+    )
+    parser.add_argument(
+        "--require-trained-batches-file",
+        default="",
+        help=(
+            "Only offload batches listed in this file (one batch directory name per line). "
+            "Useful to guarantee a batch was already included in a successful train chunk."
+        ),
     )
     return parser.parse_args()
 
@@ -171,6 +193,22 @@ def _replace_with_symlink(local_file: Path, warm_file: Path, dry_run: bool) -> i
     return local_size
 
 
+def _disable_manifest(
+    manifest_path: Path,
+    suffix: str,
+    dry_run: bool,
+) -> tuple[bool, str]:
+    disabled_path = manifest_path.with_name(f"manifest{suffix}")
+    if disabled_path.exists():
+        return False, f"already_disabled:{disabled_path}"
+    if not manifest_path.exists():
+        return False, f"manifest_missing:{manifest_path}"
+    if dry_run:
+        return True, f"would_disable:{disabled_path}"
+    manifest_path.rename(disabled_path)
+    return True, f"disabled_to:{disabled_path}"
+
+
 def main() -> int:
     args = parse_args()
     shards_root = Path(args.shards_root)
@@ -199,9 +237,24 @@ def main() -> int:
     if args.max_batches > 0:
         candidates = candidates[: int(args.max_batches)]
 
+    trained_batches: set[str] | None = None
+    if args.require_trained_batches_file:
+        trained_file = Path(args.require_trained_batches_file)
+        if not trained_file.exists():
+            raise FileNotFoundError(
+                f"trained batches file not found: {trained_file}"
+            )
+        trained_batches = {
+            line.strip()
+            for line in trained_file.read_text(encoding="utf-8").splitlines()
+            if line.strip() and not line.strip().startswith("#")
+        }
+
     results: list[BatchResult] = []
     total_linked = 0
     total_freed = 0
+    manifests_disabled = 0
+    skipped_untrained = 0
 
     for batch_dir in candidates:
         if target_free_bytes > 0 and _free_bytes(shards_root) >= target_free_bytes:
@@ -213,6 +266,19 @@ def main() -> int:
                 )
             )
             break
+        if trained_batches is not None and batch_dir.name not in trained_batches:
+            skipped_untrained += 1
+            results.append(
+                BatchResult(
+                    batch=batch_dir.name,
+                    status="skip_untrained_batch",
+                    detail=(
+                        "not_in_trained_registry:"
+                        f"{args.require_trained_batches_file}"
+                    ),
+                )
+            )
+            continue
 
         manifest = batch_dir / "manifest.json"
         try:
@@ -240,15 +306,29 @@ def main() -> int:
                 batch_linked += 1
                 batch_freed += int(freed)
 
+        manifest_disabled = False
+        result_detail = "ok"
+        if args.disable_offloaded_manifests:
+            changed, disable_detail = _disable_manifest(
+                manifest,
+                args.manifest_disabled_suffix,
+                args.dry_run,
+            )
+            manifest_disabled = changed
+            if changed:
+                manifests_disabled += 1
+            result_detail = disable_detail
+
         total_linked += batch_linked
         total_freed += batch_freed
         results.append(
             BatchResult(
                 batch=batch_dir.name,
                 status="offloaded" if not args.dry_run else "would_offload",
-                detail="ok",
+                detail=result_detail,
                 files_linked=batch_linked,
                 bytes_freed=batch_freed,
+                manifest_disabled=manifest_disabled,
             )
         )
 
@@ -261,6 +341,11 @@ def main() -> int:
         "candidate_batches": len(candidates),
         "files_linked": total_linked,
         "bytes_freed_estimate": total_freed,
+        "require_trained_batches_file": args.require_trained_batches_file,
+        "skip_untrained_batch_count": skipped_untrained,
+        "disable_offloaded_manifests": bool(args.disable_offloaded_manifests),
+        "manifest_disabled_suffix": args.manifest_disabled_suffix,
+        "manifests_disabled": manifests_disabled,
         "free_bytes_before": free_before,
         "free_bytes_after": free_after,
         "target_free_gib": int(args.target_free_gib),
@@ -277,6 +362,8 @@ def main() -> int:
         f"candidates={len(candidates)}",
         f"linked={total_linked}",
         f"bytes_freed={total_freed}",
+        f"skipped_untrained={skipped_untrained}",
+        f"manifests_disabled={manifests_disabled}",
         f"free_before={free_before}",
         f"free_after={free_after}",
         f"report={report_path}",

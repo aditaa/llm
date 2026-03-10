@@ -41,7 +41,7 @@ Use the `Makefile` as the source of truth:
 - `make stage-fineweb-from-warm`: usage helper for staging FineWeb parquet chunks from warm to hot
 - `make fineweb-prefetch-hot-queue`: usage helper for warm->hot queue prefetch worker
 - `make fineweb-revalidate-bad-parquet`: usage helper for revalidating/restaging bad parquet entries
-- `make offload-shard-bins-warm`: usage helper for replacing older local shard `.bin` files with warm-storage symlinks (keep manifests local)
+- `make offload-shard-bins-warm`: usage helper for replacing older local shard `.bin` files with warm-storage symlinks, disabling offloaded manifests, and gating offload by trained-batch registry
 - `make fineweb-stage-shard-loop`: usage helper for rolling warm->hot stage + shard + verify + sync + purge
 - `make fineweb-stage-shard-watchdog`: usage helper for auto-restart watchdog around the stage/shard loop
 - `make lr-sweep-350bt`: usage helper for RTX 5070 LR sweep on staged 350BT shards (`2e-4..4e-4`, ctx 512)
@@ -122,6 +122,7 @@ Keep PR scope narrow; split refactors and features into separate PRs.
 - `sync_warm_storage.sh` covers raw + training data: `data/raw_zim`, `data/fineweb`, `data/cleaned`, `data/extracted`, `data/shards`, `data/shards_global`, `artifacts/tokenizer`, `artifacts/checkpoints`, `artifacts/reports`
 - Use `bash scripts/zim_offload_worker.sh data/raw_zim /mnt/ceph/llm/data/raw_zim 120` for continuous hot->warm raw ZIM offload
 - Use `bash scripts/hydrate_from_warm_storage.sh /mnt/ceph/llm/data` to restore local artifacts from warm storage
+- Use `python3 scripts/offload_shard_bins_to_warm.py --disable-offloaded-manifests --require-trained-batches-file <state_dir>/trained_batch_names.txt` to move only already-trained older shard bins to warm storage while keeping active manifests hot-local only
 - For bounded external pulls (for example FineWeb samples), use `python3 scripts/pull_hf_rows.py` and write to warm storage first
 - For long-running Hugging Face parquet pulls, use `scripts/hf_download_resumable.sh` instead of one-shot `hf download` (prefer `--enable-hf-transfer`, `--max-workers 6`, `--skip-dry-run`, and `--attempt-timeout-seconds` for 350BT-scale pulls)
 - For unattended long pulls, prefer `scripts/hf_download_watchdog.sh` to restart stalled/exited resumable workers based on progress checks (`--stall-seconds`, `--check-interval-seconds`)
@@ -178,6 +179,7 @@ Keep PR scope narrow; split refactors and features into separate PRs.
 - Supervisor writes chunk trends to `artifacts/reports/train_supervisor_350bt/train_trend.tsv` and post-chunk eval trends to `artifacts/reports/train_supervisor_350bt/eval_trend.tsv`
 - Supervisor also writes scheduled generation-gate trends to `artifacts/reports/train_supervisor_350bt/generation_trend.tsv`
 - Supervisor also renders `artifacts/reports/train_supervisor_350bt/eval_dashboard.html` and exports `best.pt` aliases after successful eval promotions
+- Supervisor now records successful-chunk manifest batch coverage in `<state_dir>/trained_batch_names.txt` for safe shard offload gating
 - Use `--generation-suite configs/eval/generation_smoke_suite_v1.json` and `--generation-every-chunks <N>` to run prompt-generation drift gates every chunk (or every N chunks)
 - Use `scripts/pipeline_eta_report.py --loop` for combined ETA snapshots in `artifacts/reports/pipeline_status.{json,txt}` (includes `top`, `free -h`, `nvidia-smi`, and `df -h` captures)
 - `pipeline_eta_report.py` accepts `--once` for explicit single-snapshot mode

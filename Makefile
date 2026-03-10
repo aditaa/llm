@@ -94,7 +94,7 @@ fineweb-revalidate-bad-parquet:
 
 offload-shard-bins-warm:
 	@echo "Usage:"
-	@echo "  PYTHONPATH=src $(PYTHON) scripts/offload_shard_bins_to_warm.py --keep-local-batches 24 --target-free-gib 180 --max-batches 40"
+	@echo "  PYTHONPATH=src $(PYTHON) scripts/offload_shard_bins_to_warm.py --keep-local-batches 24 --target-free-gib 180 --max-batches 40 --disable-offloaded-manifests --require-trained-batches-file artifacts/reports/train_supervisor_phase1_talk/trained_batch_names.txt"
 
 fineweb-stage-shard-loop:
 	@echo "Usage:"

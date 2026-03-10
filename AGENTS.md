@@ -187,6 +187,7 @@ Keep PR scope narrow; split refactors and features into separate PRs.
 - `fineweb_prefetch_hot_queue.sh` can auto-read stage-loop skip data (`--auto-skip-state-dir artifacts/reports/fineweb_stage_shard_loop`) so it avoids restaging processed/bad parquet files
 - `fineweb_prefetch_hot_queue.sh` forwards `--min-free-gib` into stage calls so prefetch and stage-loop share the same hot-space floor
 - Revalidate/recover bad parquet list entries with `scripts/revalidate_bad_parquet.py`; use `--restage-valid` to copy newly validated files back into hot storage
+- `revalidate_bad_parquet.py` also prunes `quarantine_bad_parquet` by default (drops stale/validated entries; keeps newest copy per still-bad basename)
 - Optional automation: `llm-bad-parquet-revalidate.timer` runs `revalidate_bad_parquet.py` periodically via systemd
 - For checkpoint regression tracking, run `scripts/eval_checkpoint_prompts.py` with `configs/eval/standard_prompt_suite_v3.json`; use `--baseline-report` and `--promotion-policy configs/eval/promotion_policy_v1.json` to emit regression deltas + promotion verdict
 - Promotion/comparison logic lives in `src/llm/eval_policy.py`; keep policy checks unit-tested (`tests/test_eval_policy.py`)

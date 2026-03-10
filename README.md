@@ -669,6 +669,10 @@ PYTHONPATH=src .venv/bin/python scripts/revalidate_bad_parquet.py \
   --max-restage-files 15 \
   --min-free-gib 80
 ```
+This also prunes `artifacts/reports/fineweb_stage_shard_loop/quarantine_bad_parquet` by default:
+- removes quarantine copies for files no longer marked bad
+- for still-bad files, keeps only the newest copy per basename (`--quarantine-keep-per-name 1`)
+- disable with `--no-prune-quarantine`
 
 Environment template:
 - `deploy/systemd/llm.env.example` (installed to `/etc/llm/llm.env`)

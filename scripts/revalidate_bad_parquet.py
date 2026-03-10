@@ -72,6 +72,25 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Preview changes without writing/copying",
     )
+    parser.add_argument(
+        "--quarantine-dir",
+        default="artifacts/reports/fineweb_stage_shard_loop/quarantine_bad_parquet",
+        help="Directory containing quarantined parquet copies (*.bad_<ts>)",
+    )
+    parser.add_argument(
+        "--quarantine-keep-per-name",
+        type=int,
+        default=1,
+        help=(
+            "For entries still marked bad, keep at most this many newest quarantine "
+            "copies per parquet basename (default: 1)"
+        ),
+    )
+    parser.add_argument(
+        "--no-prune-quarantine",
+        action="store_true",
+        help="Disable quarantine directory pruning",
+    )
     return parser.parse_args()
 
 
@@ -147,11 +166,77 @@ def _rsync_atomic(src: Path, dest: Path, dry_run: bool) -> tuple[bool, str]:
     return True, "ok"
 
 
+def _quarantine_base_name(path: Path) -> str:
+    marker = ".bad_"
+    name = path.name
+    idx = name.rfind(marker)
+    if idx == -1:
+        return name
+    return name[:idx]
+
+
+def _prune_quarantine(
+    quarantine_dir: Path,
+    *,
+    retained_bad: set[str],
+    valid_names: set[str],
+    keep_per_name: int,
+    dry_run: bool,
+) -> dict[str, int]:
+    summary = {
+        "quarantine_files_before": 0,
+        "quarantine_files_removed": 0,
+        "quarantine_files_after": 0,
+        "quarantine_bytes_removed": 0,
+    }
+    if not quarantine_dir.exists():
+        return summary
+
+    keep_limit = max(0, keep_per_name)
+    by_name: dict[str, list[Path]] = {}
+    for path in sorted(quarantine_dir.iterdir()):
+        if not path.is_file():
+            continue
+        base = _quarantine_base_name(path)
+        by_name.setdefault(base, []).append(path)
+        summary["quarantine_files_before"] += 1
+
+    remove_paths: list[Path] = []
+    for base, paths in by_name.items():
+        # If source is now valid (or not currently tracked as bad), drop all stale quarantine copies.
+        if base in valid_names or base not in retained_bad:
+            remove_paths.extend(paths)
+            continue
+
+        # For currently bad files, keep only N newest quarantine copies.
+        paths_sorted = sorted(paths, key=lambda p: p.stat().st_mtime, reverse=True)
+        remove_paths.extend(paths_sorted[keep_limit:])
+
+    for path in remove_paths:
+        try:
+            size = path.stat().st_size
+        except OSError:
+            size = 0
+        if not dry_run:
+            try:
+                path.unlink()
+            except OSError:
+                continue
+        summary["quarantine_files_removed"] += 1
+        summary["quarantine_bytes_removed"] += int(size)
+
+    summary["quarantine_files_after"] = (
+        summary["quarantine_files_before"] - summary["quarantine_files_removed"]
+    )
+    return summary
+
+
 def main() -> int:
     args = parse_args()
     bad_list = Path(args.bad_list)
     warm_dir = Path(args.warm_dir)
     hot_dir = Path(args.hot_dir)
+    quarantine_dir = Path(args.quarantine_dir)
 
     if not bad_list.exists():
         raise FileNotFoundError(f"bad-list not found: {bad_list}")
@@ -222,10 +307,26 @@ def main() -> int:
             else:
                 restage_failures.append({"name": name, "error": detail})
 
+    quarantine_summary = {
+        "quarantine_files_before": 0,
+        "quarantine_files_removed": 0,
+        "quarantine_files_after": 0,
+        "quarantine_bytes_removed": 0,
+    }
+    if not args.no_prune_quarantine:
+        quarantine_summary = _prune_quarantine(
+            quarantine_dir,
+            retained_bad=set(retained_bad_names),
+            valid_names=set(valid_names),
+            keep_per_name=int(args.quarantine_keep_per_name),
+            dry_run=bool(args.dry_run),
+        )
+
     summary = {
         "bad_list": str(bad_list),
         "warm_dir": str(warm_dir),
         "hot_dir": str(hot_dir),
+        "quarantine_dir": str(quarantine_dir),
         "field": args.field,
         "input_bad_entries": len(bad_names),
         "valid_reinstated": len(valid_names),
@@ -238,6 +339,9 @@ def main() -> int:
         "restage_skipped_existing": restage_skipped_existing,
         "restage_skipped_space": restage_skipped_space,
         "restage_failures": restage_failures,
+        "pruned_quarantine": not bool(args.no_prune_quarantine),
+        "quarantine_keep_per_name": int(args.quarantine_keep_per_name),
+        **quarantine_summary,
         "report_output": str(report_output),
     }
     payload = {

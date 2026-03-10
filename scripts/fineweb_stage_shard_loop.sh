@@ -16,6 +16,7 @@ ENCODE_BATCH_SIZE=1024
 TOKENIZER_THREADS=10
 SHARD_JOBS=1
 SHARD_RETRY_ON_OOM=1
+SHARD_RESTAGE_ON_CORRUPT=1
 SHARD_MIN_BATCH_SIZE=512
 SHARD_SIZE_TOKENS=20000000
 VAL_RATIO=0.01
@@ -128,6 +129,9 @@ Options:
   --auto-tune-iowait-high-pct N
                               Force copy scale-down when iowait >= N (default: 30)
   --no-shard-retry-on-oom     Disable automatic shard build retry on OOM/memory errors
+  --no-shard-restage-on-corrupt
+                              Disable one-time warm->hot restage retry on
+                              corrupt-parquet shard failures
   --shard-min-batch-size N    Lower bound for batch-size backoff on OOM (default: 512)
   --shard-size-tokens N       Tokens per output shard (default: 5000000)
   --val-ratio X               Validation ratio (default: 0.01)
@@ -303,6 +307,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --no-shard-retry-on-oom)
       SHARD_RETRY_ON_OOM=0
+      shift
+      ;;
+    --no-shard-restage-on-corrupt)
+      SHARD_RESTAGE_ON_CORRUPT=0
       shift
       ;;
     --shard-min-batch-size)
@@ -854,6 +862,79 @@ mark_bad_from_files_list() {
   done < "$files_list"
 }
 
+shard_log_has_corrupt_error() {
+  local shard_attempt_log="$1"
+  grep -Eqi \
+    'Corrupt snappy compressed data|parquet.*corrupt|snappy.*corrupt|invalid compressed data|page header' \
+    "$shard_attempt_log"
+}
+
+restage_files_from_list() {
+  local files_list="$1"
+  local reason="$2"
+  if [[ ! -f "$files_list" ]]; then
+    return 1
+  fi
+
+  local requested
+  requested="$(awk 'NF {c+=1} END {print c+0}' "$files_list")"
+  local restaged=0
+  local failed=0
+  local missing=0
+  local name
+  while IFS= read -r name; do
+    [[ -z "$name" ]] && continue
+    local warm_file="$WARM_PARQUET_DIR/$name"
+    local hot_file="$HOT_PARQUET_DIR/$name"
+    local tmp_file="$HOT_PARQUET_DIR/${name}.restage_tmp"
+
+    if [[ ! -f "$warm_file" ]]; then
+      log "restage_missing_warm file=$name reason=$reason warm_file=$warm_file"
+      missing=$((missing + 1))
+      failed=$((failed + 1))
+      continue
+    fi
+
+    rm -f "$tmp_file"
+    if ! (
+      exec 9>&-
+      rsync -ah --partial --inplace --timeout=900 "$warm_file" "$tmp_file"
+    ) >> "$LOG_FILE" 2>&1; then
+      log "restage_copy_failed file=$name reason=$reason"
+      rm -f "$tmp_file"
+      failed=$((failed + 1))
+      continue
+    fi
+
+    local warm_size
+    local tmp_size
+    warm_size="$(stat -c %s "$warm_file" 2>/dev/null || echo 0)"
+    tmp_size="$(stat -c %s "$tmp_file" 2>/dev/null || echo 0)"
+    if [[ "$warm_size" -le 0 || "$tmp_size" -ne "$warm_size" ]]; then
+      log "restage_size_mismatch file=$name reason=$reason warm_size=$warm_size tmp_size=$tmp_size"
+      rm -f "$tmp_file"
+      failed=$((failed + 1))
+      continue
+    fi
+
+    mv -f "$tmp_file" "$hot_file"
+    if ! validate_parquet_file "$hot_file" "$FIELD" >> "$LOG_FILE" 2>&1; then
+      log "restage_validate_failed file=$name reason=$reason"
+      failed=$((failed + 1))
+      continue
+    fi
+
+    restaged=$((restaged + 1))
+    log "restage_ok file=$name reason=$reason size_bytes=$warm_size"
+  done < "$files_list"
+
+  log "restage_summary reason=$reason requested=$requested restaged=$restaged failed=$failed missing_warm=$missing"
+  if [[ "$restaged" -le 0 || "$failed" -ne 0 ]]; then
+    return 1
+  fi
+  return 0
+}
+
 reconcile_bad_parquet_from_warm() {
   if [[ ! -s "$BAD_PARQUET_FILE" ]]; then
     return
@@ -1188,6 +1269,7 @@ run_shard_job() {
   shard_batch_size="$BATCH_SIZE"
   local shard_attempt=1
   local shard_rc=0
+  local restage_retry_used=0
   while true; do
     local shard_attempt_log="$STATE_DIR/${job_id}.shard_attempt_${shard_attempt}.log"
     log "shard_build_attempt id=$job_id attempt=$shard_attempt batch_size=$shard_batch_size encode_batch_size=$ENCODE_BATCH_SIZE tokenizer_threads=$TOKENIZER_THREADS"
@@ -1226,6 +1308,16 @@ run_shard_job() {
     fi
 
     if ! grep -Eqi 'out of memory|memoryerror|arrowmemoryerror|bad_alloc|cannot allocate memory|std::bad_alloc' "$shard_attempt_log"; then
+      if [[ "$SHARD_RESTAGE_ON_CORRUPT" -eq 1 && "$restage_retry_used" -eq 0 ]] && shard_log_has_corrupt_error "$shard_attempt_log"; then
+        log "shard_build_restage_retry id=$job_id attempt=$shard_attempt rc=$shard_rc reason=corrupt_error_detected"
+        if restage_files_from_list "$files_list" "shard_corrupt_retry"; then
+          restage_retry_used=1
+          shard_attempt=$((shard_attempt + 1))
+          continue
+        fi
+        restage_retry_used=1
+        log "shard_build_restage_retry_failed id=$job_id attempt=$shard_attempt rc=$shard_rc reason=corrupt_error_detected"
+      fi
       log "shard_build_failed id=$job_id attempt=$shard_attempt rc=$shard_rc reason=non_oom_error"
       mark_bad_from_files_list "$files_list" "shard_build_failed_non_oom_rc_${shard_rc}"
       return "$shard_rc"
@@ -1426,7 +1518,7 @@ process_batch() {
 }
 
 log "loop_start warm_parquet_dir=$WARM_PARQUET_DIR hot_parquet_dir=$HOT_PARQUET_DIR"
-log "loop_config shards_root=$SHARDS_ROOT tokenizer_path=$TOKENIZER_PATH iterations=$ITERATIONS hot_queue_min_files=$HOT_QUEUE_MIN_FILES stage_copy_jobs=$STAGE_COPY_JOBS stage_min_free_gib=$STAGE_MIN_FREE_GIB shard_jobs=$SHARD_JOBS tokenizer_threads=$TOKENIZER_THREADS shard_size_tokens=$SHARD_SIZE_TOKENS sync_to_warm=$SYNC_TO_WARM sync_background=$SYNC_BACKGROUND sync_max_inflight=$SYNC_MAX_INFLIGHT auto_tune_shard_jobs=$AUTO_TUNE_SHARD_JOBS auto_tune_bounds=${AUTO_TUNE_MIN_SHARD_JOBS}-${AUTO_TUNE_MAX_SHARD_JOBS} auto_tune_load_pct=${AUTO_TUNE_LOW_LOAD_PCT}-${AUTO_TUNE_HIGH_LOAD_PCT} auto_tune_core_budget=$AUTO_TUNE_CORE_BUDGET auto_tune_stage_copy_jobs=$AUTO_TUNE_STAGE_COPY_JOBS auto_tune_copy_bounds=${AUTO_TUNE_MIN_COPY_JOBS}-${AUTO_TUNE_MAX_COPY_JOBS} auto_tune_iowait_pct=${AUTO_TUNE_IOWAIT_LOW_PCT}-${AUTO_TUNE_IOWAIT_HIGH_PCT} expected_unique_input_files=$EXPECTED_UNIQUE_INPUT_FILES coverage_complete_mode=$COVERAGE_COMPLETE_MODE coverage_complete_sleep_seconds=$COVERAGE_COMPLETE_SLEEP_SECONDS bad_parquet_file=$BAD_PARQUET_FILE quarantine_dir=$QUARANTINE_DIR"
+log "loop_config shards_root=$SHARDS_ROOT tokenizer_path=$TOKENIZER_PATH iterations=$ITERATIONS hot_queue_min_files=$HOT_QUEUE_MIN_FILES stage_copy_jobs=$STAGE_COPY_JOBS stage_min_free_gib=$STAGE_MIN_FREE_GIB shard_jobs=$SHARD_JOBS tokenizer_threads=$TOKENIZER_THREADS shard_size_tokens=$SHARD_SIZE_TOKENS shard_retry_on_oom=$SHARD_RETRY_ON_OOM shard_restage_on_corrupt=$SHARD_RESTAGE_ON_CORRUPT sync_to_warm=$SYNC_TO_WARM sync_background=$SYNC_BACKGROUND sync_max_inflight=$SYNC_MAX_INFLIGHT auto_tune_shard_jobs=$AUTO_TUNE_SHARD_JOBS auto_tune_bounds=${AUTO_TUNE_MIN_SHARD_JOBS}-${AUTO_TUNE_MAX_SHARD_JOBS} auto_tune_load_pct=${AUTO_TUNE_LOW_LOAD_PCT}-${AUTO_TUNE_HIGH_LOAD_PCT} auto_tune_core_budget=$AUTO_TUNE_CORE_BUDGET auto_tune_stage_copy_jobs=$AUTO_TUNE_STAGE_COPY_JOBS auto_tune_copy_bounds=${AUTO_TUNE_MIN_COPY_JOBS}-${AUTO_TUNE_MAX_COPY_JOBS} auto_tune_iowait_pct=${AUTO_TUNE_IOWAIT_LOW_PCT}-${AUTO_TUNE_IOWAIT_HIGH_PCT} expected_unique_input_files=$EXPECTED_UNIQUE_INPUT_FILES coverage_complete_mode=$COVERAGE_COMPLETE_MODE coverage_complete_sleep_seconds=$COVERAGE_COMPLETE_SLEEP_SECONDS bad_parquet_file=$BAD_PARQUET_FILE quarantine_dir=$QUARANTINE_DIR"
 trap 'on_loop_signal INT' INT
 trap 'on_loop_signal TERM' TERM
 reconcile_bad_parquet_from_warm

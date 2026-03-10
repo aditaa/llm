@@ -72,6 +72,7 @@ make lr-sweep-350bt # print RTX 5070 LR sweep usage for staged 350BT shards
 make train-350bt-v2 # print 350BT long-run launcher usage
 make train-350bt-ctx1024 # print long-context continuation launcher usage
 make train-supervisor-350bt # print auto-resume trainer supervisor usage
+make train-supervisor-phase1-talk # print phase-1 English conversation supervisor usage
 make pipeline-eta # print combined download/shard/train ETA reporter usage
 make pipeline-live # print live terminal pipeline dashboard usage
 make shard-corpus-batch # print shared-tokenizer batch sharding usage
@@ -566,6 +567,13 @@ bash scripts/train_supervisor_rtx5070_350bt.sh \
   --generation-suite configs/eval/generation_smoke_suite_v1.json \
   --generation-every-chunks 1
 ```
+- Phase-1 English conversation gating profile (before coding specialization):
+```bash
+bash scripts/train_supervisor_phase1_english_talk.sh
+```
+This uses `configs/eval/english_talk_suite_v1.json`,
+`configs/eval/generation_talk_smoke_v1.json`, and
+`configs/eval/promotion_policy_talk_v1.json`.
 For continuous 350BT ingestion/training, keep exactly one stage watchdog and one train supervisor running.
 Avoid launching one-off `llm.cli train --max-steps ...` jobs in parallel with the supervisor.
 Stage watchdog now performs stale worker cleanup before relaunch, so restarted controllers
@@ -592,8 +600,9 @@ Supervisor outputs:
 - `artifacts/reports/train_supervisor_350bt/generation_trend.tsv` (scheduled generation-gate trend, with regression columns)
 - `artifacts/reports/train_supervisor_350bt/eval_dashboard.html` (rendered trend dashboard)
 - `artifacts/reports/train_supervisor_350bt/eval_dashboard_summary.json` (dashboard summary JSON)
-The supervisor now auto-selects the latest successful eval report as baseline for the next eval cycle.
-It also auto-selects the latest successful generation-gate report as baseline for the next generation gate cycle.
+The supervisor now auto-selects the latest successful eval baseline from the same suite
+name/path as the active eval suite (and same behavior for generation-gate suite baselines),
+so changing suites does not compare against mismatched historical reports.
 
 Combined pipeline ETA/status reporter:
 ```bash

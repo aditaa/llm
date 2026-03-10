@@ -157,6 +157,14 @@ bash scripts/train_supervisor_rtx5070_350bt.sh \
   --generation-suite configs/eval/generation_smoke_suite_v1.json \
   --generation-every-chunks 1
 ```
+Phase-1 English conversation gate profile:
+```bash
+bash scripts/train_supervisor_phase1_english_talk.sh
+```
+This profile uses `configs/eval/english_talk_suite_v1.json`,
+`configs/eval/generation_talk_smoke_v1.json`, and
+`configs/eval/promotion_policy_talk_v1.json` before code-specialization passes.
+
 This runs training in chunks and resumes from `last.pt`; each chunk restart re-reads
 all manifests under `data/shards_global/fineweb-global-bpe-v1` so newly added shard
 batches are picked up without manual intervention.
@@ -173,9 +181,9 @@ Trend outputs:
 - `artifacts/reports/train_supervisor_350bt/eval_trend.tsv`
 - `artifacts/reports/train_supervisor_350bt/generation_trend.tsv`
 - `artifacts/reports/train_supervisor_350bt/eval_dashboard.html`
-The supervisor eval step now auto-selects the latest successful eval report as
-baseline, compares deltas (pass/check/score), and applies
-`configs/eval/promotion_policy_v1.json` when present.
+The supervisor eval step now auto-selects the latest successful baseline from the
+same suite name/path (same behavior for generation-gate baselines), compares deltas
+(pass/check/score), and applies promotion policy checks when configured.
 Supervisor now auto-promotes `best.pt` aliases after successful eval promotion checks.
 
 For long runs with bounded disk use, pass checkpoint retention options:

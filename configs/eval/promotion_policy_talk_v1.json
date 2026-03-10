@@ -1,0 +1,19 @@
+{
+  "name": "checkpoint_promotion_talk_v1",
+  "description": "Promotion rule for phase-1 English conversation quality baseline.",
+  "absolute": {
+    "min_pass_rate": 0.50,
+    "min_check_pass_rate": 0.80,
+    "min_avg_case_score": 0.74
+  },
+  "regression": {
+    "max_pass_rate_drop": 0.01,
+    "max_check_pass_rate_drop": 0.01,
+    "max_avg_case_score_drop": 0.01
+  },
+  "improvement": {
+    "min_pass_rate_gain": 0.0,
+    "min_check_pass_rate_gain": 0.0,
+    "min_avg_case_score_gain": 0.0
+  }
+}

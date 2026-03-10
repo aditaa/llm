@@ -4,7 +4,7 @@ ifneq ("$(wildcard .venv/bin/python)","")
 PYTHON=.venv/bin/python
 endif
 
-.PHONY: setup-dev setup-train setup-infer doctor install-server-system install-systemd-services test lint format typecheck smoke extract-zim train-tokenizer train-tokenizer-global corpus-quality-report clean-corpus-batch dataset-risk-report pull-hf-rows parquet-to-corpus fineweb-parquet-to-shards fineweb-manifest-dedupe stage-fineweb-from-warm fineweb-prefetch-hot-queue fineweb-revalidate-bad-parquet offload-shard-bins-warm fineweb-stage-shard-loop fineweb-stage-shard-watchdog lr-sweep-350bt train-350bt-v2 train-350bt-ctx1024 train-supervisor-350bt pipeline-eta pipeline-live shard-corpus-batch verify-shards train generate average-checkpoints eval-checkpoint render-eval-dashboard package-inference-bundle sync-warm hydrate-warm offload-zim checkpoint-offload-prune set-swappiness hf-download-resumable hf-download-watchdog hf-prepare-publish hf-download-model serve-openai publish-wiki
+.PHONY: setup-dev setup-train setup-infer doctor install-server-system install-systemd-services test lint format typecheck smoke extract-zim train-tokenizer train-tokenizer-global corpus-quality-report clean-corpus-batch dataset-risk-report pull-hf-rows parquet-to-corpus fineweb-parquet-to-shards fineweb-manifest-dedupe stage-fineweb-from-warm fineweb-prefetch-hot-queue fineweb-revalidate-bad-parquet offload-shard-bins-warm fineweb-stage-shard-loop fineweb-stage-shard-watchdog lr-sweep-350bt train-350bt-v2 train-350bt-ctx1024 train-supervisor-350bt train-supervisor-phase1-talk pipeline-eta pipeline-live shard-corpus-batch verify-shards train generate average-checkpoints eval-checkpoint render-eval-dashboard package-inference-bundle sync-warm hydrate-warm offload-zim checkpoint-offload-prune set-swappiness hf-download-resumable hf-download-watchdog hf-prepare-publish hf-download-model serve-openai publish-wiki
 
 setup-dev:
 	bash scripts/bootstrap_dev.sh
@@ -119,6 +119,10 @@ train-350bt-ctx1024:
 train-supervisor-350bt:
 	@echo "Usage:"
 	@echo "  bash scripts/train_supervisor_rtx5070_350bt.sh --step-chunk 2000 --poll-seconds 60 --batch-size 12 --target-effective-batch 24 --min-unique-input-files 510 --min-batch-size 6 --max-batch-size 20 --batch-step 2 --checkpoint-keep-last 6 --checkpoint-keep-every 10000 --ema-decay 0.999 --dedupe-report-keep 240 --eval-suite configs/eval/standard_prompt_suite_v3.json --generation-suite configs/eval/generation_smoke_suite_v1.json --generation-every-chunks 1 --no-train-fail-on-eval-regression"
+
+train-supervisor-phase1-talk:
+	@echo "Usage:"
+	@echo "  bash scripts/train_supervisor_phase1_english_talk.sh"
 
 pipeline-eta:
 	@echo "Usage:"

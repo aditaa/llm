@@ -1,0 +1,72 @@
+{
+  "name": "generation_talk_smoke_v1",
+  "description": "Phase-1 conversational generation smoke gate (English fluency and anti-gibberish only).",
+  "cases": [
+    {
+      "id": "talk_greeting",
+      "category": "conversation",
+      "prompt": "User: Hey there! How are you doing today?\nAssistant:",
+      "checks": {
+        "min_completion_chars": 28,
+        "max_repeated_char_run": 8,
+        "max_non_ascii_ratio": 0.05,
+        "max_url_count": 0
+      }
+    },
+    {
+      "id": "talk_daily_routine",
+      "category": "conversation",
+      "prompt": "Write a short, friendly response about one healthy morning routine.",
+      "checks": {
+        "min_completion_chars": 55,
+        "max_repeated_char_run": 8,
+        "max_non_ascii_ratio": 0.05,
+        "max_url_count": 0
+      }
+    },
+    {
+      "id": "talk_story_continuation",
+      "category": "creative",
+      "prompt": "The lights flickered once, then the room went quiet until",
+      "checks": {
+        "min_completion_chars": 60,
+        "max_repeated_char_run": 8,
+        "max_non_ascii_ratio": 0.05
+      }
+    },
+    {
+      "id": "talk_explain_word",
+      "category": "explain",
+      "prompt": "Explain in plain English what the word resilient means.",
+      "checks": {
+        "min_completion_chars": 45,
+        "max_repeated_char_run": 8,
+        "max_non_ascii_ratio": 0.05,
+        "max_url_count": 0
+      }
+    },
+    {
+      "id": "talk_question_and_answer",
+      "category": "conversation",
+      "prompt": "User: I am nervous about a job interview tomorrow. What should I do tonight?\nAssistant:",
+      "checks": {
+        "min_completion_chars": 55,
+        "max_repeated_char_run": 8,
+        "max_non_ascii_ratio": 0.05,
+        "max_url_count": 0
+      }
+    },
+    {
+      "id": "talk_clean_no_code",
+      "category": "clean_output",
+      "prompt": "In one short paragraph, describe why reading books can improve communication skills.",
+      "checks": {
+        "min_completion_chars": 70,
+        "reject_any": ["```", "def ", "class ", "import "],
+        "max_repeated_char_run": 8,
+        "max_non_ascii_ratio": 0.05,
+        "max_url_count": 0
+      }
+    }
+  ]
+}

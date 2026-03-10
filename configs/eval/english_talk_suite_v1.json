@@ -1,0 +1,201 @@
+{
+  "name": "english_talk_suite_v1",
+  "description": "Phase-1 English conversation gate: fluent everyday chat, clear instruction-following, concise factual answers, and anti-gibberish output. No coding tasks.",
+  "cases": [
+    {
+      "id": "chat_greeting",
+      "category": "conversation",
+      "prompt": "User: Hi! Nice to meet you.\nAssistant:",
+      "checks": {
+        "min_completion_chars": 24,
+        "max_url_count": 0,
+        "max_repeated_char_run": 8,
+        "max_non_ascii_ratio": 0.05
+      }
+    },
+    {
+      "id": "chat_self_intro",
+      "category": "conversation",
+      "prompt": "User: Give me a short friendly introduction about yourself in plain English.\nAssistant:",
+      "checks": {
+        "min_completion_chars": 45,
+        "expect_any": ["i", "assistant", "help"],
+        "max_url_count": 0,
+        "max_repeated_char_run": 8,
+        "max_non_ascii_ratio": 0.05
+      }
+    },
+    {
+      "id": "chat_follow_up_question",
+      "category": "conversation",
+      "prompt": "User: Say hello and ask me one follow-up question.\nAssistant:",
+      "checks": {
+        "min_completion_chars": 20,
+        "expect_any": ["?", "hello", "hi"],
+        "reject_any": ["i can't", "i cannot", "i'm unable"],
+        "max_url_count": 0,
+        "max_repeated_char_run": 8
+      }
+    },
+    {
+      "id": "translation_buenos_dias",
+      "category": "translation",
+      "prompt": "Translate to English: Buenos dias.",
+      "checks": {
+        "min_completion_chars": 8,
+        "expect_any": ["good morning"],
+        "max_url_count": 0
+      }
+    },
+    {
+      "id": "translation_gracias",
+      "category": "translation",
+      "prompt": "Translate to English: Gracias por tu ayuda.",
+      "checks": {
+        "min_completion_chars": 9,
+        "expect_any": ["thank"],
+        "max_url_count": 0
+      }
+    },
+    {
+      "id": "translation_bonjour",
+      "category": "translation",
+      "prompt": "Translate to English: Bonjour.",
+      "checks": {
+        "min_completion_chars": 3,
+        "expect_any": ["hello"],
+        "max_url_count": 0
+      }
+    },
+    {
+      "id": "qa_days_in_week",
+      "category": "factual_qa",
+      "prompt": "User: How many days are in a week?\nAssistant:",
+      "checks": {
+        "min_completion_chars": 1,
+        "expect_any": ["7", "seven"],
+        "max_url_count": 0
+      }
+    },
+    {
+      "id": "qa_capital_canada",
+      "category": "factual_qa",
+      "prompt": "User: What is the capital of Canada?\nAssistant:",
+      "checks": {
+        "min_completion_chars": 4,
+        "expect_any": ["ottawa"],
+        "max_url_count": 0
+      }
+    },
+    {
+      "id": "instruction_two_sentences",
+      "category": "instruction_following",
+      "prompt": "In exactly two short sentences, explain why sleep is important.",
+      "checks": {
+        "min_completion_chars": 60,
+        "expect_any": ["sleep", "health", "energy"],
+        "max_url_count": 0,
+        "max_repeated_char_run": 8
+      }
+    },
+    {
+      "id": "instruction_three_bullets",
+      "category": "instruction_following",
+      "prompt": "Give exactly three bullet points with tips for practicing English conversation.",
+      "checks": {
+        "min_completion_chars": 70,
+        "expect_any": ["-", "*", "1."],
+        "max_url_count": 0,
+        "max_repeated_char_run": 8
+      }
+    },
+    {
+      "id": "coherence_weekend_plan",
+      "category": "coherence",
+      "prompt": "Write a short paragraph describing a simple weekend plan in clear English.",
+      "checks": {
+        "min_completion_chars": 110,
+        "max_url_count": 0,
+        "max_repeated_char_run": 8,
+        "max_non_ascii_ratio": 0.05
+      }
+    },
+    {
+      "id": "paraphrase_simple",
+      "category": "paraphrase",
+      "prompt": "Paraphrase this sentence in simpler English: The meeting has been postponed until next Tuesday.",
+      "checks": {
+        "min_completion_chars": 35,
+        "expect_any": ["meeting", "next", "tuesday"],
+        "max_url_count": 0,
+        "max_repeated_char_run": 8
+      }
+    },
+    {
+      "id": "polite_disagreement",
+      "category": "conversation",
+      "prompt": "User: I think exercise is a waste of time. Reply politely and disagree in plain English.\nAssistant:",
+      "checks": {
+        "min_completion_chars": 45,
+        "expect_any": ["i understand", "however", "but"],
+        "max_url_count": 0,
+        "max_repeated_char_run": 8
+      }
+    },
+    {
+      "id": "empathy_response",
+      "category": "conversation",
+      "prompt": "User: I failed my exam and feel awful. Give a short supportive response in English.\nAssistant:",
+      "checks": {
+        "min_completion_chars": 40,
+        "expect_any": ["sorry", "can", "next", "improve"],
+        "max_url_count": 0,
+        "max_repeated_char_run": 8
+      }
+    },
+    {
+      "id": "summarize_note",
+      "category": "summarization",
+      "prompt": "Summarize in one sentence: \"The package arrived early, but one item was missing. Customer support shipped a replacement the same day.\"",
+      "checks": {
+        "min_completion_chars": 45,
+        "expect_any": ["package", "missing", "replacement"],
+        "max_url_count": 0,
+        "max_repeated_char_run": 8
+      }
+    },
+    {
+      "id": "english_only_output",
+      "category": "clean_output",
+      "prompt": "Write two short sentences in natural English about learning a new hobby.",
+      "checks": {
+        "min_completion_chars": 60,
+        "max_url_count": 0,
+        "max_repeated_char_run": 8,
+        "max_non_ascii_ratio": 0.03
+      }
+    },
+    {
+      "id": "no_code_blocks",
+      "category": "clean_output",
+      "prompt": "Give a short plain-English explanation of what a library card is.",
+      "checks": {
+        "min_completion_chars": 35,
+        "reject_any": ["```", "def ", "class ", "import "],
+        "max_url_count": 0,
+        "max_repeated_char_run": 8
+      }
+    },
+    {
+      "id": "question_answer_short",
+      "category": "conversation",
+      "prompt": "User: What is one good way to improve spoken English quickly?\nAssistant:",
+      "checks": {
+        "min_completion_chars": 35,
+        "expect_any": ["practice", "speak", "daily", "conversation"],
+        "max_url_count": 0,
+        "max_repeated_char_run": 8
+      }
+    }
+  ]
+}

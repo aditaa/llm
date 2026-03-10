@@ -921,6 +921,16 @@ class ScriptTests(unittest.TestCase):
     def test_pipeline_live_view_alerts_when_manifest_stalled(self) -> None:
         if (
             subprocess.run(
+                ["pgrep", "-af", "fineweb_stage_shard_loop.sh|fineweb_stage_shard_watchdog.sh"],
+                capture_output=True,
+                text=True,
+                check=False,
+            ).returncode
+            == 0
+        ):
+            self.skipTest("stage controller already running on host")
+        if (
+            subprocess.run(
                 ["pgrep", "-af", "scripts/fineweb_parquet_to_shards.py"],
                 capture_output=True,
                 text=True,

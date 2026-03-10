@@ -48,6 +48,7 @@ Use the `Makefile` as the source of truth:
 - `make train-350bt-v2`: usage helper for the 350BT long-run launcher profile
 - `make train-350bt-ctx1024`: usage helper for context-extension continuation stage
 - `make train-supervisor-350bt`: usage helper for auto-resume chunked training that refreshes manifest set between cycles
+- `make train-supervisor-phase1-talk`: usage helper for phase-1 English conversation gating profile
 - `make pipeline-eta`: usage helper for combined download + sharding + training ETA/status reporting
 - `make pipeline-live`: usage helper for a live terminal pipeline dashboard
 - `make shard-corpus-batch`: usage helper for batch sharding with a shared tokenizer
@@ -169,6 +170,8 @@ Keep PR scope narrow; split refactors and features into separate PRs.
 - When launching supervisor via transient `systemd-run --user`, set `--property=LimitNOFILE=1048576` to avoid `OSError: [Errno 24] Too many open files` on large shard sets
 - Supervisor resume guardrail validates `last.pt`/`ckpt_step_*.pt` and quarantines invalid checkpoint files before retry
 - Use `--no-train-fail-on-eval-regression` in supervisor when you want train chunks to continue and rely on post-chunk prompt-suite gates
+- Supervisor baseline selection now matches the active suite (`suite_name`/`suite_path`) for both eval and generation gates so suite changes do not compare against mismatched historical reports
+- For phase-1 talking quality, use `scripts/train_supervisor_phase1_english_talk.sh` (`english_talk_suite_v1` + `generation_talk_smoke_v1`) before code-specialization passes
 - On 12 GB RTX 5070 profiles, start supervisor with `--batch-size 12 --target-effective-batch 24 --min-batch-size 6 --max-batch-size 20 --batch-step 2` to avoid early OOM churn
 - Supervisor writes chunk trends to `artifacts/reports/train_supervisor_350bt/train_trend.tsv` and post-chunk eval trends to `artifacts/reports/train_supervisor_350bt/eval_trend.tsv`
 - Supervisor also writes scheduled generation-gate trends to `artifacts/reports/train_supervisor_350bt/generation_trend.tsv`

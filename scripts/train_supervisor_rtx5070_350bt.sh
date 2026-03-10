@@ -147,6 +147,7 @@ Auto-tune options:
 Post-chunk eval:
   --no-eval-after-chunk        Disable checkpoint prompt-suite eval after each successful chunk
   --eval-suite FILE            Eval suite JSON (default: configs/eval/standard_prompt_suite_v3.json)
+                               Baselines auto-match the active suite (name/path) from eval trend history
   --eval-max-new-tokens N      Eval max new tokens per case (default: 120)
   --eval-temperature X         Eval sampling temperature (default: 0.2)
   --eval-top-k N               Eval top-k (default: 0)
@@ -166,6 +167,7 @@ Post-chunk eval:
 Generation gate (scheduled post-chunk prompt generation checks):
   --no-generation-gate         Disable post-chunk generation gate
   --generation-suite FILE      Generation suite JSON (default: configs/eval/generation_smoke_suite_v1.json)
+                               Baselines auto-match the active suite (name/path) from generation trend history
   --generation-max-new-tokens N
                                Generation gate max new tokens per case (default: 120)
   --generation-temperature X   Generation gate sampling temperature (default: 0.8)
@@ -356,6 +358,79 @@ fi
 
 log() {
   echo "[$(date -Iseconds)] $*" | tee -a "$SUP_LOG"
+}
+
+find_latest_successful_baseline_for_suite() {
+  local trend_tsv="$1"
+  local suite_json="$2"
+  if [[ ! -f "$trend_tsv" || ! -f "$suite_json" ]]; then
+    echo ""
+    return 0
+  fi
+  "$PYTHON_BIN" - <<'PY' "$trend_tsv" "$suite_json"
+import json
+import sys
+from pathlib import Path
+
+trend_tsv = Path(sys.argv[1])
+suite_json = Path(sys.argv[2])
+
+try:
+    suite_obj = json.loads(suite_json.read_text(encoding="utf-8"))
+except Exception:
+    print("")
+    raise SystemExit(0)
+
+target_name = str(suite_obj.get("name", "")).strip()
+try:
+    target_resolved = suite_json.resolve()
+except OSError:
+    target_resolved = suite_json
+target_basename = suite_json.name
+
+rows: list[list[str]] = []
+for line in trend_tsv.read_text(encoding="utf-8", errors="replace").splitlines():
+    if not line or line.startswith("run_tag\t"):
+        continue
+    rows.append(line.split("\t"))
+
+for parts in reversed(rows):
+    if len(parts) < 4:
+        continue
+    rc = parts[2].strip()
+    report_path = parts[-1].strip()
+    if rc != "0" or not report_path or report_path == "NA":
+        continue
+    report_file = Path(report_path)
+    if not report_file.is_file():
+        continue
+    try:
+        report_obj = json.loads(report_file.read_text(encoding="utf-8"))
+    except Exception:
+        continue
+
+    report_suite_name = str(report_obj.get("suite_name", "")).strip()
+    report_suite_path_raw = str(report_obj.get("suite_path", "")).strip()
+
+    name_match = bool(target_name and report_suite_name and report_suite_name == target_name)
+    path_match = False
+    if report_suite_path_raw:
+        report_suite_path = Path(report_suite_path_raw)
+        if report_suite_path.name == target_basename:
+            path_match = True
+        else:
+            try:
+                if report_suite_path.resolve() == target_resolved:
+                    path_match = True
+            except OSError:
+                path_match = False
+
+    if name_match or path_match:
+        print(str(report_file))
+        raise SystemExit(0)
+
+print("")
+PY
 }
 
 find_oldest_supervisor_pid() {
@@ -845,9 +920,7 @@ run_post_chunk_eval() {
   local eval_report="artifacts/reports/evals/supervisor_350bt_step$(printf '%07d' "$step")_${run_tag}.json"
   local eval_log="$STATE_DIR/eval_${step}_${run_tag}.log"
   local baseline_report=""
-  if [[ -f "$EVAL_TREND_TSV" ]]; then
-    baseline_report="$(awk -F'\t' 'NR>1 && $3=="0" {print $NF}' "$EVAL_TREND_TSV" | tail -n 1)"
-  fi
+  baseline_report="$(find_latest_successful_baseline_for_suite "$EVAL_TREND_TSV" "$EVAL_SUITE")"
   if [[ -n "$baseline_report" && ! -f "$baseline_report" ]]; then
     baseline_report=""
   fi
@@ -954,9 +1027,7 @@ run_generation_gate() {
   local gen_report="artifacts/reports/evals/gen_gate_step$(printf '%07d' "$step")_${run_tag}.json"
   local gen_log="$STATE_DIR/generation_gate_${step}_${run_tag}.log"
   local baseline_report=""
-  if [[ -f "$GENERATION_TREND_TSV" ]]; then
-    baseline_report="$(awk -F'\t' 'NR>1 && $3=="0" {print $NF}' "$GENERATION_TREND_TSV" | tail -n 1)"
-  fi
+  baseline_report="$(find_latest_successful_baseline_for_suite "$GENERATION_TREND_TSV" "$GENERATION_SUITE")"
   if [[ -n "$baseline_report" && ! -f "$baseline_report" ]]; then
     baseline_report=""
   fi

@@ -506,9 +506,6 @@ bash scripts/train_rtx5070_fineweb_350bt_bpe_v2_ctx1024.sh
 ```
 This path resumes from the base run and uses `--allow-context-extension`.
 
-Optional text-first path still exists for inspection-heavy runs:
-`parquet_to_corpus -> clean-corpus-batch -> train-tokenizer-global -> shard-corpus-batch`.
-
 ### Incremental FineWeb Adds While Training
 You can start training on a subset, then add new parquet files with the same tokenizer and resume:
 
@@ -553,12 +550,8 @@ On this 20-core host, default FineWeb shard splitting should use `15` parallel s
 ## RTX 5070 Tuned Profiles
 - Tuned profile docs: `docs/RTX5070_TUNING.md`
 - Saved JSON profiles:
-  - `configs/train/rtx5070/fineweb_global_bpe_v1_big.json` (recommended, BPE)
   - `configs/train/rtx5070/fineweb_350bt_bpe_v2_longrun.json` (350BT long-run preset)
-- Launch tuned big profile:
-```bash
-bash scripts/train_rtx5070_fineweb_bpe_v1_big.sh
-```
+-  `configs/train/rtx5070/fineweb_350bt_bpe_v2_ctx1024_stage.json` (ctx1024 continuation preset)
 - 350BT-first LR sweep (ctx 512, LR `2e-4..4e-4`):
 ```bash
 bash scripts/lr_sweep_rtx5070_fineweb_350bt_ctx512.sh

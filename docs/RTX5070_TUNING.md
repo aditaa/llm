@@ -51,7 +51,7 @@ Measured with this profile: `avg_util=99.1%`, `max_util=100%`, `min_util=96%`, `
 
 ## Launch
 ```bash
-bash scripts/train_rtx5070_fineweb_bpe_v1_big.sh
+bash scripts/train_rtx5070_fineweb_350bt_bpe_v2.sh
 ```
 
 350BT-first sweep and long-run launchers:
@@ -61,5 +61,5 @@ bash scripts/train_rtx5070_fineweb_350bt_bpe_v2.sh
 ```
 
 Saved profile JSON:
-- `configs/train/rtx5070/fineweb_global_bpe_v1_big.json`
 - `configs/train/rtx5070/fineweb_350bt_bpe_v2_longrun.json`
+- `configs/train/rtx5070/fineweb_350bt_bpe_v2_ctx1024_stage.json`

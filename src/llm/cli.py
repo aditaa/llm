@@ -569,6 +569,10 @@ def cmd_train(
     tf32: bool,
     compile_model: bool,
     compile_mode: str,
+    compile_strict: bool,
+    sampler_max_open_shards: int,
+    sampled_shards_trace: str | None,
+    sampled_shards_trace_min_rows: int,
     export_safetensors: bool,
     safetensors_every_checkpoint: bool,
     checkpoint_keep_last: int,
@@ -615,6 +619,10 @@ def cmd_train(
         tf32=tf32,
         compile_model=compile_model,
         compile_mode=compile_mode,
+        compile_strict=compile_strict,
+        sampler_max_open_shards=sampler_max_open_shards,
+        sampled_shards_trace=(Path(sampled_shards_trace) if sampled_shards_trace else None),
+        sampled_shards_trace_min_rows=sampled_shards_trace_min_rows,
         export_safetensors=export_safetensors,
         safetensors_every_checkpoint=safetensors_every_checkpoint,
         checkpoint_keep_last=checkpoint_keep_last,
@@ -1342,6 +1350,28 @@ def parse_args() -> argparse.Namespace:
         help="torch.compile mode (used only with --compile-model)",
     )
     train_parser.add_argument(
+        "--compile-strict",
+        action="store_true",
+        help="Fail immediately if torch.compile init/warmup fails (default falls back to eager)",
+    )
+    train_parser.add_argument(
+        "--sampler-max-open-shards",
+        type=int,
+        default=256,
+        help="Max open shard memmaps per train/val sampler to limit file descriptors",
+    )
+    train_parser.add_argument(
+        "--sampled-shards-trace",
+        default=None,
+        help="Optional JSON path to write sampled shard coverage trace for this run",
+    )
+    train_parser.add_argument(
+        "--sampled-shards-trace-min-rows",
+        type=int,
+        default=1,
+        help="Minimum sampled rows per shard to include in sampled shard trace",
+    )
+    train_parser.add_argument(
         "--resume-from",
         default=None,
         help="Optional checkpoint path to resume training from",
@@ -1635,6 +1665,10 @@ def main() -> int:
             tf32=not args.no_tf32,
             compile_model=args.compile_model,
             compile_mode=args.compile_mode,
+            compile_strict=args.compile_strict,
+            sampler_max_open_shards=args.sampler_max_open_shards,
+            sampled_shards_trace=args.sampled_shards_trace,
+            sampled_shards_trace_min_rows=args.sampled_shards_trace_min_rows,
             export_safetensors=args.export_safetensors,
             safetensors_every_checkpoint=args.safetensors_every_checkpoint,
             checkpoint_keep_last=args.checkpoint_keep_last,

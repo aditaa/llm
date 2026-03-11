@@ -66,6 +66,20 @@ class ScriptTests(unittest.TestCase):
         self.assertIn("--train-stall-kill-seconds", proc.stdout)
         self.assertIn("--dedupe-report-keep", proc.stdout)
 
+    def test_cli_train_help_lists_sampler_and_compile_safety_flags(self) -> None:
+        proc = subprocess.run(
+            [sys.executable, "-m", "llm.cli", "train", "--help"],
+            cwd=Path(__file__).resolve().parents[1],
+            env={**os.environ, "PYTHONPATH": "src"},
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(proc.returncode, 0, msg=proc.stderr)
+        self.assertIn("--sampler-max-open-shards", proc.stdout)
+        self.assertIn("--sampled-shards-trace", proc.stdout)
+        self.assertIn("--compile-strict", proc.stdout)
+
     def test_stage_loop_help_lists_stage_copy_jobs(self) -> None:
         proc = subprocess.run(
             ["bash", "scripts/fineweb_stage_shard_loop.sh", "--help"],

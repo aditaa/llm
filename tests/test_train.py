@@ -196,6 +196,59 @@ class TrainDataTests(unittest.TestCase):
             self.assertEqual(xb.dtype, torch.long)
             self.assertTrue(torch.all(xb[:, 1:] == yb[:, :-1]))
 
+    def test_sampler_limits_open_shard_cache_and_writes_trace(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            ds = root / "dataset"
+            tok = root / "tok.json"
+
+            vocab_size = _write_tokenizer(tok, "a b c d e f g h i")
+            for idx in range(6):
+                _write_shard(ds / f"train_{idx:06d}.bin", list(range(80)))
+            _write_shard(ds / "val_000000.bin", list(range(40)))
+            manifest = {
+                "input_path": "x.txt",
+                "tokenizer_path": str(tok),
+                "tokenizer_hash": tokenizer_fingerprint(tok),
+                "tokenizer_contract_hash": tokenizer_contract_fingerprint(tok),
+                "tokenizer_vocab_size": vocab_size,
+                "token_dtype": "uint16",
+                "shard_size_tokens": 1024,
+                "val_ratio": 0.01,
+                "seed": 42,
+                "max_lines": 0,
+                "line_count": 10,
+                "train": {
+                    "total_tokens": 480,
+                    "shards": [
+                        {"path": f"train_{idx:06d}.bin", "tokens": 80}
+                        for idx in range(6)
+                    ],
+                },
+                "val": {"total_tokens": 40, "shards": [{"path": "val_000000.bin", "tokens": 40}]},
+            }
+            (ds / "manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+
+            info = collect_shard_training_info(ds)
+            sampler = ShardBatchSampler(
+                shard_paths=info.train_shards,
+                token_dtype=info.token_dtype,
+                context_length=8,
+                seed=7,
+                device=torch.device("cpu"),
+                max_open_shards=2,
+            )
+            for _ in range(20):
+                sampler.sample_batch(batch_size=8)
+                self.assertLessEqual(len(sampler._array_cache), 2)
+
+            trace_path = root / "sample_trace.json"
+            count = sampler.write_sample_trace(trace_path)
+            self.assertGreater(count, 0)
+            payload = json.loads(trace_path.read_text(encoding="utf-8"))
+            self.assertIn("sampled_shards", payload)
+            self.assertTrue(payload["sampled_shards"])
+
     def test_ema_state_update(self) -> None:
         model = torch.nn.Linear(2, 2, bias=False)
         with torch.no_grad():

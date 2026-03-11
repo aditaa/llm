@@ -64,7 +64,6 @@ make pull-hf-rows # print Hugging Face rows API pull helper usage
 make fineweb-parquet-to-shards # print direct FineWeb parquet->token-shards usage
 make fineweb-manifest-dedupe # print overlap-manifest dedupe helper usage
 make stage-fineweb-from-warm # print warm->hot FineWeb chunk staging usage
-make fineweb-prefetch-hot-queue # print hot-queue prefetch worker usage
 make fineweb-revalidate-bad-parquet # print bad parquet revalidate/restage usage
 make reconcile-offloaded-manifests # print offloaded-manifest reconcile usage
 make shard-offload-cycle # print safe reconcile->offload->reconcile usage
@@ -704,19 +703,6 @@ Templates:
 - `deploy/systemd/llm-shard-offload.timer`
 - `deploy/systemd/llm-vm-swappiness.service`
 - user equivalents under `deploy/systemd/user/`
-
-Note: prefetch is optional when stage-loop already uses hot-queue staging flags
-(`--hot-queue-min-files`, `--stage-max-files`, `--stage-copy-jobs`, `--stage-min-free-gib`).
-Install/enable the prefetch unit only when you explicitly want separate queue prefetching:
-
-```bash
-bash scripts/install_systemd_services.sh --install-watchdog --install-prefetch
-```
-
-If you run prefetch with stage-loop, keep auto skip enabled so it respects
-processed/bad parquet lists from `artifacts/reports/fineweb_stage_shard_loop/`.
-Prefetch now forwards `--min-free-gib` to `stage_fineweb_from_warm.sh`, so
-stage-loop and prefetch apply the same hot-disk free-space guardrail.
 
 Revalidate and optionally restore bad parquet files:
 ```bash

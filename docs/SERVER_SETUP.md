@@ -131,10 +131,6 @@ Environment file:
 - Set `LLM_CHECKPOINT_OFFLOAD_ARGS` for warm-sync + prune policy (for example keep newest local run only)
 - Set `LLM_BAD_PARQUET_REVALIDATE_ARGS` for periodic bad-parquet recovery/restage policy
 - Set `LLM_SWAPPINESS=10` to reduce swap churn; `llm-vm-swappiness.service` applies this at boot
-- Optional prefetch unit (only when you explicitly want separate prefetching in addition to stage-loop staging):
-  `bash scripts/install_systemd_services.sh --install-watchdog --install-prefetch`
-  installs `llm-fineweb-prefetch.service`
-
 Useful commands:
 ```bash
 sudo systemctl status llm-train-supervisor.service

@@ -790,12 +790,6 @@ def _stop_reason(
         if task_counts.get("download-worker", 0) > 0 or task_counts.get("hf-watchdog", 0) > 0:
             return "managed by resumable worker/watchdog"
         return "not started"
-    if task_name == "prefetch-worker":
-        if coverage_complete:
-            return "coverage complete"
-        if task_counts.get("stage-loop", 0) > 0:
-            return "staging handled by stage-loop"
-        return "not started"
     if task_name == "stage-watchdog":
         if coverage_complete:
             return "coverage complete"
@@ -1038,7 +1032,6 @@ def _render(
     tasks = [
         ("hf-watchdog", r"hf_download_watchdog\.sh"),
         ("download-worker", r"hf_download_resumable\.sh"),
-        ("prefetch-worker", r"fineweb_prefetch_hot_queue\.sh"),
         ("stage-watchdog", r"fineweb_stage_shard_watchdog\.sh"),
         ("hf-download", r"\.venv/bin/hf download HuggingFaceFW/fineweb"),
         ("stage-loop", r"fineweb_stage_shard_loop\.sh"),

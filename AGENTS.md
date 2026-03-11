@@ -40,7 +40,6 @@ Use the `Makefile` as the source of truth:
 - `make fineweb-parquet-to-shards`: usage helper for direct FineWeb parquet -> tokenizer -> shard conversion
 - `make fineweb-manifest-dedupe`: usage helper for overlap-manifest dedupe audit/fix
 - `make stage-fineweb-from-warm`: usage helper for staging FineWeb parquet chunks from warm to hot
-- `make fineweb-prefetch-hot-queue`: usage helper for warm->hot queue prefetch worker
 - `make fineweb-revalidate-bad-parquet`: usage helper for revalidating/restaging bad parquet entries
 - `make reconcile-offloaded-manifests`: usage helper for restoring risky offloaded manifests and optional bin rehydrate
 - `make shard-offload-cycle`: usage helper for safe reconcile -> offload -> reconcile timer cycle
@@ -149,7 +148,7 @@ Keep PR scope narrow; split refactors and features into separate PRs.
 - `fineweb_stage_shard_watchdog.sh` now also cleans stale stage-loop/shard-worker processes before relaunch so only one controller remains active
 - `fineweb_stage_shard_watchdog.sh` can adopt an already-running stage-loop controller (default) so watchdog restarts do not leave direct loop runs unmanaged; use `--no-adopt-existing-loop` to force fresh worker launch
 - Use `fineweb_stage_shard_loop.sh --enable-stage-copy --hot-queue-min-files <N>` only when you explicitly want legacy warm->hot parquet staging
-- `stage_fineweb_from_warm.sh` now uses a per-destination lock so stage-loop and prefetch worker staging calls serialize safely
+- `stage_fineweb_from_warm.sh` now uses a per-destination lock so concurrent staging calls serialize safely
 - `stage_fineweb_from_warm.sh --lock-wait-seconds 0` (default) skips quickly when another staging call holds the lock; tune if you want blocking behavior
 - `stage_fineweb_from_warm.sh` only applies rsync `--contimeout` for rsync-daemon sources (`rsync://` or `::`); local/NFS paths avoid this flag
 - Use `fineweb_stage_shard_loop.sh --enable-stage-copy --stage-copy-jobs <N>` to forward parallel staging copy workers into each stage cycle
@@ -202,7 +201,7 @@ Keep PR scope narrow; split refactors and features into separate PRs.
 - `pipeline_eta_report.py` also tracks manifest coverage quality (`manifest_unique_input_files`, overlap counts, `coverage_complete`)
 - `pipeline_eta_report.py` now includes per-task `RUN/STOP` state with stop reasons and `supervisor_gate` in JSON/text output
 - `pipeline_eta_report.py` now also reports `trainer_stall_seconds` and shard offload readiness (`offload_eligible_batches`, raw/capped counts)
-- Use `scripts/pipeline_live_view.py --refresh-seconds 5` for a live-only terminal monitor (system + pipeline task status, no report writes; includes watchdog/prefetch/stage-loop/generation-gate task rows; add `--no-alt-screen` if needed)
+- Use `scripts/pipeline_live_view.py --refresh-seconds 5` for a live-only terminal monitor (system + pipeline task status, no report writes; includes watchdog/stage-loop/generation-gate task rows; add `--no-alt-screen` if needed)
 - `pipeline_live_view.py` can reuse fresh ETA report train-step rates via `--eta-status-file`/`--eta-status-max-age-seconds` to keep training ETA visible when live step deltas are flat
 - `pipeline_live_view.py` staging line includes `hot_parquet` + `hot_incomplete` so cache refill progress is visible during warm->hot copies
 - `pipeline_live_view.py` includes manifest coverage line (`unique/510`, overlap inputs/manifests, completion flag)
@@ -213,9 +212,6 @@ Keep PR scope narrow; split refactors and features into separate PRs.
 - `pipeline_live_view.py` coverage ETA/rate falls back to sharding throughput when manifest overlap is zero, so ETA remains visible between manifest-update bursts
 - `pipeline_live_view.py` alerts on duplicate train controllers and on stage-loop runs that are not watchdog-managed
 - `pipeline_eta_report.py` task process counters are root-deduped so wrapper/child shells do not inflate `RUN xN` values
-- `pipeline_live_view.py` shows `STOP | <reason>` for non-running tasks (for example `staging handled by stage-loop` for prefetch when stage-loop queue staging is enabled)
-- `fineweb_prefetch_hot_queue.sh` can auto-read stage-loop skip data (`--auto-skip-state-dir artifacts/reports/fineweb_stage_shard_loop`) so it avoids restaging processed/bad parquet files
-- `fineweb_prefetch_hot_queue.sh` forwards `--min-free-gib` into stage calls so prefetch and stage-loop share the same hot-space floor
 - Revalidate/recover bad parquet list entries with `scripts/revalidate_bad_parquet.py`; use `--restage-valid` to copy newly validated files back into hot storage
 - `revalidate_bad_parquet.py` also prunes `quarantine_bad_parquet` by default (drops stale/validated entries; keeps newest copy per still-bad basename)
 - Optional automation: `llm-bad-parquet-revalidate.timer` runs `revalidate_bad_parquet.py` periodically via systemd

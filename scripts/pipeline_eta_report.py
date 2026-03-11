@@ -499,12 +499,6 @@ def _task_stop_reason(
         if active.get("hf_watchdog", 0) > 0:
             return "watchdog-managed; worker idle/restarting"
         return "not started"
-    if task_name == "prefetch_worker":
-        if coverage_complete:
-            return "coverage complete"
-        if active.get("stage_loop", 0) > 0:
-            return "staging handled by stage-loop"
-        return "not started"
     if task_name == "stage_watchdog":
         if coverage_complete:
             return "coverage complete"
@@ -670,7 +664,6 @@ def collect_status(args: argparse.Namespace) -> dict[str, Any]:
     active = {
         "hf_watchdog": _pgrep_root_count(r"hf_download_watchdog\.sh"),
         "download_worker": _pgrep_root_count(r"hf_download_resumable\.sh"),
-        "prefetch_worker": _pgrep_root_count(r"fineweb_prefetch_hot_queue\.sh"),
         "stage_watchdog": _pgrep_root_count(r"fineweb_stage_shard_watchdog\.sh"),
         "stage_loop": _pgrep_root_count(r"fineweb_stage_shard_loop\.sh"),
         "shard_builder": _pgrep_root_count(r"scripts/fineweb_parquet_to_shards\.py"),
@@ -773,7 +766,6 @@ def collect_status(args: argparse.Namespace) -> dict[str, Any]:
     task_order = [
         "hf_watchdog",
         "download_worker",
-        "prefetch_worker",
         "stage_watchdog",
         "stage_loop",
         "shard_builder",
@@ -908,7 +900,6 @@ def write_reports(status: dict[str, Any], output_json: Path, output_text: Path) 
     task_order = [
         "hf_watchdog",
         "download_worker",
-        "prefetch_worker",
         "stage_watchdog",
         "stage_loop",
         "shard_builder",
@@ -952,7 +943,7 @@ def write_reports(status: dict[str, Any], output_json: Path, output_text: Path) 
             f" offload_max_offloadable_batches={m['offload_max_offloadable_batches']}",
             f"trainer_stall_seconds={m['trainer_stall_seconds']}",
             "active:"
-            f" hf_watchdog={p['hf_watchdog']} download_worker={p['download_worker']} prefetch_worker={p['prefetch_worker']} stage_watchdog={p['stage_watchdog']} stage_loop={p['stage_loop']}"
+            f" hf_watchdog={p['hf_watchdog']} download_worker={p['download_worker']} stage_watchdog={p['stage_watchdog']} stage_loop={p['stage_loop']}"
             f" shard_builder={p['shard_builder']} train_supervisor={p['train_supervisor']}"
             f" trainer={p['trainer']} eval_runner={p['eval_runner']} generation_gate_runner={p['generation_gate_runner']}"
             f" shard_offload={p['shard_offload']}",

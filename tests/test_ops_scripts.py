@@ -536,6 +536,82 @@ class ScriptTests(unittest.TestCase):
             self.assertEqual(proc.returncode, 0, msg=proc.stderr)
             self.assertIn("Supervisor: gate=waiting_train_tokens 123456/999999", proc.stdout)
 
+    def test_pipeline_live_view_reports_quality_heartbeat(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            warm = root / "warm"
+            hot = root / "hot"
+            shards = root / "shards"
+            stage_dir = root / "stage"
+            sup_dir = root / "supervisor"
+            for path in [warm, hot, shards, stage_dir, sup_dir]:
+                path.mkdir(parents=True, exist_ok=True)
+
+            (sup_dir / "eval_trend.tsv").write_text(
+                "\n".join(
+                    [
+                        (
+                            "run_tag\tstep\teval_rc\tpass_rate\tcheck_pass_rate\tavg_case_score\t"
+                            "cases_passed\tcases_total\treport_json"
+                        ),
+                        "run1\t1000\t0\t0.20\t0.70\t0.65\t3\t15\treport1.json",
+                        "run2\t2000\t0\t0.30\t0.75\t0.70\t5\t15\treport2.json",
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            (sup_dir / "generation_trend.tsv").write_text(
+                "\n".join(
+                    [
+                        (
+                            "run_tag\tstep\tgeneration_rc\tpass_rate\tcheck_pass_rate\t"
+                            "avg_case_score\tcases_passed\tcases_total\tregression_pass\t"
+                            "baseline_report\treport_json"
+                        ),
+                        "run1\t1000\t0\t0.80\t0.85\t0.80\t4\t5\tTrue\tbase.json\tgen1.json",
+                        "run2\t2000\t0\t1.00\t1.00\t1.00\t5\t5\tTrue\tgen1.json\tgen2.json",
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    "scripts/pipeline_live_view.py",
+                    "--once",
+                    "--no-alt-screen",
+                    "--refresh-seconds",
+                    "0.1",
+                    "--warm-dir",
+                    str(warm),
+                    "--hot-dir",
+                    str(hot),
+                    "--shards-root",
+                    str(shards),
+                    "--stage-state-dir",
+                    str(stage_dir),
+                    "--supervisor-state-dir",
+                    str(sup_dir),
+                    "--expected-parquet-files",
+                    "510",
+                    "--expected-bytes",
+                    "1061360917731",
+                    "--train-target-step",
+                    "100000",
+                ],
+                cwd=Path(__file__).resolve().parents[1],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(proc.returncode, 0, msg=proc.stderr)
+            self.assertIn("Quality:  heartbeat=improving", proc.stdout)
+            self.assertIn("eval=improving", proc.stdout)
+            self.assertIn("gen=improving", proc.stdout)
+
     def test_pipeline_live_view_auto_detects_train_target_step(self) -> None:
         if (
             subprocess.run(

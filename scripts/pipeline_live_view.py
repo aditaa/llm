@@ -418,6 +418,161 @@ def _latest_generation_summary(supervisor_state_dir: Path) -> tuple[str, str, st
     return (parts[2], parts[3], parts[8])
 
 
+def _parse_float(value: str) -> float | None:
+    text = value.strip()
+    if not text:
+        return None
+    try:
+        return float(text)
+    except ValueError:
+        return None
+
+
+def _trend_rows(path: Path, min_cols: int) -> list[list[str]]:
+    if not path.exists():
+        return []
+    rows: list[list[str]] = []
+    try:
+        with path.open("r", encoding="utf-8", errors="replace") as handle:
+            for line in handle:
+                row = line.strip()
+                if not row or row.startswith("run_tag\t"):
+                    continue
+                parts = row.split("\t")
+                if len(parts) >= min_cols:
+                    rows.append(parts)
+    except OSError:
+        return []
+    return rows
+
+
+def _trend_metric_state(
+    *,
+    latest_rc: str,
+    latest_regression_pass: str | None,
+    latest_pass: float | None,
+    latest_check: float | None,
+    latest_score: float | None,
+    prev_pass: float | None,
+    prev_check: float | None,
+    prev_score: float | None,
+    pass_eps: float,
+    check_eps: float,
+    score_eps: float,
+) -> str:
+    if latest_rc not in {"0", "NA", ""}:
+        return "regressed"
+    if latest_regression_pass in {"False", "0"}:
+        return "regressed"
+    if latest_pass is None or latest_check is None or latest_score is None:
+        return "warming"
+    if prev_pass is None or prev_check is None or prev_score is None:
+        return "warming"
+    d_pass = latest_pass - prev_pass
+    d_check = latest_check - prev_check
+    d_score = latest_score - prev_score
+    if d_pass < -pass_eps or d_check < -check_eps or d_score < -score_eps:
+        return "regressed"
+    if d_pass > pass_eps or d_check > check_eps or d_score > score_eps:
+        return "improving"
+    return "flat"
+
+
+def _quality_heartbeat(
+    supervisor_state_dir: Path,
+) -> tuple[str, str, str, str]:
+    eval_rows = _trend_rows(supervisor_state_dir / "eval_trend.tsv", min_cols=8)
+    gen_rows = _trend_rows(supervisor_state_dir / "generation_trend.tsv", min_cols=9)
+
+    eval_state = "unknown"
+    eval_note = "no eval trend data"
+    if eval_rows:
+        latest = eval_rows[-1]
+        prev = eval_rows[-2] if len(eval_rows) > 1 else None
+        latest_rc = latest[2].strip()
+        latest_pass = _parse_float(latest[3])
+        latest_check = _parse_float(latest[4])
+        latest_score = _parse_float(latest[5])
+        prev_pass = _parse_float(prev[3]) if prev is not None else None
+        prev_check = _parse_float(prev[4]) if prev is not None else None
+        prev_score = _parse_float(prev[5]) if prev is not None else None
+
+        trailing_bools = [token for token in latest[8:] if token in {"True", "False"}]
+        promotion_pass = trailing_bools[0] if trailing_bools else "NA"
+
+        eval_state = _trend_metric_state(
+            latest_rc=latest_rc,
+            latest_regression_pass=(None if promotion_pass == "NA" else promotion_pass),
+            latest_pass=latest_pass,
+            latest_check=latest_check,
+            latest_score=latest_score,
+            prev_pass=prev_pass,
+            prev_check=prev_check,
+            prev_score=prev_score,
+            pass_eps=0.005,
+            check_eps=0.005,
+            score_eps=0.002,
+        )
+        eval_note = (
+            f"eval={eval_state} rc={latest_rc} "
+            f"pass={latest_pass:.3f}" if latest_pass is not None else f"eval={eval_state} rc={latest_rc}"
+        )
+        if latest_check is not None:
+            eval_note += f" check={latest_check:.3f}"
+        if latest_score is not None:
+            eval_note += f" score={latest_score:.3f}"
+        if promotion_pass != "NA":
+            eval_note += f" promo_pass={promotion_pass}"
+
+    gen_state = "unknown"
+    gen_note = "gen=no generation trend data"
+    if gen_rows:
+        latest = gen_rows[-1]
+        prev = gen_rows[-2] if len(gen_rows) > 1 else None
+        latest_rc = latest[2].strip()
+        latest_pass = _parse_float(latest[3])
+        latest_check = _parse_float(latest[4])
+        latest_score = _parse_float(latest[5])
+        latest_regression_pass = latest[8].strip()
+        prev_pass = _parse_float(prev[3]) if prev is not None else None
+        prev_check = _parse_float(prev[4]) if prev is not None else None
+        prev_score = _parse_float(prev[5]) if prev is not None else None
+
+        gen_state = _trend_metric_state(
+            latest_rc=latest_rc,
+            latest_regression_pass=latest_regression_pass,
+            latest_pass=latest_pass,
+            latest_check=latest_check,
+            latest_score=latest_score,
+            prev_pass=prev_pass,
+            prev_check=prev_check,
+            prev_score=prev_score,
+            pass_eps=0.005,
+            check_eps=0.005,
+            score_eps=0.002,
+        )
+        gen_note = (
+            f"gen={gen_state} rc={latest_rc} "
+            f"pass={latest_pass:.3f}" if latest_pass is not None else f"gen={gen_state} rc={latest_rc}"
+        )
+        if latest_regression_pass:
+            gen_note += f" regression_pass={latest_regression_pass}"
+
+    states = {eval_state, gen_state}
+    if "regressed" in states:
+        overall = "regressed"
+    elif "improving" in states:
+        overall = "improving"
+    elif states <= {"unknown"}:
+        overall = "unknown"
+    elif "warming" in states:
+        overall = "warming"
+    else:
+        overall = "flat"
+
+    return (overall, eval_state, eval_note, gen_note)
+
+
 def _eta_status_train_rate(status_path: Path, max_age_seconds: int, now_ts: float) -> float | None:
     if max_age_seconds <= 0 or not status_path.exists():
         return None
@@ -932,6 +1087,9 @@ def _render(
     train_target_step = _effective_train_target_step(args.train_target_step, sup_dir, train_step)
     supervisor_gate = _latest_supervisor_gate(sup_dir)
     gen_rc, gen_pass_rate, gen_regression_pass = _latest_generation_summary(sup_dir)
+    quality_state, eval_quality_state, eval_quality_note, gen_quality_note = _quality_heartbeat(
+        sup_dir
+    )
 
     dt = (now - state.ts) if state.ts is not None else None
     download_bps = _rate(warm_bytes, state.warm_bytes, dt)
@@ -1127,6 +1285,8 @@ def _render(
             f"trainer step stalled for {trainer_stall_seconds}s "
             f"(threshold={args.trainer_stall_alert_seconds}s)"
         )
+    if quality_state == "regressed":
+        alerts.append("quality heartbeat regressed; inspect eval/generation trend deltas")
     if active_symlink_manifests > 0:
         alerts.append(
             f"active manifests include symlink bins ({active_symlink_manifests}); "
@@ -1228,6 +1388,10 @@ def _render(
     lines.append(
         f"  GenGate:  latest_rc={gen_rc} latest_pass_rate={gen_pass_rate} "
         f"latest_regression_pass={gen_regression_pass}"
+    )
+    lines.append(
+        f"  Quality:  heartbeat={quality_state} eval_state={eval_quality_state} "
+        f"| {eval_quality_note} | {gen_quality_note}"
     )
 
     lines.append("")

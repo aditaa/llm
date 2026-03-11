@@ -208,6 +208,7 @@ Keep PR scope narrow; split refactors and features into separate PRs.
 - `pipeline_live_view.py` includes manifest coverage line (`unique/510`, overlap inputs/manifests, completion flag)
 - `pipeline_live_view.py` also shows hot-manifest state (`active`, `offloaded`, `active_symlink_manifests`) and trained-batch registry count
 - `pipeline_live_view.py` now also shows shard offload readiness (`offload_eligible_batches`) and training stall age (`stall=<seconds>`)
+- `pipeline_live_view.py` now shows a quality heartbeat (`improving`/`flat`/`regressed`/`warming`) from latest eval + generation trend files
 - `pipeline_live_view.py` includes manifest coverage rate/ETA to gauge when coverage gates will clear
 - `pipeline_live_view.py` also shows supervisor gate state (for example `waiting_unique_inputs <have>/<need>` or `waiting_train_tokens <have_tokens>/<need_tokens>`)
 - `pipeline_live_view.py` coverage ETA/rate falls back to sharding throughput when manifest overlap is zero, so ETA remains visible between manifest-update bursts

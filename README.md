@@ -663,6 +663,7 @@ This is a live-only monitor (no report/status files written) and includes:
 - manifest coverage status (`unique/510`, overlap inputs/manifests, coverage rate + ETA, completion flag)
 - supervisor gate status (for example waiting on `min_unique_input_files`)
 - training row includes `stall=<seconds since last step progress>` for direct trainer stall visibility
+- quality heartbeat line (`improving`/`flat`/`regressed`/`warming`) based on latest eval + generation trends
 - running project task states with pid/runtime/cpu/mem summaries
 - explicit stop reasons for tasks that are not running
 - alert rows for stage-controller health and shard-manifest stall conditions

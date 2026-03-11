@@ -185,8 +185,8 @@ Keep PR scope narrow; split refactors and features into separate PRs.
 - Supervisor resume guardrail validates `last.pt`/`ckpt_step_*.pt` and quarantines invalid checkpoint files before retry
 - Use `--no-train-fail-on-eval-regression` in supervisor when you want train chunks to continue and rely on post-chunk prompt-suite gates
 - Supervisor baseline selection now matches the active suite (`suite_name`/`suite_path`) for both eval and generation gates so suite changes do not compare against mismatched historical reports
-- For phase-1 talking quality, use `scripts/train_supervisor_phase1_english_talk.sh` (`english_talk_suite_v1` + `generation_talk_smoke_v1` + fixed `english_talk_holdout_suite_v1`) before code-specialization passes
-- Phase-1 launcher now adds stricter quality gates (`--generation-fail-below-pass-rate 0.45`, `--generation-stop-on-fail`, `--holdout-fail-below-pass-rate 0.45`, `--holdout-stop-on-fail`, `--eval-fail-on-no-promotion`, `--promotion-min-quality-streak 2`)
+- For phase-1 talking quality, use `scripts/train_supervisor_phase1_english_talk.sh` (`english_talk_suite_v1` + `generation_talk_quality_v2` + fixed `english_talk_holdout_suite_v1`) before code-specialization passes
+- Phase-1 launcher now defaults to recovery-oriented quality gates (`--lr-schedule constant`, `--generation-fail-below-pass-rate 0.35`, `--holdout-fail-below-pass-rate 0.35`, `--promotion-min-quality-streak 2`, `promotion_policy_talk_recovery_v2.json`)
 - Phase-1 launcher writes supervisor state to `artifacts/reports/train_supervisor_phase1_talk`; pipeline status tools now auto-detect between phase1 + standard state dirs (override with `--supervisor-state-dir` when needed)
 - Phase-1 launcher uses lower-variance generation gating (`--generation-temperature 0.2 --generation-top-k 1`)
 - Supervisor now runs hot-manifest guard each loop (`scripts/enforce_hot_only_manifests.py`) to auto-disable active manifests that reference symlinked shard bins
@@ -198,7 +198,7 @@ Keep PR scope narrow; split refactors and features into separate PRs.
 - Supervisor also renders `artifacts/reports/train_supervisor_350bt/eval_dashboard.html` and exports `best.pt` aliases after successful eval promotions
 - Supervisor now records successful-chunk sampled-batch coverage in `<state_dir>/trained_batch_names.txt` (from `llm.cli train --sampled-shards-trace`) for safe shard offload gating
 - Supervisor supports quality auto-rollback to `best.pt` after sustained regressions; tune with `--quality-rollback-streak` and `--quality-rollback-cooldown-steps`
-- Use `--generation-suite configs/eval/generation_smoke_suite_v1.json` and `--generation-every-chunks <N>` to run prompt-generation drift gates every chunk (or every N chunks)
+- Use `--generation-suite configs/eval/generation_smoke_suite_v1.json` (or `generation_talk_quality_v2.json` for phase-1 talk quality) and `--generation-every-chunks <N>` to run prompt-generation drift gates every chunk (or every N chunks)
 - Use `scripts/pipeline_eta_report.py --loop` for combined ETA snapshots in `artifacts/reports/pipeline_status.{json,txt}` (includes `top`, `free -h`, `nvidia-smi`, and `df -h` captures)
 - `pipeline_eta_report.py` accepts `--once` for explicit single-snapshot mode
 - `pipeline_eta_report.py` also tracks manifest coverage quality (`manifest_unique_input_files`, overlap counts, `coverage_complete`)
@@ -232,7 +232,7 @@ Keep PR scope narrow; split refactors and features into separate PRs.
 - `llm.cli train --compile-model` now warms the compiled graph and falls back to eager by default; add `--compile-strict` to hard-fail on compile init/warmup issues
 - Use `llm.cli train --sampler-max-open-shards <N>` to cap open shard memmaps and reduce file-descriptor pressure
 - Default training architecture is `gpt_rope_rmsnorm_swiglu_v1`; use legacy profile only for old checkpoint compatibility
-- Prefer `llm.cli train --lr-schedule cosine --lr-warmup-steps <N>` for stable first-pass runs
+- Prefer `llm.cli train --lr-schedule cosine --lr-warmup-steps <N>` for fresh first-pass runs; prefer supervisor `--lr-schedule constant` for late-step recovery when cosine decay has already flattened LR
 - Use `--grad-accum-steps` when VRAM is tight and you need higher effective batch
 - Keep disk use bounded with `llm.cli train --checkpoint-keep-last <N> --checkpoint-keep-every <M>`
 - Use `scripts/checkpoint_offload_prune.sh` to sync checkpoint runs to warm storage and prune older local runs (keep active + newest local)

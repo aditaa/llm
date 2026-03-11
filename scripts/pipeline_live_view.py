@@ -1300,7 +1300,7 @@ def _render(
         ("train-supervisor", r"bash scripts/train_supervisor_rtx5070_350bt\.sh"),
         ("trainer", r"llm\.cli train"),
         ("eval-runner", r"eval_checkpoint_prompts\.py"),
-        ("generation-gate", r"eval_checkpoint_prompts\.py .*generation_smoke_suite_v1\.json"),
+        ("generation-gate", r"eval_checkpoint_prompts\.py .*configs/eval/generation_[^ ]+\.json"),
         ("shard-offload", r"scripts/offload_shard_bins_to_warm\.py"),
         ("zim-offload", r"zim_offload_worker\.sh"),
     ]

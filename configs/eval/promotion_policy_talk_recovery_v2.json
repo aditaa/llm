@@ -1,0 +1,19 @@
+{
+  "name": "checkpoint_promotion_talk_recovery_v2",
+  "description": "Recovery policy for early/weak phase-1 checkpoints: allow gradual promotion while still blocking clear regressions.",
+  "absolute": {
+    "min_pass_rate": 0.30,
+    "min_check_pass_rate": 0.65,
+    "min_avg_case_score": 0.60
+  },
+  "regression": {
+    "max_pass_rate_drop": 0.03,
+    "max_check_pass_rate_drop": 0.03,
+    "max_avg_case_score_drop": 0.02
+  },
+  "improvement": {
+    "min_pass_rate_gain": 0.0,
+    "min_check_pass_rate_gain": 0.0,
+    "min_avg_case_score_gain": 0.002
+  }
+}

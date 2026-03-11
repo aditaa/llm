@@ -15,8 +15,16 @@ ALLOWED_CHECK_KEYS = {
 
 
 class EvalSuiteConfigTests(unittest.TestCase):
+    def _case_suite_paths(self) -> list[Path]:
+        paths: list[Path] = []
+        for path in sorted(EVAL_DIR.glob("*.json")):
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            if isinstance(payload.get("cases"), list):
+                paths.append(path)
+        return paths
+
     def test_eval_suites_use_supported_check_keys(self) -> None:
-        for suite_path in sorted(EVAL_DIR.glob("*suite*.json")):
+        for suite_path in self._case_suite_paths():
             suite = json.loads(suite_path.read_text(encoding="utf-8"))
             self.assertIsInstance(suite.get("name"), str, msg=str(suite_path))
             cases = suite.get("cases")
@@ -41,9 +49,9 @@ class EvalSuiteConfigTests(unittest.TestCase):
             encoding="utf-8"
         )
         self.assertIn("configs/eval/english_talk_suite_v1.json", wrapper)
-        self.assertIn("configs/eval/generation_talk_smoke_v1.json", wrapper)
+        self.assertIn("configs/eval/generation_talk_quality_v2.json", wrapper)
         self.assertIn("configs/eval/english_talk_holdout_suite_v1.json", wrapper)
-        self.assertIn("configs/eval/promotion_policy_talk_v1.json", wrapper)
+        self.assertIn("configs/eval/promotion_policy_talk_recovery_v2.json", wrapper)
 
     def test_phase1_holdout_suite_is_non_coding(self) -> None:
         suite_path = EVAL_DIR / "english_talk_holdout_suite_v1.json"
@@ -52,8 +60,13 @@ class EvalSuiteConfigTests(unittest.TestCase):
         self.assertNotIn("coding", categories)
 
     def test_talk_promotion_policy_schema(self) -> None:
-        policy_path = EVAL_DIR / "promotion_policy_talk_v1.json"
-        policy = json.loads(policy_path.read_text(encoding="utf-8"))
-        for section in ("absolute", "regression", "improvement"):
-            self.assertIn(section, policy, msg=str(policy_path))
-            self.assertIsInstance(policy[section], dict, msg=str(policy_path))
+        policy_files = (
+            "promotion_policy_talk_v1.json",
+            "promotion_policy_talk_recovery_v2.json",
+        )
+        for policy_name in policy_files:
+            policy_path = EVAL_DIR / policy_name
+            policy = json.loads(policy_path.read_text(encoding="utf-8"))
+            for section in ("absolute", "regression", "improvement"):
+                self.assertIn(section, policy, msg=str(policy_path))
+                self.assertIsInstance(policy[section], dict, msg=str(policy_path))

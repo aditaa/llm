@@ -587,16 +587,15 @@ bash scripts/train_supervisor_rtx5070_350bt.sh \
 bash scripts/train_supervisor_phase1_english_talk.sh
 ```
 This uses `configs/eval/english_talk_suite_v1.json`,
-`configs/eval/generation_talk_smoke_v1.json`, and
-`configs/eval/promotion_policy_talk_v1.json`.
+`configs/eval/generation_talk_quality_v2.json`, and
+`configs/eval/promotion_policy_talk_recovery_v2.json`.
 It also runs a fixed holdout gate using
 `configs/eval/english_talk_holdout_suite_v1.json`.
 It also uses a dedicated state dir (`artifacts/reports/train_supervisor_phase1_talk`) and
 lower-variance generation-gate settings (`--generation-temperature 0.2 --generation-top-k 1`).
-Phase-1 launcher now enforces stronger quality gates by default:
-`--generation-fail-below-pass-rate 0.45`, `--generation-stop-on-fail`,
-`--holdout-fail-below-pass-rate 0.45`, `--holdout-stop-on-fail`,
-`--eval-fail-on-no-promotion`, and `--promotion-min-quality-streak 2`.
+Phase-1 launcher now defaults to recovery-friendly guardrails:
+`--lr-schedule constant`, `--generation-fail-below-pass-rate 0.35`,
+`--holdout-fail-below-pass-rate 0.35`, and `--promotion-min-quality-streak 2`.
 Successful chunks update `artifacts/reports/train_supervisor_phase1_talk/trained_batch_names.txt`,
 which can be used to gate shard offload so only already-trained batches move to warm storage.
 On each supervisor loop, hot-only manifest guard now runs automatically and disables any
@@ -619,6 +618,7 @@ Use `--no-dedupe-overlap-manifests` to disable, or `--dedupe-dry-run` to audit w
 Use `--dedupe-report-keep <N>` to cap saved dedupe report/log artifacts during long waits.
 Use `--min-unique-input-files <N>` to hold training until enough unique parquet inputs are represented in manifests.
 Use `--min-train-tokens <N>` to gate startup by total train-token coverage instead of raw file count.
+Use `--lr-schedule constant` in supervisor for late-step recovery runs where cosine decay is too aggressive.
 Supervisor enforces a singleton lock at
 `artifacts/reports/train_supervisor_350bt/supervisor.lock`.
 Add `--no-train-fail-on-eval-regression` if you want chunk runs to continue even when
@@ -875,7 +875,7 @@ bash scripts/hydrate_from_warm_storage.sh /mnt/ceph/llm/data
 - Batch corpus sharding (`shard-corpus-batch`) with one shared tokenizer.
 - Baseline GPT training (`train`) with checkpoint save/resume.
   - Default architecture: RoPE + RMSNorm + SwiGLU (`gpt_rope_rmsnorm_swiglu_v1`).
-  - Includes AdamW no-decay param groups, warmup/cosine LR, and grad accumulation.
+  - Includes AdamW no-decay param groups, constant or warmup/cosine LR, and grad accumulation.
 - Checkpoint-based text generation (`generate`) with temperature/top-k sampling.
 - Optional safetensors export for deployment (`--export-safetensors`).
 - Unit tests for tokenizer round-trips and unknown token behavior.

@@ -31,6 +31,7 @@ N_LAYERS=12
 N_HEADS=12
 D_MODEL=768
 LEARNING_RATE="3e-4"
+LR_SCHEDULE="cosine"
 LR_WARMUP_STEPS=2000
 LR_MIN_RATIO="0.10"
 EVAL_INTERVAL=1000
@@ -150,6 +151,7 @@ Training shape:
   --n-heads N                  Attention head count (default: 12)
   --d-model N                  Hidden size (default: 768)
   --learning-rate X            Learning rate (default: 3e-4)
+  --lr-schedule NAME          LR schedule: constant|cosine (default: cosine)
   --lr-warmup-steps N          Warmup steps (default: 2000)
   --lr-min-ratio X             Cosine min ratio (default: 0.10)
   --eval-interval N            Train-loop eval interval (default: 1000)
@@ -294,6 +296,7 @@ while [[ $# -gt 0 ]]; do
     --n-heads) N_HEADS="$2"; shift 2 ;;
     --d-model) D_MODEL="$2"; shift 2 ;;
     --learning-rate) LEARNING_RATE="$2"; shift 2 ;;
+    --lr-schedule) LR_SCHEDULE="$2"; shift 2 ;;
     --lr-warmup-steps) LR_WARMUP_STEPS="$2"; shift 2 ;;
     --lr-min-ratio) LR_MIN_RATIO="$2"; shift 2 ;;
     --eval-interval) EVAL_INTERVAL="$2"; shift 2 ;;
@@ -409,6 +412,10 @@ if [[ "$TRAIN_STALL_KILL_SECONDS" -lt 0 ]]; then
 fi
 if [[ "$BATCH_SIZE" -le 0 || "$GRAD_ACCUM_STEPS" -le 0 ]]; then
   echo "error: batch-size and grad-accum-steps must be > 0" >&2
+  exit 1
+fi
+if [[ "$LR_SCHEDULE" != "constant" && "$LR_SCHEDULE" != "cosine" ]]; then
+  echo "error: lr-schedule must be one of: constant, cosine" >&2
   exit 1
 fi
 if [[ "$CHECKPOINT_KEEP_LAST" -lt 0 || "$CHECKPOINT_KEEP_EVERY" -lt 0 ]]; then
@@ -1799,7 +1806,7 @@ fi
 failure_streak=0
 successful_chunks=0
 log "supervisor_start shards_path=$SHARDS_PATH output_dir=$OUTPUT_DIR step_chunk=$STEP_CHUNK"
-log "tuning_start batch_size=$BATCH_SIZE grad_accum=$GRAD_ACCUM_STEPS auto_tune=$AUTO_TUNE target_effective_batch=$TARGET_EFFECTIVE_BATCH train_fail_on_eval_regression=$TRAIN_FAIL_ON_EVAL_REGRESSION checkpoint_keep_last=$CHECKPOINT_KEEP_LAST checkpoint_keep_every=$CHECKPOINT_KEEP_EVERY allow_context_extension=$ALLOW_CONTEXT_EXTENSION ema_decay=$EMA_DECAY ema_update_every=$EMA_UPDATE_EVERY ema_start_step=$EMA_START_STEP generation_gate=$GENERATION_GATE generation_every_chunks=$GENERATION_EVERY_CHUNKS generation_stop_on_fail=$GENERATION_STOP_ON_FAIL holdout_gate=$HOLDOUT_GATE holdout_suite=${HOLDOUT_SUITE:-none} holdout_every_chunks=$HOLDOUT_EVERY_CHUNKS holdout_stop_on_fail=$HOLDOUT_STOP_ON_FAIL promotion_require_policy_pass=$PROMOTION_REQUIRE_POLICY_PASS promotion_require_generation_pass=$PROMOTION_REQUIRE_GENERATION_PASS promotion_require_holdout_pass=$PROMOTION_REQUIRE_HOLDOUT_PASS promotion_min_quality_streak=$PROMOTION_MIN_QUALITY_STREAK quality_rollback_streak=$QUALITY_ROLLBACK_STREAK quality_rollback_cooldown_steps=$QUALITY_ROLLBACK_COOLDOWN_STEPS dedupe_overlap_manifests=$DEDUPE_OVERLAP_MANIFESTS dedupe_keep=$DEDUPE_KEEP dedupe_dry_run=$DEDUPE_DRY_RUN min_train_tokens=$MIN_TRAIN_TOKENS train_stall_check_seconds=$TRAIN_STALL_CHECK_SECONDS train_stall_kill_seconds=$TRAIN_STALL_KILL_SECONDS"
+log "tuning_start batch_size=$BATCH_SIZE grad_accum=$GRAD_ACCUM_STEPS auto_tune=$AUTO_TUNE target_effective_batch=$TARGET_EFFECTIVE_BATCH train_fail_on_eval_regression=$TRAIN_FAIL_ON_EVAL_REGRESSION checkpoint_keep_last=$CHECKPOINT_KEEP_LAST checkpoint_keep_every=$CHECKPOINT_KEEP_EVERY allow_context_extension=$ALLOW_CONTEXT_EXTENSION learning_rate=$LEARNING_RATE lr_schedule=$LR_SCHEDULE lr_warmup_steps=$LR_WARMUP_STEPS lr_min_ratio=$LR_MIN_RATIO ema_decay=$EMA_DECAY ema_update_every=$EMA_UPDATE_EVERY ema_start_step=$EMA_START_STEP generation_gate=$GENERATION_GATE generation_every_chunks=$GENERATION_EVERY_CHUNKS generation_stop_on_fail=$GENERATION_STOP_ON_FAIL holdout_gate=$HOLDOUT_GATE holdout_suite=${HOLDOUT_SUITE:-none} holdout_every_chunks=$HOLDOUT_EVERY_CHUNKS holdout_stop_on_fail=$HOLDOUT_STOP_ON_FAIL promotion_require_policy_pass=$PROMOTION_REQUIRE_POLICY_PASS promotion_require_generation_pass=$PROMOTION_REQUIRE_GENERATION_PASS promotion_require_holdout_pass=$PROMOTION_REQUIRE_HOLDOUT_PASS promotion_min_quality_streak=$PROMOTION_MIN_QUALITY_STREAK quality_rollback_streak=$QUALITY_ROLLBACK_STREAK quality_rollback_cooldown_steps=$QUALITY_ROLLBACK_COOLDOWN_STEPS dedupe_overlap_manifests=$DEDUPE_OVERLAP_MANIFESTS dedupe_keep=$DEDUPE_KEEP dedupe_dry_run=$DEDUPE_DRY_RUN min_train_tokens=$MIN_TRAIN_TOKENS train_stall_check_seconds=$TRAIN_STALL_CHECK_SECONDS train_stall_kill_seconds=$TRAIN_STALL_KILL_SECONDS"
 backfill_trained_batch_registry
 ensure_single_supervisor_process
 
@@ -1874,7 +1881,7 @@ while true; do
       --n-heads "$N_HEADS" \
       --d-model "$D_MODEL" \
       --learning-rate "$LEARNING_RATE" \
-      --lr-schedule cosine \
+      --lr-schedule "$LR_SCHEDULE" \
       --lr-warmup-steps "$LR_WARMUP_STEPS" \
       --lr-min-ratio "$LR_MIN_RATIO" \
       --eval-interval "$EVAL_INTERVAL" \

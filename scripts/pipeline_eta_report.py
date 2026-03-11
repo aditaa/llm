@@ -879,7 +879,7 @@ def collect_status(args: argparse.Namespace) -> dict[str, Any]:
         "trainer": _pgrep_root_count(r"llm\.cli train"),
         "eval_runner": _pgrep_root_count(r"scripts/eval_checkpoint_prompts\.py"),
         "generation_gate_runner": _pgrep_root_count(
-            r"scripts/eval_checkpoint_prompts\.py .*generation_smoke_suite_v1\.json"
+            r"scripts/eval_checkpoint_prompts\.py .*configs/eval/generation_[^ ]+\.json"
         ),
         "shard_offload": _pgrep_root_count(r"scripts/offload_shard_bins_to_warm\.py"),
     }

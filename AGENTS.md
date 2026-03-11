@@ -18,7 +18,7 @@ Use the `Makefile` as the source of truth:
 - `make setup-infer`: install inference/deploy extras
 - `make install-server-system`: install Ubuntu/Debian system packages
 - `make install-systemd-services`: install/reload systemd service units for long-running workers
-- `make install-user-systemd-services`: install/reload user-level systemd service units (no sudo path)
+- `make install-user-systemd-services`: install/reload user-level systemd service units (no sudo path; includes shard/checkpoint timers)
 - `make doctor`: environment/tooling diagnostics
 - `make test`: run `unittest` test suite
 - `make lint`: run Ruff lint checks

@@ -5,9 +5,8 @@ Wants=network-online.target
 
 [Service]
 Type=oneshot
-User=__USER__
 WorkingDirectory=__REPO_DIR__
-EnvironmentFile=-/etc/llm/llm.env
+EnvironmentFile=-%h/.config/llm/llm.env
 ExecStart=/bin/bash -lc 'cd __REPO_DIR__ && exec bash scripts/checkpoint_offload_prune.sh ${LLM_CHECKPOINT_OFFLOAD_ARGS:-}'
 Nice=10
 IOSchedulingClass=idle

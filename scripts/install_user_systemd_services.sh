@@ -29,6 +29,7 @@ Installed by default:
   - llm-train-supervisor.service
   - llm-fineweb-stage-shard-watchdog.service
   - llm-shard-offload.service + llm-shard-offload.timer
+  - llm-checkpoint-offload-prune.service + llm-checkpoint-offload-prune.timer
 USAGE
 }
 
@@ -117,6 +118,8 @@ install_unit "llm-train-supervisor.service" "llm-train-supervisor.service"
 install_unit "llm-fineweb-stage-shard-watchdog.service" "llm-fineweb-stage-shard-watchdog.service"
 install_unit "llm-shard-offload.service" "llm-shard-offload.service"
 install_unit "llm-shard-offload.timer" "llm-shard-offload.timer"
+install_unit "llm-checkpoint-offload-prune.service" "llm-checkpoint-offload-prune.service"
+install_unit "llm-checkpoint-offload-prune.timer" "llm-checkpoint-offload-prune.timer"
 if [[ "$INSTALL_WATCHDOG" -eq 1 ]]; then
   install_unit "llm-hf-download-watchdog.service" "llm-hf-download-watchdog.service"
 fi
@@ -136,6 +139,7 @@ units=(
 )
 timer_units=(
   llm-shard-offload.timer
+  llm-checkpoint-offload-prune.timer
 )
 if [[ "$INSTALL_WATCHDOG" -eq 1 ]]; then
   units+=(llm-hf-download-watchdog.service)

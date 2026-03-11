@@ -43,7 +43,7 @@ bash scripts/bootstrap_dev.sh
 ```bash
 make setup-infer # install inference/deploy dependencies
 make install-systemd-services # install/reload long-run systemd units
-make install-user-systemd-services # install/reload user-level systemd units (no sudo)
+make install-user-systemd-services # install/reload user-level systemd units (no sudo; includes shard/checkpoint timers)
 make test        # run unit tests
 make lint        # run Ruff checks
 make format      # run Black formatter

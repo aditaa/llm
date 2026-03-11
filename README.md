@@ -779,6 +779,8 @@ bash scripts/shard_offload_cycle.sh
 
 Environment template:
 - `deploy/systemd/llm.env.example` (installed to `/etc/llm/llm.env`)
+- Service units now pass through `LLM_*_ARGS` only when set; if unset, the underlying
+  scripts use their built-in defaults.
 
 Recommended `LLM_STAGE_SHARD_LOOP_ARGS` baseline for 20-core hosts:
 ```bash

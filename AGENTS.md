@@ -48,6 +48,7 @@ Use the `Makefile` as the source of truth:
 - `make fineweb-stage-shard-loop`: usage helper for rolling warm->hot stage + shard + verify + sync + purge
 - `make fineweb-stage-shard-watchdog`: usage helper for auto-restart watchdog around the stage/shard loop
 - `make lr-sweep-350bt`: usage helper for RTX 5070 LR sweep on staged 350BT shards (`2e-4..4e-4`, ctx 512)
+- `make benchmark-rtx5070`: usage helper for short context/batch throughput + GPU memory benchmark sweep
 - `make train-350bt-v2`: usage helper for the 350BT long-run launcher profile
 - `make train-350bt-ctx1024`: usage helper for context-extension continuation stage
 - `make train-supervisor-350bt`: usage helper for auto-resume chunked training that refreshes manifest set between cycles
@@ -236,6 +237,7 @@ Keep PR scope narrow; split refactors and features into separate PRs.
 - For post-run smoothing, merge several checkpoints with `llm.cli average-checkpoints --state-key model_state` (or `ema_state`)
 - For deploy bundles, use `scripts/package_inference_bundle.py` (checksums + optional tarball) or `hf_prepare_and_publish_model.py --include-safetensors`
 - RTX 5070 tuned training profiles live in `configs/train/rtx5070/`; preferred 350BT launchers: `bash scripts/lr_sweep_rtx5070_fineweb_350bt_ctx512.sh` then `bash scripts/train_rtx5070_fineweb_350bt_bpe_v2.sh`
+- For reproducible throughput/memory probes across context lengths, use `bash scripts/benchmark_rtx5070_context_profiles.sh` and track `summary.tsv` outputs under `artifacts/reports/rtx5070_ctx_bench_*`
 - Version extracted/tokenized/sharded outputs with the ZIM date stamp (for example `serverfault_2025-08`)
 - Keep raw ZIM archives in `/mnt/ceph/llm/data/raw_zim/`
 - For portable model release + offline server deploy, follow `docs/HF_RELEASE_AND_DEPLOY.md`

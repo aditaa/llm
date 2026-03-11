@@ -71,6 +71,7 @@ make offload-shard-bins-warm # print shard .bin offload-to-warm usage
 make fineweb-stage-shard-loop # print rolling stage->shard->verify->sync->purge usage
 make fineweb-stage-shard-watchdog # print auto-restart watchdog usage for stage/shard loop
 make lr-sweep-350bt # print RTX 5070 LR sweep usage for staged 350BT shards
+make benchmark-rtx5070 # print short context/batch throughput benchmark usage
 make train-350bt-v2 # print 350BT long-run launcher usage
 make train-350bt-ctx1024 # print long-context continuation launcher usage
 make train-supervisor-350bt # print auto-resume trainer supervisor usage
@@ -555,6 +556,10 @@ On this 20-core host, default FineWeb shard splitting should use `15` parallel s
 ```bash
 bash scripts/lr_sweep_rtx5070_fineweb_350bt_ctx512.sh
 ```
+- Reproducible context/batch benchmark sweep (tok/s + GPU memory/util summary):
+```bash
+bash scripts/benchmark_rtx5070_context_profiles.sh --max-steps 1200 --compile-model
+```
 - 350BT-first long run launcher:
 ```bash
 bash scripts/train_rtx5070_fineweb_350bt_bpe_v2.sh
@@ -854,7 +859,7 @@ bash scripts/hydrate_from_warm_storage.sh /mnt/ceph/llm/data
 ## Next Milestones
 1. Expand checkpoint eval suite and track regressions in CI.
 2. Add tokenizer-aware dataset manifests for long-running incremental FineWeb phases.
-3. Add larger-context training profiles and memory/throughput benchmarking.
+3. Raise context length beyond 1024 and benchmark memory/throughput tradeoffs.
 4. Add finetuning flows for classification and instruction datasets.
 
 ## References

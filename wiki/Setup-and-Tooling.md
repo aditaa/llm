@@ -34,6 +34,7 @@ make hydrate-warm
 make offload-zim
 make checkpoint-offload-prune
 make set-swappiness
+make benchmark-rtx5070
 ```
 
 `make sync-warm` now includes raw/training inputs (`data/raw_zim`, `data/fineweb`,
@@ -58,11 +59,15 @@ make set-swappiness
 - Saved configs: `configs/train/rtx5070/`
 - Recommended launcher:
 ```bash
-bash scripts/train_rtx5070_fineweb_bpe_v1_big.sh
+bash scripts/train_rtx5070_fineweb_350bt_bpe_v2.sh
 ```
 - Training defaults now include warmup+cosine LR and fixed held-out eval batches.
 - For VRAM pressure, increase effective batch with `--grad-accum-steps`.
 - For long-context continuation, use `bash scripts/train_rtx5070_fineweb_350bt_bpe_v2_ctx1024.sh`.
+- For reproducible context/batch benchmarking, use:
+```bash
+bash scripts/benchmark_rtx5070_context_profiles.sh --max-steps 1200 --compile-model
+```
 - For release bundles, use `scripts/package_inference_bundle.py` or `--include-safetensors` in HF prepare script.
 
 ## systemd Services
@@ -78,10 +83,6 @@ Units installed from `deploy/systemd/`:
 - `llm-checkpoint-offload-prune.service`
 - `llm-checkpoint-offload-prune.timer`
 - `llm-vm-swappiness.service`
-
-Optional prefetch service (only if you want separate prefetch in addition to stage-loop staging):
-- `llm-fineweb-prefetch.service`
-- install with: `bash scripts/install_systemd_services.sh --install-watchdog --install-prefetch`
 
 `deploy/systemd/llm.env.example` includes tuned loop args for this host profile
 (`--hot-queue-min-files 10`, `--stage-copy-jobs 4`, `--stage-min-free-gib 80`,

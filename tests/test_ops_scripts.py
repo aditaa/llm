@@ -82,6 +82,19 @@ class ScriptTests(unittest.TestCase):
         self.assertIn("--expected-unique-input-files", proc.stdout)
         self.assertIn("--sync-background", proc.stdout)
 
+    def test_benchmark_ctx_profiles_help_lists_profile_option(self) -> None:
+        proc = subprocess.run(
+            ["bash", "scripts/benchmark_rtx5070_context_profiles.sh", "--help"],
+            cwd=Path(__file__).resolve().parents[1],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(proc.returncode, 0, msg=proc.stderr)
+        self.assertIn("--profiles", proc.stdout)
+        self.assertIn("--compile-model", proc.stdout)
+        self.assertIn("--sample-seconds", proc.stdout)
+
     def test_install_user_systemd_services_help(self) -> None:
         proc = subprocess.run(
             ["bash", "scripts/install_user_systemd_services.sh", "--help"],

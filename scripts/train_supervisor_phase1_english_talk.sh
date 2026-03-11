@@ -19,12 +19,18 @@ exec bash scripts/train_supervisor_rtx5070_350bt.sh \
   --dedupe-report-keep 240 \
   --eval-suite configs/eval/english_talk_suite_v1.json \
   --eval-promotion-policy configs/eval/promotion_policy_talk_v1.json \
+  --promotion-min-quality-streak 2 \
   --generation-suite configs/eval/generation_talk_smoke_v1.json \
   --generation-temperature 0.2 \
   --generation-top-k 1 \
   --generation-fail-below-pass-rate 0.45 \
   --generation-every-chunks 1 \
   --generation-stop-on-fail \
+  --holdout-suite configs/eval/english_talk_holdout_suite_v1.json \
+  --holdout-temperature 0.2 \
+  --holdout-top-k 1 \
+  --holdout-fail-below-pass-rate 0.45 \
+  --holdout-every-chunks 1 \
+  --holdout-stop-on-fail \
   --eval-fail-on-no-promotion \
-  --no-train-fail-on-eval-regression \
   "$@"

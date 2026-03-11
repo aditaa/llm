@@ -589,11 +589,14 @@ bash scripts/train_supervisor_phase1_english_talk.sh
 This uses `configs/eval/english_talk_suite_v1.json`,
 `configs/eval/generation_talk_smoke_v1.json`, and
 `configs/eval/promotion_policy_talk_v1.json`.
+It also runs a fixed holdout gate using
+`configs/eval/english_talk_holdout_suite_v1.json`.
 It also uses a dedicated state dir (`artifacts/reports/train_supervisor_phase1_talk`) and
 lower-variance generation-gate settings (`--generation-temperature 0.2 --generation-top-k 1`).
 Phase-1 launcher now enforces stronger quality gates by default:
 `--generation-fail-below-pass-rate 0.45`, `--generation-stop-on-fail`,
-and `--eval-fail-on-no-promotion`.
+`--holdout-fail-below-pass-rate 0.45`, `--holdout-stop-on-fail`,
+`--eval-fail-on-no-promotion`, and `--promotion-min-quality-streak 2`.
 Successful chunks update `artifacts/reports/train_supervisor_phase1_talk/trained_batch_names.txt`,
 which can be used to gate shard offload so only already-trained batches move to warm storage.
 On each supervisor loop, hot-only manifest guard now runs automatically and disables any
@@ -625,6 +628,8 @@ Supervisor resume guardrails now validate `last.pt`/`ckpt_step_*.pt` before resu
 quarantine invalid checkpoint files automatically, then continue from the newest valid one.
 When post-chunk eval passes promotion logic (or beats prior pass-rate baseline), supervisor
 also exports `best.pt`, `best_eval_report.json`, and safetensors best aliases.
+Promotion discipline supports stricter gating by requiring eval policy promotion,
+generation pass, holdout pass, and a minimum consecutive quality streak before best promotion.
 Supervisor now updates `trained_batch_names.txt` from sampled shard traces produced by
 `llm.cli train --sampled-shards-trace ...` (actual touched batches), not full manifest lists.
 Supervisor can also auto-rollback to `best.pt` after sustained quality regressions; tune with
@@ -634,6 +639,7 @@ Supervisor outputs:
 - `artifacts/reports/train_supervisor_350bt/train_trend.tsv` (per-chunk train telemetry)
 - `artifacts/reports/train_supervisor_350bt/eval_trend.tsv` (post-chunk eval trend, including regression/promotion columns)
 - `artifacts/reports/train_supervisor_350bt/generation_trend.tsv` (scheduled generation-gate trend, with regression columns)
+- `artifacts/reports/train_supervisor_350bt/holdout_trend.tsv` (fixed holdout gate trend)
 - `artifacts/reports/train_supervisor_350bt/eval_dashboard.html` (rendered trend dashboard)
 - `artifacts/reports/train_supervisor_350bt/eval_dashboard_summary.json` (dashboard summary JSON)
 The supervisor now auto-selects the latest successful eval baseline from the same suite
@@ -655,7 +661,7 @@ Also reports hot-manifest metrics (`active_manifests`, `offloaded_manifests`,
 `active_manifests_with_symlink_bins`, `trained_batch_names_count`).
 Also reports `trainer_stall_seconds` and shard offload eligibility
 (`offload_eligible_batches`, raw/capped counts, trained-registry presence).
-Also reports `quality_heartbeat` (eval/gen trend state) and `status_confidence`
+Also reports `quality_heartbeat` (eval/gen/holdout trend state) and `status_confidence`
 (`coverage`, `train_eta`, `quality`, `overall_score`).
 Also includes per-task `RUN/STOP` state with stop reasons (for example `download complete`,
 `staging handled by stage-loop`, `idle between chunks/eval`, or gate waits).
@@ -726,9 +732,13 @@ Revalidate and optionally restore bad parquet files:
 ```bash
 PYTHONPATH=src .venv/bin/python scripts/revalidate_bad_parquet.py \
   --restage-valid \
+  --max-entries 200 \
+  --workers 8 \
   --max-restage-files 15 \
   --min-free-gib 80
 ```
+Use `--max-entries` for incremental backlog cleanup; unprocessed entries stay on the bad list.
+Use `--workers` to parallelize warm parquet validation on large bad-file backlogs.
 This also prunes `artifacts/reports/fineweb_stage_shard_loop/quarantine_bad_parquet` by default:
 - removes quarantine copies for files no longer marked bad
 - for still-bad files, keeps only the newest copy per basename (`--quarantine-keep-per-name 1`)

@@ -67,6 +67,9 @@ class ScriptTests(unittest.TestCase):
         self.assertIn("--dedupe-report-keep", proc.stdout)
         self.assertIn("--quality-rollback-streak", proc.stdout)
         self.assertIn("--quality-rollback-cooldown-steps", proc.stdout)
+        self.assertIn("--holdout-suite", proc.stdout)
+        self.assertIn("--holdout-every-chunks", proc.stdout)
+        self.assertIn("--promotion-min-quality-streak", proc.stdout)
 
     def test_cli_train_help_lists_sampler_and_compile_safety_flags(self) -> None:
         proc = subprocess.run(
@@ -278,6 +281,52 @@ class ScriptTests(unittest.TestCase):
         self.assertEqual(proc.returncode, 0, msg=proc.stderr)
         self.assertIn("--restage-valid", proc.stdout)
         self.assertIn("--no-rewrite-bad-list", proc.stdout)
+
+    def test_revalidate_bad_parquet_max_entries_keeps_untouched(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            bad_list = root / "bad_parquet_files.txt"
+            warm_dir = root / "warm"
+            report = root / "report.json"
+            bad_list.write_text(
+                "000_00001.parquet\n000_00002.parquet\n000_00003.parquet\n",
+                encoding="utf-8",
+            )
+            warm_dir.mkdir(parents=True, exist_ok=True)
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    "scripts/revalidate_bad_parquet.py",
+                    "--bad-list",
+                    str(bad_list),
+                    "--warm-dir",
+                    str(warm_dir),
+                    "--report-output",
+                    str(report),
+                    "--max-entries",
+                    "2",
+                    "--workers",
+                    "2",
+                ],
+                cwd=Path(__file__).resolve().parents[1],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(proc.returncode, 0, msg=proc.stderr)
+            self.assertIn("input=3", proc.stdout)
+            self.assertTrue(report.exists())
+            payload = json.loads(report.read_text(encoding="utf-8"))
+            summary = payload.get("summary", {})
+            self.assertEqual(summary.get("processed_entries"), 2)
+            self.assertEqual(summary.get("untouched_entries"), 1)
+            self.assertEqual(summary.get("retained_bad_entries"), 3)
+            rewritten = bad_list.read_text(encoding="utf-8").splitlines()
+            self.assertEqual(
+                rewritten,
+                ["000_00001.parquet", "000_00002.parquet", "000_00003.parquet"],
+            )
 
     def test_offload_shard_bins_skip_if_missing_trained_registry(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -703,6 +752,82 @@ class ScriptTests(unittest.TestCase):
             self.assertIn("Quality:  heartbeat=regressed", proc.stdout)
             self.assertIn("regression_pass=False", proc.stdout)
 
+    def test_pipeline_live_view_quality_heartbeat_includes_holdout(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            warm = root / "warm"
+            hot = root / "hot"
+            shards = root / "shards"
+            stage_dir = root / "stage"
+            sup_dir = root / "supervisor"
+            for path in [warm, hot, shards, stage_dir, sup_dir]:
+                path.mkdir(parents=True, exist_ok=True)
+
+            (sup_dir / "eval_trend.tsv").write_text(
+                "\n".join(
+                    [
+                        "run_tag\tstep\teval_rc\tpass_rate\tcheck_pass_rate\tavg_case_score\tcases_passed\tcases_total\tregression_pass",
+                        "run1\t1000\t0\t0.70\t0.80\t0.75\t7\t10\tTrue",
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            (sup_dir / "generation_trend.tsv").write_text(
+                "\n".join(
+                    [
+                        "run_tag\tstep\tgeneration_rc\tpass_rate\tcheck_pass_rate\tavg_case_score\tcases_passed\tcases_total\tregression_pass\tbaseline_report\treport_json",
+                        "run1\t1000\t0\t0.80\t0.85\t0.80\t4\t5\tTrue\tbase.json\tgen1.json",
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            (sup_dir / "holdout_trend.tsv").write_text(
+                "\n".join(
+                    [
+                        "run_tag\tstep\tholdout_rc\tpass_rate\tcheck_pass_rate\tavg_case_score\tcases_passed\tcases_total\tregression_pass\tbaseline_report\treport_json",
+                        "run1\t1000\t1\t0.40\t0.40\t0.40\t2\t5\tFalse\tbase.json\tholdout1.json",
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    "scripts/pipeline_live_view.py",
+                    "--once",
+                    "--no-alt-screen",
+                    "--refresh-seconds",
+                    "0.1",
+                    "--warm-dir",
+                    str(warm),
+                    "--hot-dir",
+                    str(hot),
+                    "--shards-root",
+                    str(shards),
+                    "--stage-state-dir",
+                    str(stage_dir),
+                    "--supervisor-state-dir",
+                    str(sup_dir),
+                    "--expected-parquet-files",
+                    "510",
+                    "--expected-bytes",
+                    "1061360917731",
+                    "--train-target-step",
+                    "100000",
+                ],
+                cwd=Path(__file__).resolve().parents[1],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(proc.returncode, 0, msg=proc.stderr)
+            self.assertIn("Quality:  heartbeat=regressed", proc.stdout)
+            self.assertIn("holdout=regressed", proc.stdout)
+
     def test_pipeline_live_view_auto_detects_train_target_step(self) -> None:
         if (
             subprocess.run(
@@ -1107,10 +1232,7 @@ class ScriptTests(unittest.TestCase):
 
     def test_pipeline_eta_report_pgrep_root_count_dedupes_children(self) -> None:
         marker = f"eta_root_count_{int(time.time() * 1_000_000)}"
-        cmd = (
-            f"exec -a {marker} bash -lc "
-            f"'exec -a {marker} sleep 15 & wait'"
-        )
+        cmd = f"exec -a {marker} bash -lc " f"'exec -a {marker} sleep 15 & wait'"
         proc = subprocess.Popen(
             ["bash", "-lc", cmd],
             cwd=Path(__file__).resolve().parents[1],

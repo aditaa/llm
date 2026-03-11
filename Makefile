@@ -85,7 +85,7 @@ stage-fineweb-from-warm:
 
 fineweb-revalidate-bad-parquet:
 	@echo "Usage:"
-	@echo "  PYTHONPATH=src $(PYTHON) scripts/revalidate_bad_parquet.py --restage-valid --max-restage-files 15 --min-free-gib 80"
+	@echo "  PYTHONPATH=src $(PYTHON) scripts/revalidate_bad_parquet.py --max-entries 200 --workers 8 --restage-valid --max-restage-files 15 --min-free-gib 80"
 
 enforce-hot-manifests:
 	@echo "Usage:"

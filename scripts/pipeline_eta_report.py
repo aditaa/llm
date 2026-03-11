@@ -66,7 +66,13 @@ def _file_mtime(path: Path) -> float | None:
 
 def _dir_latest_mtime(path: Path) -> float:
     latest = _file_mtime(path) or 0.0
-    for pattern in ("supervisor_*.log", "train_*.log", "generation_trend.tsv", "eval_trend.tsv"):
+    for pattern in (
+        "supervisor_*.log",
+        "train_*.log",
+        "generation_trend.tsv",
+        "holdout_trend.tsv",
+        "eval_trend.tsv",
+    ):
         for candidate in path.glob(pattern):
             mtime = _file_mtime(candidate)
             if mtime is not None and mtime > latest:
@@ -357,6 +363,7 @@ def _trend_metric_state(
 def _quality_heartbeat(supervisor_state_dir: Path) -> dict[str, str]:
     eval_rows = _trend_rows(supervisor_state_dir / "eval_trend.tsv", min_cols=8)
     gen_rows = _trend_rows(supervisor_state_dir / "generation_trend.tsv", min_cols=9)
+    holdout_rows = _trend_rows(supervisor_state_dir / "holdout_trend.tsv", min_cols=9)
 
     eval_state = "unknown"
     if eval_rows:
@@ -400,7 +407,28 @@ def _quality_heartbeat(supervisor_state_dir: Path) -> dict[str, str]:
             score_eps=0.002,
         )
 
-    states = {eval_state, gen_state}
+    holdout_state = "unknown"
+    if holdout_rows:
+        latest = holdout_rows[-1]
+        prev = holdout_rows[-2] if len(holdout_rows) > 1 else None
+        holdout_regression = latest[8].strip() if len(latest) > 8 else ""
+        if holdout_regression not in {"True", "False", "1", "0"}:
+            holdout_regression = ""
+        holdout_state = _trend_metric_state(
+            latest_rc=latest[2].strip(),
+            latest_regression_pass=(holdout_regression or None),
+            latest_pass=_parse_float(latest[3]),
+            latest_check=_parse_float(latest[4]),
+            latest_score=_parse_float(latest[5]),
+            prev_pass=(_parse_float(prev[3]) if prev is not None else None),
+            prev_check=(_parse_float(prev[4]) if prev is not None else None),
+            prev_score=(_parse_float(prev[5]) if prev is not None else None),
+            pass_eps=0.005,
+            check_eps=0.005,
+            score_eps=0.002,
+        )
+
+    states = {eval_state, gen_state, holdout_state}
     if "regressed" in states:
         overall = "regressed"
     elif "improving" in states:
@@ -411,7 +439,12 @@ def _quality_heartbeat(supervisor_state_dir: Path) -> dict[str, str]:
         overall = "warming"
     else:
         overall = "flat"
-    return {"overall": overall, "eval_state": eval_state, "gen_state": gen_state}
+    return {
+        "overall": overall,
+        "eval_state": eval_state,
+        "gen_state": gen_state,
+        "holdout_state": holdout_state,
+    }
 
 
 def _confidence_score(level: str) -> float:
@@ -1140,7 +1173,7 @@ def write_reports(status: dict[str, Any], output_json: Path, output_text: Path) 
             "generation_gate_latest:"
             f" step={g.get('step')} rc={g.get('generation_rc')} pass_rate={g.get('pass_rate')} regression_pass={g.get('regression_pass')}",
             "quality_heartbeat:"
-            f" overall={q.get('overall')} eval_state={q.get('eval_state')} gen_state={q.get('gen_state')}",
+            f" overall={q.get('overall')} eval_state={q.get('eval_state')} gen_state={q.get('gen_state')} holdout_state={q.get('holdout_state')}",
             "status_confidence:"
             f" coverage={confidence.get('coverage')} train_eta={confidence.get('train_eta')} quality={confidence.get('quality')} overall_score={confidence.get('overall_score')}",
             "",

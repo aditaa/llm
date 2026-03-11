@@ -85,6 +85,27 @@ GENERATION_FAIL_BELOW_PASS_RATE=""
 GENERATION_EVERY_CHUNKS=1
 GENERATION_STOP_ON_FAIL=0
 
+HOLDOUT_GATE=0
+HOLDOUT_SUITE=""
+HOLDOUT_MAX_NEW_TOKENS=120
+HOLDOUT_TEMPERATURE="0.2"
+HOLDOUT_TOP_K=1
+HOLDOUT_SEED=2718
+HOLDOUT_SEED_STRIDE=53
+HOLDOUT_DEVICE="auto"
+HOLDOUT_FAIL_ON_REGRESSION=1
+HOLDOUT_MAX_PASS_RATE_DROP="0.01"
+HOLDOUT_MAX_CHECK_PASS_RATE_DROP="0.01"
+HOLDOUT_MAX_AVG_CASE_SCORE_DROP="0.01"
+HOLDOUT_FAIL_BELOW_PASS_RATE=""
+HOLDOUT_EVERY_CHUNKS=1
+HOLDOUT_STOP_ON_FAIL=0
+
+PROMOTION_REQUIRE_POLICY_PASS=1
+PROMOTION_REQUIRE_GENERATION_PASS=1
+PROMOTION_REQUIRE_HOLDOUT_PASS=1
+PROMOTION_MIN_QUALITY_STREAK=2
+
 QUALITY_ROLLBACK_STREAK=3
 QUALITY_ROLLBACK_COOLDOWN_STEPS=4000
 
@@ -197,6 +218,39 @@ Generation gate (scheduled post-chunk prompt generation checks):
   --generation-every-chunks N  Run generation gate every N successful chunks (default: 1)
   --generation-stop-on-fail    Stop supervisor when generation gate returns non-zero
 
+Fixed holdout gate (frozen quality suite):
+  --no-holdout-gate            Disable fixed holdout gate
+  --holdout-suite FILE         Holdout suite JSON path (enables holdout gate)
+  --holdout-max-new-tokens N   Holdout max new tokens per case (default: 120)
+  --holdout-temperature X      Holdout sampling temperature (default: 0.2)
+  --holdout-top-k N            Holdout top-k (default: 1)
+  --holdout-seed N             Holdout base seed (default: 2718)
+  --holdout-seed-stride N      Holdout seed stride (default: 53)
+  --holdout-device NAME        Holdout device (default: auto)
+  --no-holdout-fail-on-regression
+                               Disable holdout regression fail flag
+  --holdout-max-pass-rate-drop X
+                               Allowed holdout pass_rate drop vs fixed baseline (default: 0.01)
+  --holdout-max-check-pass-rate-drop X
+                               Allowed holdout check_pass_rate drop vs fixed baseline (default: 0.01)
+  --holdout-max-avg-case-score-drop X
+                               Allowed holdout avg_case_score drop vs fixed baseline (default: 0.01)
+  --holdout-fail-below-pass-rate X
+                               Fail holdout gate if pass_rate drops below X
+  --holdout-every-chunks N     Run holdout gate every N successful chunks (default: 1)
+  --holdout-stop-on-fail       Stop supervisor when holdout gate returns non-zero
+
+Promotion discipline:
+  --no-promotion-require-policy-pass
+                               Allow best promotion without eval policy promotion flag
+  --no-promotion-require-generation-pass
+                               Allow best promotion without passing generation gate
+  --no-promotion-require-holdout-pass
+                               Allow best promotion without passing holdout gate
+  --promotion-min-quality-streak N
+                               Require N consecutive quality-passing chunks before promotion
+                               (default: 2)
+
 Quality rollback:
   --quality-rollback-streak N  Roll back to best checkpoint after N consecutive failed
                                quality chunks (eval/gen gate regressions). 0 disables.
@@ -290,6 +344,25 @@ while [[ $# -gt 0 ]]; do
     --generation-fail-below-pass-rate) GENERATION_FAIL_BELOW_PASS_RATE="$2"; shift 2 ;;
     --generation-every-chunks) GENERATION_EVERY_CHUNKS="$2"; shift 2 ;;
     --generation-stop-on-fail) GENERATION_STOP_ON_FAIL=1; shift ;;
+    --no-holdout-gate) HOLDOUT_GATE=0; shift ;;
+    --holdout-suite) HOLDOUT_SUITE="$2"; HOLDOUT_GATE=1; shift 2 ;;
+    --holdout-max-new-tokens) HOLDOUT_MAX_NEW_TOKENS="$2"; shift 2 ;;
+    --holdout-temperature) HOLDOUT_TEMPERATURE="$2"; shift 2 ;;
+    --holdout-top-k) HOLDOUT_TOP_K="$2"; shift 2 ;;
+    --holdout-seed) HOLDOUT_SEED="$2"; shift 2 ;;
+    --holdout-seed-stride) HOLDOUT_SEED_STRIDE="$2"; shift 2 ;;
+    --holdout-device) HOLDOUT_DEVICE="$2"; shift 2 ;;
+    --no-holdout-fail-on-regression) HOLDOUT_FAIL_ON_REGRESSION=0; shift ;;
+    --holdout-max-pass-rate-drop) HOLDOUT_MAX_PASS_RATE_DROP="$2"; shift 2 ;;
+    --holdout-max-check-pass-rate-drop) HOLDOUT_MAX_CHECK_PASS_RATE_DROP="$2"; shift 2 ;;
+    --holdout-max-avg-case-score-drop) HOLDOUT_MAX_AVG_CASE_SCORE_DROP="$2"; shift 2 ;;
+    --holdout-fail-below-pass-rate) HOLDOUT_FAIL_BELOW_PASS_RATE="$2"; shift 2 ;;
+    --holdout-every-chunks) HOLDOUT_EVERY_CHUNKS="$2"; shift 2 ;;
+    --holdout-stop-on-fail) HOLDOUT_STOP_ON_FAIL=1; shift ;;
+    --no-promotion-require-policy-pass) PROMOTION_REQUIRE_POLICY_PASS=0; shift ;;
+    --no-promotion-require-generation-pass) PROMOTION_REQUIRE_GENERATION_PASS=0; shift ;;
+    --no-promotion-require-holdout-pass) PROMOTION_REQUIRE_HOLDOUT_PASS=0; shift ;;
+    --promotion-min-quality-streak) PROMOTION_MIN_QUALITY_STREAK="$2"; shift 2 ;;
     --quality-rollback-streak) QUALITY_ROLLBACK_STREAK="$2"; shift 2 ;;
     --quality-rollback-cooldown-steps) QUALITY_ROLLBACK_COOLDOWN_STEPS="$2"; shift 2 ;;
     -h|--help) usage; exit 0 ;;
@@ -346,8 +419,24 @@ if [[ "$GENERATION_EVERY_CHUNKS" -le 0 ]]; then
   echo "error: generation-every-chunks must be > 0" >&2
   exit 1
 fi
+if [[ "$HOLDOUT_GATE" -eq 1 && -z "$HOLDOUT_SUITE" ]]; then
+  echo "error: holdout-suite must be set when holdout gate is enabled" >&2
+  exit 1
+fi
+if [[ "$HOLDOUT_GATE" -eq 1 && ! -f "$HOLDOUT_SUITE" ]]; then
+  echo "error: holdout-suite not found: $HOLDOUT_SUITE" >&2
+  exit 1
+fi
+if [[ "$HOLDOUT_EVERY_CHUNKS" -le 0 ]]; then
+  echo "error: holdout-every-chunks must be > 0" >&2
+  exit 1
+fi
 if ! [[ "$QUALITY_ROLLBACK_STREAK" =~ ^[0-9]+$ ]] || ! [[ "$QUALITY_ROLLBACK_COOLDOWN_STEPS" =~ ^[0-9]+$ ]]; then
   echo "error: quality rollback values must be integers >= 0" >&2
+  exit 1
+fi
+if ! [[ "$PROMOTION_MIN_QUALITY_STREAK" =~ ^[0-9]+$ ]]; then
+  echo "error: promotion-min-quality-streak must be an integer >= 0" >&2
   exit 1
 fi
 if [[ "$DEDUPE_KEEP" != "newest" && "$DEDUPE_KEEP" != "oldest" ]]; then
@@ -376,6 +465,8 @@ SUP_LOG="$STATE_DIR/supervisor_$(date +%Y%m%d_%H%M%S).log"
 TRAIN_TREND_TSV="$STATE_DIR/train_trend.tsv"
 EVAL_TREND_TSV="$STATE_DIR/eval_trend.tsv"
 GENERATION_TREND_TSV="$STATE_DIR/generation_trend.tsv"
+HOLDOUT_TREND_TSV="$STATE_DIR/holdout_trend.tsv"
+HOLDOUT_BASELINE_FILE="$STATE_DIR/holdout_baseline_report.txt"
 BEST_META_JSON="$STATE_DIR/best_checkpoint.json"
 TRAINED_BATCHES_FILE="$STATE_DIR/trained_batch_names.txt"
 LAST_QUALITY_ROLLBACK_STEP_FILE="$STATE_DIR/last_quality_rollback_step.txt"
@@ -391,6 +482,20 @@ fi
 if [[ ! -f "$GENERATION_TREND_TSV" ]]; then
   echo -e "run_tag\tstep\tgeneration_rc\tpass_rate\tcheck_pass_rate\tavg_case_score\tcases_passed\tcases_total\tregression_pass\tbaseline_report\treport_json" > "$GENERATION_TREND_TSV"
 fi
+if [[ ! -f "$HOLDOUT_TREND_TSV" ]]; then
+  echo -e "run_tag\tstep\tholdout_rc\tpass_rate\tcheck_pass_rate\tavg_case_score\tcases_passed\tcases_total\tregression_pass\tbaseline_report\treport_json" > "$HOLDOUT_TREND_TSV"
+fi
+
+LAST_EVAL_RAN=0
+LAST_EVAL_RC=0
+LAST_EVAL_REPORT=""
+LAST_EVAL_REGRESSION_PASS="NA"
+LAST_EVAL_PROMOTION_PASS="NA"
+LAST_GENERATION_GATE_RAN=0
+LAST_GENERATION_GATE_RC=0
+LAST_HOLDOUT_GATE_RAN=0
+LAST_HOLDOUT_GATE_RC=0
+QUALITY_PASS_STREAK=0
 
 log() {
   echo "[$(date -Iseconds)] $*" | tee -a "$SUP_LOG"
@@ -467,6 +572,35 @@ for parts in reversed(rows):
 
 print("")
 PY
+}
+
+is_truthy() {
+  case "$1" in
+    1|true|True|TRUE|yes|Yes|YES) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+fixed_holdout_baseline_report() {
+  if [[ ! -f "$HOLDOUT_BASELINE_FILE" ]]; then
+    echo ""
+    return 0
+  fi
+  local report
+  report="$(head -n 1 "$HOLDOUT_BASELINE_FILE" 2>/dev/null || true)"
+  if [[ -n "$report" && -f "$report" ]]; then
+    echo "$report"
+    return 0
+  fi
+  echo ""
+}
+
+set_holdout_baseline_report() {
+  local report="$1"
+  if [[ -z "$report" || ! -f "$report" ]]; then
+    return 0
+  fi
+  printf '%s\n' "$report" > "$HOLDOUT_BASELINE_FILE"
 }
 
 find_oldest_supervisor_pid() {
@@ -1149,6 +1283,11 @@ auto_tune_after_chunk() {
 run_post_chunk_eval() {
   local run_tag="$1"
   local step="$2"
+  LAST_EVAL_RAN=0
+  LAST_EVAL_RC=0
+  LAST_EVAL_REPORT=""
+  LAST_EVAL_REGRESSION_PASS="NA"
+  LAST_EVAL_PROMOTION_PASS="NA"
   if [[ "$EVAL_AFTER_CHUNK" -ne 1 ]]; then
     return 0
   fi
@@ -1231,6 +1370,11 @@ print(
 PY
     )
   fi
+  LAST_EVAL_RAN=1
+  LAST_EVAL_RC="$eval_rc"
+  LAST_EVAL_REPORT="$eval_report"
+  LAST_EVAL_REGRESSION_PASS="$regression_pass"
+  LAST_EVAL_PROMOTION_PASS="$promotion_pass"
 
   echo -e "${run_tag}\t${step}\t${eval_rc}\t${pass_rate}\t${check_pass_rate}\t${avg_case_score}\t${cases_passed}\t${cases_total}\t${regression_pass}\t${promotion_pass}\t${failed_checks}\t${baseline_report:-NA}\t${eval_report}" >> "$EVAL_TREND_TSV"
   log "eval_done rc=$eval_rc pass_rate=$pass_rate check_pass_rate=$check_pass_rate avg_case_score=$avg_case_score regression_pass=$regression_pass promotion_pass=$promotion_pass baseline=${baseline_report:-none} report=$eval_report"
@@ -1245,13 +1389,14 @@ PY
       log "eval_dashboard_update_failed"
     fi
   fi
-  promote_best_checkpoint_if_needed "$step" "$eval_rc" "$eval_report"
 }
 
 run_generation_gate() {
   local run_tag="$1"
   local step="$2"
   local successful_chunks="$3"
+  LAST_GENERATION_GATE_RAN=0
+  LAST_GENERATION_GATE_RC=0
   if [[ "$GENERATION_GATE" -ne 1 ]]; then
     return 0
   fi
@@ -1303,6 +1448,8 @@ run_generation_gate() {
     > "$gen_log" 2>&1
   local gen_rc=$?
   set -e
+  LAST_GENERATION_GATE_RAN=1
+  LAST_GENERATION_GATE_RC="$gen_rc"
 
   local pass_rate="NA"
   local check_pass_rate="NA"
@@ -1335,13 +1482,176 @@ PY
   return "$gen_rc"
 }
 
+run_holdout_gate() {
+  local run_tag="$1"
+  local step="$2"
+  local successful_chunks="$3"
+  LAST_HOLDOUT_GATE_RAN=0
+  LAST_HOLDOUT_GATE_RC=0
+  if [[ "$HOLDOUT_GATE" -ne 1 ]]; then
+    return 0
+  fi
+  if (( successful_chunks % HOLDOUT_EVERY_CHUNKS != 0 )); then
+    log "holdout_gate_skip reason=interval step=$step successful_chunks=$successful_chunks interval=$HOLDOUT_EVERY_CHUNKS"
+    return 0
+  fi
+  if [[ ! -f "$OUTPUT_DIR/last.pt" ]]; then
+    log "holdout_gate_skip reason=no_last_checkpoint"
+    return 0
+  fi
+
+  local holdout_report="artifacts/reports/evals/holdout_gate_step$(printf '%07d' "$step")_${run_tag}.json"
+  local holdout_log="$STATE_DIR/holdout_gate_${step}_${run_tag}.log"
+  local baseline_report=""
+  baseline_report="$(fixed_holdout_baseline_report)"
+  if [[ -n "$baseline_report" && ! -f "$baseline_report" ]]; then
+    baseline_report=""
+  fi
+  log "holdout_gate_start step=$step suite=$HOLDOUT_SUITE report=$holdout_report baseline=${baseline_report:-none}"
+
+  local -a holdout_extra_args=()
+  if [[ -n "$baseline_report" ]]; then
+    holdout_extra_args+=(--baseline-report "$baseline_report")
+    holdout_extra_args+=(--max-pass-rate-drop "$HOLDOUT_MAX_PASS_RATE_DROP")
+    holdout_extra_args+=(--max-check-pass-rate-drop "$HOLDOUT_MAX_CHECK_PASS_RATE_DROP")
+    holdout_extra_args+=(--max-avg-case-score-drop "$HOLDOUT_MAX_AVG_CASE_SCORE_DROP")
+    if [[ "$HOLDOUT_FAIL_ON_REGRESSION" -eq 1 ]]; then
+      holdout_extra_args+=(--fail-on-regression)
+    fi
+  fi
+  if [[ -n "$HOLDOUT_FAIL_BELOW_PASS_RATE" ]]; then
+    holdout_extra_args+=(--fail-below-pass-rate "$HOLDOUT_FAIL_BELOW_PASS_RATE")
+  fi
+
+  set +e
+  PYTHONPATH=src \
+  .venv/bin/python scripts/eval_checkpoint_prompts.py \
+    --checkpoint "$OUTPUT_DIR/last.pt" \
+    --suite "$HOLDOUT_SUITE" \
+    --output "$holdout_report" \
+    --device "$HOLDOUT_DEVICE" \
+    --max-new-tokens "$HOLDOUT_MAX_NEW_TOKENS" \
+    --temperature "$HOLDOUT_TEMPERATURE" \
+    --top-k "$HOLDOUT_TOP_K" \
+    --seed "$HOLDOUT_SEED" \
+    --seed-stride "$HOLDOUT_SEED_STRIDE" \
+    "${holdout_extra_args[@]}" \
+    > "$holdout_log" 2>&1
+  local holdout_rc=$?
+  set -e
+  LAST_HOLDOUT_GATE_RAN=1
+  LAST_HOLDOUT_GATE_RC="$holdout_rc"
+
+  local pass_rate="NA"
+  local check_pass_rate="NA"
+  local avg_case_score="NA"
+  local cases_passed="NA"
+  local cases_total="NA"
+  local regression_pass="NA"
+  if [[ -f "$holdout_report" ]]; then
+    read -r pass_rate check_pass_rate avg_case_score cases_passed cases_total regression_pass < <(
+      python3 - <<'PY' "$holdout_report"
+import json
+import sys
+obj = json.load(open(sys.argv[1], "r", encoding="utf-8"))
+s = obj.get("summary", {})
+r = obj.get("regression", {})
+print(
+    s.get("pass_rate", "NA"),
+    s.get("check_pass_rate", "NA"),
+    s.get("avg_case_score", "NA"),
+    s.get("cases_passed", "NA"),
+    s.get("cases_total", "NA"),
+    r.get("pass", "NA") if isinstance(r, dict) else "NA",
+)
+PY
+    )
+  fi
+
+  echo -e "${run_tag}\t${step}\t${holdout_rc}\t${pass_rate}\t${check_pass_rate}\t${avg_case_score}\t${cases_passed}\t${cases_total}\t${regression_pass}\t${baseline_report:-NA}\t${holdout_report}" >> "$HOLDOUT_TREND_TSV"
+  log "holdout_gate_done rc=$holdout_rc pass_rate=$pass_rate check_pass_rate=$check_pass_rate avg_case_score=$avg_case_score regression_pass=$regression_pass baseline=${baseline_report:-none} report=$holdout_report"
+
+  if [[ -z "$baseline_report" && "$holdout_rc" -eq 0 && -f "$holdout_report" ]]; then
+    set_holdout_baseline_report "$holdout_report"
+    log "holdout_baseline_set report=$holdout_report"
+  fi
+  return "$holdout_rc"
+}
+
+evaluate_quality_gates_and_maybe_promote() {
+  local step="$1"
+  local quality_ok=1
+  local -a reasons=()
+
+  if [[ "$LAST_EVAL_RAN" -ne 1 ]]; then
+    quality_ok=0
+    reasons+=("eval_not_run")
+  elif [[ "$LAST_EVAL_RC" -ne 0 ]]; then
+    quality_ok=0
+    reasons+=("eval_failed")
+  fi
+  if [[ "$LAST_EVAL_REGRESSION_PASS" == "False" || "$LAST_EVAL_REGRESSION_PASS" == "0" ]]; then
+    quality_ok=0
+    reasons+=("eval_regressed")
+  fi
+  if [[ "$PROMOTION_REQUIRE_POLICY_PASS" -eq 1 ]]; then
+    if ! is_truthy "$LAST_EVAL_PROMOTION_PASS"; then
+      quality_ok=0
+      reasons+=("policy_not_promoted")
+    fi
+  fi
+  if [[ "$PROMOTION_REQUIRE_GENERATION_PASS" -eq 1 && "$GENERATION_GATE" -eq 1 ]]; then
+    if [[ "$LAST_GENERATION_GATE_RAN" -ne 1 ]]; then
+      quality_ok=0
+      reasons+=("generation_not_run")
+    elif [[ "$LAST_GENERATION_GATE_RC" -ne 0 ]]; then
+      quality_ok=0
+      reasons+=("generation_failed")
+    fi
+  fi
+  if [[ "$PROMOTION_REQUIRE_HOLDOUT_PASS" -eq 1 && "$HOLDOUT_GATE" -eq 1 ]]; then
+    if [[ "$LAST_HOLDOUT_GATE_RAN" -ne 1 ]]; then
+      quality_ok=0
+      reasons+=("holdout_not_run")
+    elif [[ "$LAST_HOLDOUT_GATE_RC" -ne 0 ]]; then
+      quality_ok=0
+      reasons+=("holdout_failed")
+    fi
+  fi
+
+  if [[ "$quality_ok" -eq 1 ]]; then
+    QUALITY_PASS_STREAK=$((QUALITY_PASS_STREAK + 1))
+  else
+    QUALITY_PASS_STREAK=0
+  fi
+
+  local reason_text="none"
+  if [[ "${#reasons[@]}" -gt 0 ]]; then
+    reason_text="$(IFS=,; echo "${reasons[*]}")"
+  fi
+
+  log "quality_gate_result step=$step pass=$quality_ok streak=$QUALITY_PASS_STREAK required_streak=$PROMOTION_MIN_QUALITY_STREAK reasons=$reason_text"
+
+  if [[ "$quality_ok" -ne 1 ]]; then
+    log "best_skip step=$step reason=quality_gate_failed reasons=$reason_text"
+    return 0
+  fi
+  if [[ "$PROMOTION_MIN_QUALITY_STREAK" -gt 0 && "$QUALITY_PASS_STREAK" -lt "$PROMOTION_MIN_QUALITY_STREAK" ]]; then
+    log "best_skip step=$step reason=quality_streak_not_met streak=$QUALITY_PASS_STREAK required=$PROMOTION_MIN_QUALITY_STREAK"
+    return 0
+  fi
+
+  promote_best_checkpoint_if_needed "$step" "$LAST_EVAL_RC" "$LAST_EVAL_REPORT"
+}
+
 quality_failure_tail_summary() {
-  "$PYTHON_BIN" - <<'PY' "$EVAL_TREND_TSV" "$GENERATION_TREND_TSV"
+  "$PYTHON_BIN" - <<'PY' "$EVAL_TREND_TSV" "$GENERATION_TREND_TSV" "$HOLDOUT_TREND_TSV"
 from pathlib import Path
 import sys
 
 eval_path = Path(sys.argv[1])
 gen_path = Path(sys.argv[2])
+holdout_path = Path(sys.argv[3])
 
 step_fail: dict[int, bool] = {}
 step_sources: dict[int, set[str]] = {}
@@ -1371,6 +1681,7 @@ def parse_rows(path: Path, source: str, rc_idx: int, regression_idx: int) -> Non
 
 parse_rows(eval_path, "eval", rc_idx=2, regression_idx=8)
 parse_rows(gen_path, "generation", rc_idx=2, regression_idx=8)
+parse_rows(holdout_path, "holdout", rc_idx=2, regression_idx=8)
 
 if not step_fail:
     print("0\t0\tnone")
@@ -1488,7 +1799,7 @@ fi
 failure_streak=0
 successful_chunks=0
 log "supervisor_start shards_path=$SHARDS_PATH output_dir=$OUTPUT_DIR step_chunk=$STEP_CHUNK"
-log "tuning_start batch_size=$BATCH_SIZE grad_accum=$GRAD_ACCUM_STEPS auto_tune=$AUTO_TUNE target_effective_batch=$TARGET_EFFECTIVE_BATCH train_fail_on_eval_regression=$TRAIN_FAIL_ON_EVAL_REGRESSION checkpoint_keep_last=$CHECKPOINT_KEEP_LAST checkpoint_keep_every=$CHECKPOINT_KEEP_EVERY allow_context_extension=$ALLOW_CONTEXT_EXTENSION ema_decay=$EMA_DECAY ema_update_every=$EMA_UPDATE_EVERY ema_start_step=$EMA_START_STEP generation_gate=$GENERATION_GATE generation_every_chunks=$GENERATION_EVERY_CHUNKS generation_stop_on_fail=$GENERATION_STOP_ON_FAIL quality_rollback_streak=$QUALITY_ROLLBACK_STREAK quality_rollback_cooldown_steps=$QUALITY_ROLLBACK_COOLDOWN_STEPS dedupe_overlap_manifests=$DEDUPE_OVERLAP_MANIFESTS dedupe_keep=$DEDUPE_KEEP dedupe_dry_run=$DEDUPE_DRY_RUN min_train_tokens=$MIN_TRAIN_TOKENS train_stall_check_seconds=$TRAIN_STALL_CHECK_SECONDS train_stall_kill_seconds=$TRAIN_STALL_KILL_SECONDS"
+log "tuning_start batch_size=$BATCH_SIZE grad_accum=$GRAD_ACCUM_STEPS auto_tune=$AUTO_TUNE target_effective_batch=$TARGET_EFFECTIVE_BATCH train_fail_on_eval_regression=$TRAIN_FAIL_ON_EVAL_REGRESSION checkpoint_keep_last=$CHECKPOINT_KEEP_LAST checkpoint_keep_every=$CHECKPOINT_KEEP_EVERY allow_context_extension=$ALLOW_CONTEXT_EXTENSION ema_decay=$EMA_DECAY ema_update_every=$EMA_UPDATE_EVERY ema_start_step=$EMA_START_STEP generation_gate=$GENERATION_GATE generation_every_chunks=$GENERATION_EVERY_CHUNKS generation_stop_on_fail=$GENERATION_STOP_ON_FAIL holdout_gate=$HOLDOUT_GATE holdout_suite=${HOLDOUT_SUITE:-none} holdout_every_chunks=$HOLDOUT_EVERY_CHUNKS holdout_stop_on_fail=$HOLDOUT_STOP_ON_FAIL promotion_require_policy_pass=$PROMOTION_REQUIRE_POLICY_PASS promotion_require_generation_pass=$PROMOTION_REQUIRE_GENERATION_PASS promotion_require_holdout_pass=$PROMOTION_REQUIRE_HOLDOUT_PASS promotion_min_quality_streak=$PROMOTION_MIN_QUALITY_STREAK quality_rollback_streak=$QUALITY_ROLLBACK_STREAK quality_rollback_cooldown_steps=$QUALITY_ROLLBACK_COOLDOWN_STEPS dedupe_overlap_manifests=$DEDUPE_OVERLAP_MANIFESTS dedupe_keep=$DEDUPE_KEEP dedupe_dry_run=$DEDUPE_DRY_RUN min_train_tokens=$MIN_TRAIN_TOKENS train_stall_check_seconds=$TRAIN_STALL_CHECK_SECONDS train_stall_kill_seconds=$TRAIN_STALL_KILL_SECONDS"
 backfill_trained_batch_registry
 ensure_single_supervisor_process
 
@@ -1622,11 +1933,20 @@ while true; do
         exit 11
       fi
     fi
+    if ! run_holdout_gate "$run_tag" "$new_step" "$successful_chunks"; then
+      log "holdout_gate_failed step=$new_step successful_chunks=$successful_chunks"
+      if [[ "$HOLDOUT_STOP_ON_FAIL" -eq 1 ]]; then
+        log "supervisor_stop reason=holdout_gate_failed"
+        exit 12
+      fi
+    fi
+    evaluate_quality_gates_and_maybe_promote "$new_step"
     maybe_auto_rollback_on_quality_regression "$new_step"
   else
     if [[ -n "$resume_ckpt" ]] && log_has_resume_checkpoint_error "$run_log"; then
       quarantine_bad_checkpoint "$resume_ckpt" "resume_failure"
     fi
+    QUALITY_PASS_STREAK=0
     failure_streak=$((failure_streak + 1))
     if [[ "$stalled_chunk" -eq 1 ]]; then
       log "train_failed rc=$rc failure_streak=$failure_streak reason=stall_killed best_val_ppl=$best_val_ppl gpu_avg_util=$gpu_avg_util gpu_max_mem=$gpu_max_mem"

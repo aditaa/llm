@@ -306,7 +306,13 @@ def _file_mtime(path: Path) -> float | None:
 
 def _dir_latest_mtime(path: Path) -> float:
     latest = _file_mtime(path) or 0.0
-    for pattern in ("supervisor_*.log", "train_*.log", "generation_trend.tsv", "eval_trend.tsv"):
+    for pattern in (
+        "supervisor_*.log",
+        "train_*.log",
+        "generation_trend.tsv",
+        "holdout_trend.tsv",
+        "eval_trend.tsv",
+    ):
         for candidate in path.glob(pattern):
             mtime = _file_mtime(candidate)
             if mtime is not None and mtime > latest:
@@ -480,9 +486,10 @@ def _trend_metric_state(
 
 def _quality_heartbeat(
     supervisor_state_dir: Path,
-) -> tuple[str, str, str, str, str]:
+) -> tuple[str, str, str, str, str, str, str]:
     eval_rows = _trend_rows(supervisor_state_dir / "eval_trend.tsv", min_cols=8)
     gen_rows = _trend_rows(supervisor_state_dir / "generation_trend.tsv", min_cols=9)
+    holdout_rows = _trend_rows(supervisor_state_dir / "holdout_trend.tsv", min_cols=9)
 
     eval_state = "unknown"
     eval_note = "no eval trend data"
@@ -563,7 +570,42 @@ def _quality_heartbeat(
         if latest_regression_pass:
             gen_note += f" regression_pass={latest_regression_pass}"
 
-    states = {eval_state, gen_state}
+    holdout_state = "unknown"
+    holdout_note = "holdout=no holdout trend data"
+    if holdout_rows:
+        latest = holdout_rows[-1]
+        prev = holdout_rows[-2] if len(holdout_rows) > 1 else None
+        latest_rc = latest[2].strip()
+        latest_pass = _parse_float(latest[3])
+        latest_check = _parse_float(latest[4])
+        latest_score = _parse_float(latest[5])
+        latest_regression_pass = latest[8].strip()
+        prev_pass = _parse_float(prev[3]) if prev is not None else None
+        prev_check = _parse_float(prev[4]) if prev is not None else None
+        prev_score = _parse_float(prev[5]) if prev is not None else None
+
+        holdout_state = _trend_metric_state(
+            latest_rc=latest_rc,
+            latest_regression_pass=latest_regression_pass,
+            latest_pass=latest_pass,
+            latest_check=latest_check,
+            latest_score=latest_score,
+            prev_pass=prev_pass,
+            prev_check=prev_check,
+            prev_score=prev_score,
+            pass_eps=0.005,
+            check_eps=0.005,
+            score_eps=0.002,
+        )
+        holdout_note = (
+            f"holdout={holdout_state} rc={latest_rc} pass={latest_pass:.3f}"
+            if latest_pass is not None
+            else f"holdout={holdout_state} rc={latest_rc}"
+        )
+        if latest_regression_pass:
+            holdout_note += f" regression_pass={latest_regression_pass}"
+
+    states = {eval_state, gen_state, holdout_state}
     if "regressed" in states:
         overall = "regressed"
     elif "improving" in states:
@@ -575,7 +617,7 @@ def _quality_heartbeat(
     else:
         overall = "flat"
 
-    return (overall, eval_state, gen_state, eval_note, gen_note)
+    return (overall, eval_state, gen_state, holdout_state, eval_note, gen_note, holdout_note)
 
 
 def _eta_status_train_rate(status_path: Path, max_age_seconds: int, now_ts: float) -> float | None:
@@ -1145,8 +1187,10 @@ def _render(
         quality_state,
         eval_quality_state,
         gen_quality_state,
+        holdout_quality_state,
         eval_quality_note,
         gen_quality_note,
+        holdout_quality_note,
     ) = _quality_heartbeat(sup_dir)
 
     dt = (now - state.ts) if state.ts is not None else None
@@ -1467,10 +1511,10 @@ def _render(
         f"latest_regression_pass={gen_regression_pass}"
     )
     lines.append(
-        f"  Quality:  heartbeat={quality_state} eval={eval_quality_state} gen={gen_quality_state}"
+        f"  Quality:  heartbeat={quality_state} eval={eval_quality_state} gen={gen_quality_state} holdout={holdout_quality_state}"
     )
     lines.append(
-        f"  QualityDetail: {eval_quality_note} | {gen_quality_note}"
+        f"  QualityDetail: {eval_quality_note} | {gen_quality_note} | {holdout_quality_note}"
     )
     lines.append(
         f"  Confidence: coverage={coverage_confidence} train_eta={train_confidence} "

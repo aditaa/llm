@@ -42,7 +42,14 @@ class EvalSuiteConfigTests(unittest.TestCase):
         )
         self.assertIn("configs/eval/english_talk_suite_v1.json", wrapper)
         self.assertIn("configs/eval/generation_talk_smoke_v1.json", wrapper)
+        self.assertIn("configs/eval/english_talk_holdout_suite_v1.json", wrapper)
         self.assertIn("configs/eval/promotion_policy_talk_v1.json", wrapper)
+
+    def test_phase1_holdout_suite_is_non_coding(self) -> None:
+        suite_path = EVAL_DIR / "english_talk_holdout_suite_v1.json"
+        suite = json.loads(suite_path.read_text(encoding="utf-8"))
+        categories = {str(case.get("category", "")).lower() for case in suite.get("cases", [])}
+        self.assertNotIn("coding", categories)
 
     def test_talk_promotion_policy_schema(self) -> None:
         policy_path = EVAL_DIR / "promotion_policy_talk_v1.json"
@@ -50,4 +57,3 @@ class EvalSuiteConfigTests(unittest.TestCase):
         for section in ("absolute", "regression", "improvement"):
             self.assertIn(section, policy, msg=str(policy_path))
             self.assertIsInstance(policy[section], dict, msg=str(policy_path))
-

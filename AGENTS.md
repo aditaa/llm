@@ -195,13 +195,15 @@ Keep PR scope narrow; split refactors and features into separate PRs.
 - Supervisor writes chunk trends to `artifacts/reports/train_supervisor_350bt/train_trend.tsv` and post-chunk eval trends to `artifacts/reports/train_supervisor_350bt/eval_trend.tsv`
 - Supervisor also writes scheduled generation-gate trends to `artifacts/reports/train_supervisor_350bt/generation_trend.tsv`
 - Supervisor also renders `artifacts/reports/train_supervisor_350bt/eval_dashboard.html` and exports `best.pt` aliases after successful eval promotions
-- Supervisor now records successful-chunk manifest batch coverage in `<state_dir>/trained_batch_names.txt` for safe shard offload gating
+- Supervisor now records successful-chunk sampled-batch coverage in `<state_dir>/trained_batch_names.txt` (from `llm.cli train --sampled-shards-trace`) for safe shard offload gating
+- Supervisor supports quality auto-rollback to `best.pt` after sustained regressions; tune with `--quality-rollback-streak` and `--quality-rollback-cooldown-steps`
 - Use `--generation-suite configs/eval/generation_smoke_suite_v1.json` and `--generation-every-chunks <N>` to run prompt-generation drift gates every chunk (or every N chunks)
 - Use `scripts/pipeline_eta_report.py --loop` for combined ETA snapshots in `artifacts/reports/pipeline_status.{json,txt}` (includes `top`, `free -h`, `nvidia-smi`, and `df -h` captures)
 - `pipeline_eta_report.py` accepts `--once` for explicit single-snapshot mode
 - `pipeline_eta_report.py` also tracks manifest coverage quality (`manifest_unique_input_files`, overlap counts, `coverage_complete`)
 - `pipeline_eta_report.py` now includes per-task `RUN/STOP` state with stop reasons and `supervisor_gate` in JSON/text output
 - `pipeline_eta_report.py` now also reports `trainer_stall_seconds` and shard offload readiness (`offload_eligible_batches`, raw/capped counts)
+- `pipeline_eta_report.py` now also exports `quality_heartbeat` plus `status_confidence` (`coverage`, `train_eta`, `quality`, `overall_score`)
 - Use `scripts/pipeline_live_view.py --refresh-seconds 5` for a live-only terminal monitor (system + pipeline task status, no report writes; includes watchdog/stage-loop/generation-gate task rows; add `--no-alt-screen` if needed)
 - `pipeline_live_view.py` can reuse fresh ETA report train-step rates via `--eta-status-file`/`--eta-status-max-age-seconds` to keep training ETA visible when live step deltas are flat
 - `pipeline_live_view.py` staging line includes `hot_parquet` + `hot_incomplete` so cache refill progress is visible during warm->hot copies
@@ -209,6 +211,7 @@ Keep PR scope narrow; split refactors and features into separate PRs.
 - `pipeline_live_view.py` also shows hot-manifest state (`active`, `offloaded`, `active_symlink_manifests`) and trained-batch registry count
 - `pipeline_live_view.py` now also shows shard offload readiness (`offload_eligible_batches`) and training stall age (`stall=<seconds>`)
 - `pipeline_live_view.py` now shows a quality heartbeat (`improving`/`flat`/`regressed`/`warming`) from latest eval + generation trend files
+- `pipeline_live_view.py` now also shows a confidence row (`coverage`, `train_eta`, `quality`, `overall`) to gauge status reliability
 - `pipeline_live_view.py` includes manifest coverage rate/ETA to gauge when coverage gates will clear
 - `pipeline_live_view.py` also shows supervisor gate state (for example `waiting_unique_inputs <have>/<need>` or `waiting_train_tokens <have_tokens>/<need_tokens>`)
 - `pipeline_live_view.py` coverage ETA/rate falls back to sharding throughput when manifest overlap is zero, so ETA remains visible between manifest-update bursts
@@ -225,6 +228,8 @@ Keep PR scope narrow; split refactors and features into separate PRs.
 - On this 20-core server, use 15 parallel streams for split shard-build runs
 - For CUDA training throughput, prefer `llm.cli train --precision auto` (disable TF32 only if needed with `--no-tf32`)
 - If GPU utilization stays bursty, try `llm.cli train --compile-model --compile-mode reduce-overhead`
+- `llm.cli train --compile-model` now warms the compiled graph and falls back to eager by default; add `--compile-strict` to hard-fail on compile init/warmup issues
+- Use `llm.cli train --sampler-max-open-shards <N>` to cap open shard memmaps and reduce file-descriptor pressure
 - Default training architecture is `gpt_rope_rmsnorm_swiglu_v1`; use legacy profile only for old checkpoint compatibility
 - Prefer `llm.cli train --lr-schedule cosine --lr-warmup-steps <N>` for stable first-pass runs
 - Use `--grad-accum-steps` when VRAM is tight and you need higher effective batch

@@ -85,6 +85,9 @@ GENERATION_FAIL_BELOW_PASS_RATE=""
 GENERATION_EVERY_CHUNKS=1
 GENERATION_STOP_ON_FAIL=0
 
+QUALITY_ROLLBACK_STREAK=3
+QUALITY_ROLLBACK_COOLDOWN_STEPS=4000
+
 DEDUPE_OVERLAP_MANIFESTS=1
 DEDUPE_KEEP="newest"
 DEDUPE_DRY_RUN=0
@@ -193,6 +196,14 @@ Generation gate (scheduled post-chunk prompt generation checks):
                                Fail generation gate if pass_rate drops below X
   --generation-every-chunks N  Run generation gate every N successful chunks (default: 1)
   --generation-stop-on-fail    Stop supervisor when generation gate returns non-zero
+
+Quality rollback:
+  --quality-rollback-streak N  Roll back to best checkpoint after N consecutive failed
+                               quality chunks (eval/gen gate regressions). 0 disables.
+                               (default: 3)
+  --quality-rollback-cooldown-steps N
+                               Minimum training-step gap between auto-rollbacks
+                               (default: 4000)
   -h, --help                   Show help
 
 Example:
@@ -279,6 +290,8 @@ while [[ $# -gt 0 ]]; do
     --generation-fail-below-pass-rate) GENERATION_FAIL_BELOW_PASS_RATE="$2"; shift 2 ;;
     --generation-every-chunks) GENERATION_EVERY_CHUNKS="$2"; shift 2 ;;
     --generation-stop-on-fail) GENERATION_STOP_ON_FAIL=1; shift ;;
+    --quality-rollback-streak) QUALITY_ROLLBACK_STREAK="$2"; shift 2 ;;
+    --quality-rollback-cooldown-steps) QUALITY_ROLLBACK_COOLDOWN_STEPS="$2"; shift 2 ;;
     -h|--help) usage; exit 0 ;;
     *)
       echo "unknown argument: $1" >&2
@@ -333,6 +346,10 @@ if [[ "$GENERATION_EVERY_CHUNKS" -le 0 ]]; then
   echo "error: generation-every-chunks must be > 0" >&2
   exit 1
 fi
+if ! [[ "$QUALITY_ROLLBACK_STREAK" =~ ^[0-9]+$ ]] || ! [[ "$QUALITY_ROLLBACK_COOLDOWN_STEPS" =~ ^[0-9]+$ ]]; then
+  echo "error: quality rollback values must be integers >= 0" >&2
+  exit 1
+fi
 if [[ "$DEDUPE_KEEP" != "newest" && "$DEDUPE_KEEP" != "oldest" ]]; then
   echo "error: dedupe-keep must be one of: newest, oldest" >&2
   exit 1
@@ -361,11 +378,12 @@ EVAL_TREND_TSV="$STATE_DIR/eval_trend.tsv"
 GENERATION_TREND_TSV="$STATE_DIR/generation_trend.tsv"
 BEST_META_JSON="$STATE_DIR/best_checkpoint.json"
 TRAINED_BATCHES_FILE="$STATE_DIR/trained_batch_names.txt"
+LAST_QUALITY_ROLLBACK_STEP_FILE="$STATE_DIR/last_quality_rollback_step.txt"
 touch "$SUP_LOG"
 touch "$TRAINED_BATCHES_FILE"
 
 if [[ ! -f "$TRAIN_TREND_TSV" ]]; then
-  echo -e "run_tag\tstep_start\tstep_target\tstep_end\trc\tmanifests\tbatch_size\tgrad_accum\tbest_val_ppl\tgpu_avg_util\tgpu_max_mem_mib\ttrain_log" > "$TRAIN_TREND_TSV"
+  echo -e "run_tag\tstep_start\tstep_target\tstep_end\trc\tmanifests\tbatch_size\tgrad_accum\tbest_val_ppl\tgpu_avg_util\tgpu_max_mem_mib\tsampled_batches\tsampled_trace\ttrain_log" > "$TRAIN_TREND_TSV"
 fi
 if [[ ! -f "$EVAL_TREND_TSV" ]]; then
   echo -e "run_tag\tstep\teval_rc\tpass_rate\tcheck_pass_rate\tavg_case_score\tcases_passed\tcases_total\tregression_pass\tpromotion_pass\tfailed_checks\tbaseline_report\treport_json" > "$EVAL_TREND_TSV"
@@ -687,17 +705,61 @@ for name in names:
 PY
 }
 
+collect_sampled_batch_names() {
+  local sampled_trace_json="$1"
+  "$PYTHON_BIN" - <<'PY' "$sampled_trace_json"
+import json
+import sys
+from pathlib import Path
+
+trace_path = Path(sys.argv[1])
+if not trace_path.is_file():
+    raise SystemExit(0)
+
+try:
+    payload = json.loads(trace_path.read_text(encoding="utf-8"))
+except Exception:
+    raise SystemExit(0)
+
+rows = payload.get("sampled_shards", [])
+if not isinstance(rows, list):
+    raise SystemExit(0)
+
+batches: set[str] = set()
+for row in rows:
+    if not isinstance(row, dict):
+        continue
+    raw = row.get("path")
+    if not isinstance(raw, str) or not raw.strip():
+        continue
+    batch = Path(raw).resolve().parent.name
+    if batch:
+        batches.add(batch)
+
+for batch in sorted(batches):
+    print(batch)
+PY
+}
+
 update_trained_batch_registry() {
-  local chunk_batches_file="$1"
+  local sampled_batches_file="$1"
   local step="$2"
-  if [[ ! -f "$chunk_batches_file" ]]; then
+  local chunk_batches_count="$3"
+  if [[ ! -f "$sampled_batches_file" ]]; then
+    log "trained_batches_skip step=$step reason=missing_sampled_batches_file file=$sampled_batches_file"
     return 0
   fi
-  cat "$chunk_batches_file" >> "$TRAINED_BATCHES_FILE"
+  local sampled_count
+  sampled_count="$(wc -l < "$sampled_batches_file" | tr -d ' ')"
+  if [[ "$sampled_count" -le 0 ]]; then
+    log "trained_batches_skip step=$step reason=empty_sampled_batches sampled_file=$sampled_batches_file chunk_batches=$chunk_batches_count"
+    return 0
+  fi
+  cat "$sampled_batches_file" >> "$TRAINED_BATCHES_FILE"
   sort -u -o "$TRAINED_BATCHES_FILE" "$TRAINED_BATCHES_FILE"
   local trained_count
   trained_count="$(wc -l < "$TRAINED_BATCHES_FILE" | tr -d ' ')"
-  log "trained_batches_update step=$step trained_batches=$trained_count registry=$TRAINED_BATCHES_FILE"
+  log "trained_batches_update step=$step sampled_batches=$sampled_count chunk_batches=$chunk_batches_count trained_batches=$trained_count registry=$TRAINED_BATCHES_FILE sampled_file=$sampled_batches_file"
 }
 
 backfill_trained_batch_registry() {
@@ -728,8 +790,8 @@ if trend_path.exists():
         rc = parts[4].strip()
         if not run_tag or rc != "0":
             continue
-        for chunk_file in sorted(state_dir.glob(f"chunk_batches_*_{run_tag}.txt")):
-            for line in chunk_file.read_text(encoding="utf-8", errors="replace").splitlines():
+        for sampled_file in sorted(state_dir.glob(f"sampled_batches_*_{run_tag}.txt")):
+            for line in sampled_file.read_text(encoding="utf-8", errors="replace").splitlines():
                 batch = line.strip()
                 if not batch or batch in existing:
                     continue
@@ -1273,6 +1335,151 @@ PY
   return "$gen_rc"
 }
 
+quality_failure_tail_summary() {
+  "$PYTHON_BIN" - <<'PY' "$EVAL_TREND_TSV" "$GENERATION_TREND_TSV"
+from pathlib import Path
+import sys
+
+eval_path = Path(sys.argv[1])
+gen_path = Path(sys.argv[2])
+
+step_fail: dict[int, bool] = {}
+step_sources: dict[int, set[str]] = {}
+
+def parse_rows(path: Path, source: str, rc_idx: int, regression_idx: int) -> None:
+    if not path.exists():
+        return
+    for row in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        if not row or row.startswith("run_tag\t"):
+            continue
+        parts = row.split("\t")
+        if len(parts) <= max(rc_idx, regression_idx):
+            continue
+        step_raw = parts[1].strip()
+        if not step_raw.isdigit():
+            continue
+        step = int(step_raw)
+        rc = parts[rc_idx].strip()
+        regression = parts[regression_idx].strip() if regression_idx >= 0 else ""
+        failed = rc != "0" or regression in {"False", "0"}
+        if not failed:
+            step_fail.setdefault(step, False)
+            continue
+        step_fail[step] = True
+        sources = step_sources.setdefault(step, set())
+        sources.add(source)
+
+parse_rows(eval_path, "eval", rc_idx=2, regression_idx=8)
+parse_rows(gen_path, "generation", rc_idx=2, regression_idx=8)
+
+if not step_fail:
+    print("0\t0\tnone")
+    raise SystemExit(0)
+
+ordered_steps = sorted(step_fail.keys())
+streak = 0
+for step in reversed(ordered_steps):
+    if step_fail.get(step):
+        streak += 1
+    else:
+        break
+
+latest = ordered_steps[-1]
+sources = ",".join(sorted(step_sources.get(latest, set()))) or "none"
+print(f"{streak}\t{latest}\t{sources}")
+PY
+}
+
+best_checkpoint_step() {
+  if [[ -f "$BEST_META_JSON" ]]; then
+    local best_step
+    best_step="$("$PYTHON_BIN" - <<'PY' "$BEST_META_JSON"
+import json
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+try:
+    payload = json.loads(path.read_text(encoding="utf-8"))
+except Exception:
+    print("")
+    raise SystemExit(0)
+step = payload.get("best_step")
+print(str(step) if isinstance(step, int) else "")
+PY
+)"
+    if [[ "$best_step" =~ ^[0-9]+$ ]]; then
+      echo "$best_step"
+      return 0
+    fi
+  fi
+  if [[ -f "$OUTPUT_DIR/best.pt" ]]; then
+    checkpoint_step "$OUTPUT_DIR/best.pt" || echo "0"
+    return 0
+  fi
+  echo "0"
+}
+
+maybe_auto_rollback_on_quality_regression() {
+  local current_step="$1"
+  if [[ "$QUALITY_ROLLBACK_STREAK" -le 0 ]]; then
+    return 0
+  fi
+  if [[ ! -f "$OUTPUT_DIR/best.pt" ]]; then
+    return 0
+  fi
+
+  local tail_streak=0
+  local latest_step=0
+  local latest_sources="none"
+  read -r tail_streak latest_step latest_sources < <(quality_failure_tail_summary)
+  if [[ "$tail_streak" -lt "$QUALITY_ROLLBACK_STREAK" ]]; then
+    return 0
+  fi
+
+  local best_step
+  best_step="$(best_checkpoint_step)"
+  if [[ -z "$best_step" || "$best_step" -le 0 ]]; then
+    log "quality_rollback_skip reason=missing_best_step streak=$tail_streak latest_step=$latest_step"
+    return 0
+  fi
+  if [[ "$best_step" -ge "$current_step" ]]; then
+    log "quality_rollback_skip reason=best_not_older current_step=$current_step best_step=$best_step streak=$tail_streak"
+    return 0
+  fi
+
+  local last_rollback_step=-1
+  if [[ -f "$LAST_QUALITY_ROLLBACK_STEP_FILE" ]]; then
+    local raw
+    raw="$(cat "$LAST_QUALITY_ROLLBACK_STEP_FILE" 2>/dev/null || true)"
+    if [[ "$raw" =~ ^[0-9]+$ ]]; then
+      last_rollback_step="$raw"
+    fi
+  fi
+  if [[ "$last_rollback_step" -ge 0 ]]; then
+    local delta=$((current_step - last_rollback_step))
+    if [[ "$delta" -lt "$QUALITY_ROLLBACK_COOLDOWN_STEPS" ]]; then
+      log "quality_rollback_skip reason=cooldown current_step=$current_step last_rollback_step=$last_rollback_step cooldown_steps=$QUALITY_ROLLBACK_COOLDOWN_STEPS streak=$tail_streak"
+      return 0
+    fi
+  fi
+
+  local ts
+  ts="$(date +%Y%m%d_%H%M%S)"
+  if [[ -f "$OUTPUT_DIR/last.pt" ]]; then
+    cp -f "$OUTPUT_DIR/last.pt" "$OUTPUT_DIR/last_pre_quality_rollback_${ts}.pt"
+  fi
+  cp -f "$OUTPUT_DIR/best.pt" "$OUTPUT_DIR/last.pt"
+  if [[ -f "$OUTPUT_DIR/best.safetensors" ]]; then
+    cp -f "$OUTPUT_DIR/best.safetensors" "$OUTPUT_DIR/last.safetensors"
+  fi
+  if [[ -f "$OUTPUT_DIR/best_ema.safetensors" ]]; then
+    cp -f "$OUTPUT_DIR/best_ema.safetensors" "$OUTPUT_DIR/last_ema.safetensors"
+  fi
+  echo "$current_step" > "$LAST_QUALITY_ROLLBACK_STEP_FILE"
+  log "quality_rollback_applied current_step=$current_step best_step=$best_step streak=$tail_streak latest_quality_step=$latest_step latest_sources=$latest_sources cooldown_steps=$QUALITY_ROLLBACK_COOLDOWN_STEPS"
+}
+
 clamp_batch_size
 if [[ "$TARGET_EFFECTIVE_BATCH" -gt 0 ]]; then
   set_grad_accum_from_target
@@ -1281,7 +1488,7 @@ fi
 failure_streak=0
 successful_chunks=0
 log "supervisor_start shards_path=$SHARDS_PATH output_dir=$OUTPUT_DIR step_chunk=$STEP_CHUNK"
-log "tuning_start batch_size=$BATCH_SIZE grad_accum=$GRAD_ACCUM_STEPS auto_tune=$AUTO_TUNE target_effective_batch=$TARGET_EFFECTIVE_BATCH train_fail_on_eval_regression=$TRAIN_FAIL_ON_EVAL_REGRESSION checkpoint_keep_last=$CHECKPOINT_KEEP_LAST checkpoint_keep_every=$CHECKPOINT_KEEP_EVERY allow_context_extension=$ALLOW_CONTEXT_EXTENSION ema_decay=$EMA_DECAY ema_update_every=$EMA_UPDATE_EVERY ema_start_step=$EMA_START_STEP generation_gate=$GENERATION_GATE generation_every_chunks=$GENERATION_EVERY_CHUNKS generation_stop_on_fail=$GENERATION_STOP_ON_FAIL dedupe_overlap_manifests=$DEDUPE_OVERLAP_MANIFESTS dedupe_keep=$DEDUPE_KEEP dedupe_dry_run=$DEDUPE_DRY_RUN min_train_tokens=$MIN_TRAIN_TOKENS train_stall_check_seconds=$TRAIN_STALL_CHECK_SECONDS train_stall_kill_seconds=$TRAIN_STALL_KILL_SECONDS"
+log "tuning_start batch_size=$BATCH_SIZE grad_accum=$GRAD_ACCUM_STEPS auto_tune=$AUTO_TUNE target_effective_batch=$TARGET_EFFECTIVE_BATCH train_fail_on_eval_regression=$TRAIN_FAIL_ON_EVAL_REGRESSION checkpoint_keep_last=$CHECKPOINT_KEEP_LAST checkpoint_keep_every=$CHECKPOINT_KEEP_EVERY allow_context_extension=$ALLOW_CONTEXT_EXTENSION ema_decay=$EMA_DECAY ema_update_every=$EMA_UPDATE_EVERY ema_start_step=$EMA_START_STEP generation_gate=$GENERATION_GATE generation_every_chunks=$GENERATION_EVERY_CHUNKS generation_stop_on_fail=$GENERATION_STOP_ON_FAIL quality_rollback_streak=$QUALITY_ROLLBACK_STREAK quality_rollback_cooldown_steps=$QUALITY_ROLLBACK_COOLDOWN_STEPS dedupe_overlap_manifests=$DEDUPE_OVERLAP_MANIFESTS dedupe_keep=$DEDUPE_KEEP dedupe_dry_run=$DEDUPE_DRY_RUN min_train_tokens=$MIN_TRAIN_TOKENS train_stall_check_seconds=$TRAIN_STALL_CHECK_SECONDS train_stall_kill_seconds=$TRAIN_STALL_KILL_SECONDS"
 backfill_trained_batch_registry
 ensure_single_supervisor_process
 
@@ -1319,6 +1526,8 @@ while true; do
   run_log="$STATE_DIR/train_${step_now}_to_${target_step}_${run_tag}.log"
   gpu_log="$STATE_DIR/gpu_${step_now}_to_${target_step}_${run_tag}.csv"
   chunk_batches_file="$STATE_DIR/chunk_batches_${step_now}_to_${target_step}_${run_tag}.txt"
+  sampled_shards_trace="$STATE_DIR/sampled_shards_${step_now}_to_${target_step}_${run_tag}.json"
+  sampled_batches_file="$STATE_DIR/sampled_batches_${step_now}_to_${target_step}_${run_tag}.txt"
   collect_manifest_batch_names > "$chunk_batches_file"
   chunk_batches_count="$(wc -l < "$chunk_batches_file" | tr -d ' ')"
   resume_args=()
@@ -1326,7 +1535,7 @@ while true; do
     resume_args=(--resume-from "$resume_ckpt")
   fi
 
-  log "train_launch manifests=$mcount unique_inputs=$unique_inputs train_tokens=$train_tokens overlap_inputs=$overlap_inputs overlap_manifests=$overlap_manifests step_now=$step_now target_step=$target_step batch_size=$BATCH_SIZE grad_accum=$GRAD_ACCUM_STEPS resume=${resume_ckpt:-none} chunk_batches=$chunk_batches_count chunk_batches_file=$chunk_batches_file run_log=$run_log"
+  log "train_launch manifests=$mcount unique_inputs=$unique_inputs train_tokens=$train_tokens overlap_inputs=$overlap_inputs overlap_manifests=$overlap_manifests step_now=$step_now target_step=$target_step batch_size=$BATCH_SIZE grad_accum=$GRAD_ACCUM_STEPS resume=${resume_ckpt:-none} chunk_batches=$chunk_batches_count chunk_batches_file=$chunk_batches_file sampled_trace=$sampled_shards_trace run_log=$run_log"
 
   train_gate_args=()
   if [[ "$TRAIN_FAIL_ON_EVAL_REGRESSION" -eq 1 ]]; then
@@ -1364,6 +1573,8 @@ while true; do
       --precision "$PRECISION" \
       --checkpoint-keep-last "$CHECKPOINT_KEEP_LAST" \
       --checkpoint-keep-every "$CHECKPOINT_KEEP_EVERY" \
+      --sampled-shards-trace "$sampled_shards_trace" \
+      --sampled-shards-trace-min-rows 1 \
       --ema-decay "$EMA_DECAY" \
       --ema-update-every "$EMA_UPDATE_EVERY" \
       --ema-start-step "$EMA_START_STEP" \
@@ -1394,13 +1605,15 @@ while true; do
   fi
   best_val_ppl="$(best_val_ppl_from_log "$run_log")"
   read -r gpu_avg_util gpu_max_mem < <(gpu_summary "$gpu_log")
-  echo -e "${run_tag}\t${step_now}\t${target_step}\t${new_step}\t${rc}\t${mcount}\t${BATCH_SIZE}\t${GRAD_ACCUM_STEPS}\t${best_val_ppl}\t${gpu_avg_util}\t${gpu_max_mem}\t${run_log}" >> "$TRAIN_TREND_TSV"
+  sampled_batches_count="NA"
 
   if [[ "$rc" -eq 0 ]]; then
     failure_streak=0
     successful_chunks=$((successful_chunks + 1))
-    log "train_done rc=0 step_now=$new_step best_val_ppl=$best_val_ppl gpu_avg_util=$gpu_avg_util gpu_max_mem=$gpu_max_mem"
-    update_trained_batch_registry "$chunk_batches_file" "$new_step"
+    collect_sampled_batch_names "$sampled_shards_trace" > "$sampled_batches_file"
+    sampled_batches_count="$(wc -l < "$sampled_batches_file" | tr -d ' ')"
+    log "train_done rc=0 step_now=$new_step best_val_ppl=$best_val_ppl gpu_avg_util=$gpu_avg_util gpu_max_mem=$gpu_max_mem sampled_batches=$sampled_batches_count sampled_batches_file=$sampled_batches_file"
+    update_trained_batch_registry "$sampled_batches_file" "$new_step" "$chunk_batches_count"
     run_post_chunk_eval "$run_tag" "$new_step"
     if ! run_generation_gate "$run_tag" "$new_step" "$successful_chunks"; then
       log "generation_gate_failed step=$new_step successful_chunks=$successful_chunks"
@@ -1409,6 +1622,7 @@ while true; do
         exit 11
       fi
     fi
+    maybe_auto_rollback_on_quality_regression "$new_step"
   else
     if [[ -n "$resume_ckpt" ]] && log_has_resume_checkpoint_error "$run_log"; then
       quarantine_bad_checkpoint "$resume_ckpt" "resume_failure"
@@ -1423,8 +1637,10 @@ while true; do
       log "supervisor_stop reason=max_failure_streak_reached"
       exit 10
     fi
+    maybe_auto_rollback_on_quality_regression "$new_step"
   fi
 
   auto_tune_after_chunk "$rc" "$run_log" "$gpu_avg_util" "$gpu_max_mem"
+  echo -e "${run_tag}\t${step_now}\t${target_step}\t${new_step}\t${rc}\t${mcount}\t${BATCH_SIZE}\t${GRAD_ACCUM_STEPS}\t${best_val_ppl}\t${gpu_avg_util}\t${gpu_max_mem}\t${sampled_batches_count}\t${sampled_shards_trace}\t${run_log}" >> "$TRAIN_TREND_TSV"
   sleep "$POLL_SECONDS"
 done

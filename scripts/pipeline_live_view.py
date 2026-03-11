@@ -480,7 +480,7 @@ def _trend_metric_state(
 
 def _quality_heartbeat(
     supervisor_state_dir: Path,
-) -> tuple[str, str, str, str]:
+) -> tuple[str, str, str, str, str]:
     eval_rows = _trend_rows(supervisor_state_dir / "eval_trend.tsv", min_cols=8)
     gen_rows = _trend_rows(supervisor_state_dir / "generation_trend.tsv", min_cols=9)
 
@@ -496,13 +496,16 @@ def _quality_heartbeat(
         prev_pass = _parse_float(prev[3]) if prev is not None else None
         prev_check = _parse_float(prev[4]) if prev is not None else None
         prev_score = _parse_float(prev[5]) if prev is not None else None
-
-        trailing_bools = [token for token in latest[8:] if token in {"True", "False"}]
-        promotion_pass = trailing_bools[0] if trailing_bools else "NA"
+        regression_pass = latest[8].strip() if len(latest) > 8 else "NA"
+        if regression_pass not in {"True", "False", "1", "0"}:
+            regression_pass = "NA"
+        promotion_pass = latest[9].strip() if len(latest) > 9 else "NA"
+        if promotion_pass not in {"True", "False", "1", "0"}:
+            promotion_pass = "NA"
 
         eval_state = _trend_metric_state(
             latest_rc=latest_rc,
-            latest_regression_pass=(None if promotion_pass == "NA" else promotion_pass),
+            latest_regression_pass=(None if regression_pass == "NA" else regression_pass),
             latest_pass=latest_pass,
             latest_check=latest_check,
             latest_score=latest_score,
@@ -521,6 +524,8 @@ def _quality_heartbeat(
             eval_note += f" check={latest_check:.3f}"
         if latest_score is not None:
             eval_note += f" score={latest_score:.3f}"
+        if regression_pass != "NA":
+            eval_note += f" regression_pass={regression_pass}"
         if promotion_pass != "NA":
             eval_note += f" promo_pass={promotion_pass}"
 
@@ -570,7 +575,7 @@ def _quality_heartbeat(
     else:
         overall = "flat"
 
-    return (overall, eval_state, eval_note, gen_note)
+    return (overall, eval_state, gen_state, eval_note, gen_note)
 
 
 def _eta_status_train_rate(status_path: Path, max_age_seconds: int, now_ts: float) -> float | None:
@@ -1040,6 +1045,55 @@ def _eta(remaining: float | None, rate_per_sec: float | None) -> str:
     return f"{mins}m"
 
 
+def _confidence_score(level: str) -> float:
+    if level == "high":
+        return 1.0
+    if level == "medium":
+        return 0.65
+    return 0.30
+
+
+def _status_confidence(
+    *,
+    manifest_overlap_inputs: int,
+    manifest_unique_inputs: int,
+    expected_parquet_files: int,
+    coverage_pps: float | None,
+    train_sps: float | None,
+    trainer_running: bool,
+    quality_state: str,
+) -> tuple[str, str, str, float]:
+    if manifest_unique_inputs <= 0:
+        coverage_level = "low"
+    elif manifest_overlap_inputs == 0 and coverage_pps is not None and coverage_pps > 0:
+        coverage_level = "high"
+    elif manifest_overlap_inputs <= max(2, expected_parquet_files // 200):
+        coverage_level = "medium"
+    else:
+        coverage_level = "low"
+
+    if train_sps is not None and train_sps > 0:
+        train_level = "high"
+    elif trainer_running:
+        train_level = "medium"
+    else:
+        train_level = "low"
+
+    if quality_state in {"improving", "flat"}:
+        quality_level = "high"
+    elif quality_state in {"warming", "unknown"}:
+        quality_level = "medium"
+    else:
+        quality_level = "low"
+
+    overall = (
+        _confidence_score(coverage_level)
+        + _confidence_score(train_level)
+        + _confidence_score(quality_level)
+    ) / 3.0
+    return (coverage_level, train_level, quality_level, overall)
+
+
 def _render(
     args: argparse.Namespace,
     state: SampleState,
@@ -1087,9 +1141,13 @@ def _render(
     train_target_step = _effective_train_target_step(args.train_target_step, sup_dir, train_step)
     supervisor_gate = _latest_supervisor_gate(sup_dir)
     gen_rc, gen_pass_rate, gen_regression_pass = _latest_generation_summary(sup_dir)
-    quality_state, eval_quality_state, eval_quality_note, gen_quality_note = _quality_heartbeat(
-        sup_dir
-    )
+    (
+        quality_state,
+        eval_quality_state,
+        gen_quality_state,
+        eval_quality_note,
+        gen_quality_note,
+    ) = _quality_heartbeat(sup_dir)
 
     dt = (now - state.ts) if state.ts is not None else None
     download_bps = _rate(warm_bytes, state.warm_bytes, dt)
@@ -1241,6 +1299,21 @@ def _render(
         summary = rows[0] if rows else "running"
         task_lines.append(f"{name:16} RUN x{count} | {summary}")
 
+    (
+        coverage_confidence,
+        train_confidence,
+        quality_confidence,
+        overall_confidence,
+    ) = _status_confidence(
+        manifest_overlap_inputs=manifest_overlap_inputs,
+        manifest_unique_inputs=manifest_unique_inputs,
+        expected_parquet_files=int(args.expected_parquet_files),
+        coverage_pps=coverage_pps,
+        train_sps=train_sps,
+        trainer_running=(task_counts.get("trainer", 0) > 0),
+        quality_state=quality_state,
+    )
+
     rem_bytes = max(0, int(args.expected_bytes) - warm_bytes)
     rem_files = max(0, int(args.expected_parquet_files) - warm_parquet)
     rem_manifest_unique = max(0, int(args.expected_parquet_files) - manifest_unique_inputs)
@@ -1287,6 +1360,10 @@ def _render(
         )
     if quality_state == "regressed":
         alerts.append("quality heartbeat regressed; inspect eval/generation trend deltas")
+    if overall_confidence < 0.55:
+        alerts.append(
+            "status confidence is low; verify coverage overlap, train step rate, and quality gates"
+        )
     if active_symlink_manifests > 0:
         alerts.append(
             f"active manifests include symlink bins ({active_symlink_manifests}); "
@@ -1390,8 +1467,14 @@ def _render(
         f"latest_regression_pass={gen_regression_pass}"
     )
     lines.append(
-        f"  Quality:  heartbeat={quality_state} eval_state={eval_quality_state} "
-        f"| {eval_quality_note} | {gen_quality_note}"
+        f"  Quality:  heartbeat={quality_state} eval={eval_quality_state} gen={gen_quality_state}"
+    )
+    lines.append(
+        f"  QualityDetail: {eval_quality_note} | {gen_quality_note}"
+    )
+    lines.append(
+        f"  Confidence: coverage={coverage_confidence} train_eta={train_confidence} "
+        f"quality={quality_confidence} overall={overall_confidence:.2f}"
     )
 
     lines.append("")

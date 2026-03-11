@@ -65,6 +65,8 @@ class ScriptTests(unittest.TestCase):
         self.assertIn("--min-train-tokens", proc.stdout)
         self.assertIn("--train-stall-kill-seconds", proc.stdout)
         self.assertIn("--dedupe-report-keep", proc.stdout)
+        self.assertIn("--quality-rollback-streak", proc.stdout)
+        self.assertIn("--quality-rollback-cooldown-steps", proc.stdout)
 
     def test_cli_train_help_lists_sampler_and_compile_safety_flags(self) -> None:
         proc = subprocess.run(
@@ -626,6 +628,81 @@ class ScriptTests(unittest.TestCase):
             self.assertIn("eval=improving", proc.stdout)
             self.assertIn("gen=improving", proc.stdout)
 
+    def test_pipeline_live_view_quality_heartbeat_honors_eval_regression_flag(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            warm = root / "warm"
+            hot = root / "hot"
+            shards = root / "shards"
+            stage_dir = root / "stage"
+            sup_dir = root / "supervisor"
+            for path in [warm, hot, shards, stage_dir, sup_dir]:
+                path.mkdir(parents=True, exist_ok=True)
+
+            (sup_dir / "eval_trend.tsv").write_text(
+                "\n".join(
+                    [
+                        (
+                            "run_tag\tstep\teval_rc\tpass_rate\tcheck_pass_rate\tavg_case_score\t"
+                            "cases_passed\tcases_total\tregression_pass\tpromotion_pass\t"
+                            "failed_checks\tbaseline_report\treport_json"
+                        ),
+                        "run1\t1000\t0\t0.60\t0.80\t0.70\t9\t15\tTrue\tTrue\tnone\tNA\treport1.json",
+                        "run2\t2000\t0\t0.65\t0.82\t0.72\t10\t15\tFalse\tFalse\tnone\tNA\treport2.json",
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            (sup_dir / "generation_trend.tsv").write_text(
+                "\n".join(
+                    [
+                        (
+                            "run_tag\tstep\tgeneration_rc\tpass_rate\tcheck_pass_rate\t"
+                            "avg_case_score\tcases_passed\tcases_total\tregression_pass\t"
+                            "baseline_report\treport_json"
+                        ),
+                        "run1\t2000\t0\t0.90\t0.90\t0.90\t4\t5\tTrue\tbase.json\tgen1.json",
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    "scripts/pipeline_live_view.py",
+                    "--once",
+                    "--no-alt-screen",
+                    "--refresh-seconds",
+                    "0.1",
+                    "--warm-dir",
+                    str(warm),
+                    "--hot-dir",
+                    str(hot),
+                    "--shards-root",
+                    str(shards),
+                    "--stage-state-dir",
+                    str(stage_dir),
+                    "--supervisor-state-dir",
+                    str(sup_dir),
+                    "--expected-parquet-files",
+                    "510",
+                    "--expected-bytes",
+                    "1061360917731",
+                    "--train-target-step",
+                    "100000",
+                ],
+                cwd=Path(__file__).resolve().parents[1],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(proc.returncode, 0, msg=proc.stderr)
+            self.assertIn("Quality:  heartbeat=regressed", proc.stdout)
+            self.assertIn("regression_pass=False", proc.stdout)
+
     def test_pipeline_live_view_auto_detects_train_target_step(self) -> None:
         if (
             subprocess.run(
@@ -797,6 +874,9 @@ class ScriptTests(unittest.TestCase):
             payload = json.loads(out_json.read_text(encoding="utf-8"))
             self.assertIn("trainer_stall_seconds", payload["metrics"])
             self.assertIn("offload_eligible_batches", payload["metrics"])
+            self.assertIn("quality_heartbeat", payload)
+            self.assertIn("status_confidence", payload)
+            self.assertIn("overall_score", payload["status_confidence"])
 
     def test_pipeline_eta_report_uses_coverage_fallback_rate(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

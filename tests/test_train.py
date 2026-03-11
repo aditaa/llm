@@ -10,6 +10,7 @@ try:
     from llm.tokenizer import BPETokenizer, tokenizer_contract_fingerprint, tokenizer_fingerprint
     from llm.train import (
         ShardBatchSampler,
+        TrainConfig,
         _apply_resume_context_policy,
         _compute_keep_steps,
         _init_ema_state,
@@ -18,12 +19,14 @@ try:
         _resolve_amp_mode,
         _update_ema_state,
         collect_shard_training_info,
+        run_training,
     )
 except ModuleNotFoundError:
     torch = None
     BPETokenizer = None
     tokenizer_contract_fingerprint = None
     tokenizer_fingerprint = None
+    TrainConfig = None
     ShardBatchSampler = None
     _apply_resume_context_policy = None
     _compute_keep_steps = None
@@ -33,6 +36,7 @@ except ModuleNotFoundError:
     _resolve_amp_mode = None
     _update_ema_state = None
     collect_shard_training_info = None
+    run_training = None
 
 
 def _write_tokenizer(path: Path, text: str, vocab_size: int = 256) -> int:
@@ -314,6 +318,51 @@ class TrainDataTests(unittest.TestCase):
                 requested_context_length=256,
                 allow_extension=False,
             )
+
+    def test_run_training_writes_sampled_trace(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            ds = root / "dataset"
+            out = root / "out"
+            tok = root / "tok.json"
+            trace = root / "sampled_trace.json"
+
+            vocab_size = _write_tokenizer(tok, "simple tiny corpus for training")
+            _write_shard(ds / "train_000000.bin", list(range(200)))
+            _write_shard(ds / "val_000000.bin", list(range(120)))
+            _write_manifest(
+                ds / "manifest.json",
+                tokenizer_path=tok,
+                train_shard="train_000000.bin",
+                val_shard="val_000000.bin",
+                vocab_size=vocab_size,
+            )
+
+            result = run_training(
+                TrainConfig(
+                    shards_path=ds,
+                    output_dir=out,
+                    max_steps=1,
+                    batch_size=2,
+                    context_length=16,
+                    grad_accum_steps=1,
+                    eval_interval=1,
+                    eval_steps=1,
+                    log_interval=1,
+                    device="cpu",
+                    n_layers=1,
+                    n_heads=1,
+                    d_model=32,
+                    sampled_shards_trace=trace,
+                    sampled_shards_trace_min_rows=1,
+                )
+            )
+
+            self.assertEqual(result["max_steps"], 1)
+            self.assertTrue(trace.exists())
+            payload = json.loads(trace.read_text(encoding="utf-8"))
+            self.assertIn("sampled_shards", payload)
+            self.assertTrue(payload["sampled_shards"])
 
 
 if __name__ == "__main__":

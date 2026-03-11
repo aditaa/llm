@@ -294,6 +294,180 @@ def _latest_generation_summary(supervisor_state_dir: Path) -> dict[str, Any]:
     }
 
 
+def _parse_float(value: str) -> float | None:
+    text = value.strip()
+    if not text:
+        return None
+    try:
+        return float(text)
+    except ValueError:
+        return None
+
+
+def _trend_rows(path: Path, min_cols: int) -> list[list[str]]:
+    if not path.exists():
+        return []
+    rows: list[list[str]] = []
+    try:
+        with path.open("r", encoding="utf-8", errors="replace") as handle:
+            for line in handle:
+                row = line.strip()
+                if not row or row.startswith("run_tag\t"):
+                    continue
+                parts = row.split("\t")
+                if len(parts) >= min_cols:
+                    rows.append(parts)
+    except OSError:
+        return []
+    return rows
+
+
+def _trend_metric_state(
+    *,
+    latest_rc: str,
+    latest_regression_pass: str | None,
+    latest_pass: float | None,
+    latest_check: float | None,
+    latest_score: float | None,
+    prev_pass: float | None,
+    prev_check: float | None,
+    prev_score: float | None,
+    pass_eps: float,
+    check_eps: float,
+    score_eps: float,
+) -> str:
+    if latest_rc not in {"0", "NA", ""}:
+        return "regressed"
+    if latest_regression_pass in {"False", "0"}:
+        return "regressed"
+    if latest_pass is None or latest_check is None or latest_score is None:
+        return "warming"
+    if prev_pass is None or prev_check is None or prev_score is None:
+        return "warming"
+    d_pass = latest_pass - prev_pass
+    d_check = latest_check - prev_check
+    d_score = latest_score - prev_score
+    if d_pass < -pass_eps or d_check < -check_eps or d_score < -score_eps:
+        return "regressed"
+    if d_pass > pass_eps or d_check > check_eps or d_score > score_eps:
+        return "improving"
+    return "flat"
+
+
+def _quality_heartbeat(supervisor_state_dir: Path) -> dict[str, str]:
+    eval_rows = _trend_rows(supervisor_state_dir / "eval_trend.tsv", min_cols=8)
+    gen_rows = _trend_rows(supervisor_state_dir / "generation_trend.tsv", min_cols=9)
+
+    eval_state = "unknown"
+    if eval_rows:
+        latest = eval_rows[-1]
+        prev = eval_rows[-2] if len(eval_rows) > 1 else None
+        eval_regression = latest[8].strip() if len(latest) > 8 else ""
+        if eval_regression not in {"True", "False", "1", "0"}:
+            eval_regression = ""
+        eval_state = _trend_metric_state(
+            latest_rc=latest[2].strip(),
+            latest_regression_pass=(eval_regression or None),
+            latest_pass=_parse_float(latest[3]),
+            latest_check=_parse_float(latest[4]),
+            latest_score=_parse_float(latest[5]),
+            prev_pass=(_parse_float(prev[3]) if prev is not None else None),
+            prev_check=(_parse_float(prev[4]) if prev is not None else None),
+            prev_score=(_parse_float(prev[5]) if prev is not None else None),
+            pass_eps=0.005,
+            check_eps=0.005,
+            score_eps=0.002,
+        )
+
+    gen_state = "unknown"
+    if gen_rows:
+        latest = gen_rows[-1]
+        prev = gen_rows[-2] if len(gen_rows) > 1 else None
+        gen_regression = latest[8].strip() if len(latest) > 8 else ""
+        if gen_regression not in {"True", "False", "1", "0"}:
+            gen_regression = ""
+        gen_state = _trend_metric_state(
+            latest_rc=latest[2].strip(),
+            latest_regression_pass=(gen_regression or None),
+            latest_pass=_parse_float(latest[3]),
+            latest_check=_parse_float(latest[4]),
+            latest_score=_parse_float(latest[5]),
+            prev_pass=(_parse_float(prev[3]) if prev is not None else None),
+            prev_check=(_parse_float(prev[4]) if prev is not None else None),
+            prev_score=(_parse_float(prev[5]) if prev is not None else None),
+            pass_eps=0.005,
+            check_eps=0.005,
+            score_eps=0.002,
+        )
+
+    states = {eval_state, gen_state}
+    if "regressed" in states:
+        overall = "regressed"
+    elif "improving" in states:
+        overall = "improving"
+    elif states <= {"unknown"}:
+        overall = "unknown"
+    elif "warming" in states:
+        overall = "warming"
+    else:
+        overall = "flat"
+    return {"overall": overall, "eval_state": eval_state, "gen_state": gen_state}
+
+
+def _confidence_score(level: str) -> float:
+    if level == "high":
+        return 1.0
+    if level == "medium":
+        return 0.65
+    return 0.30
+
+
+def _status_confidence(
+    *,
+    manifest_overlap_inputs: int,
+    manifest_unique_inputs: int,
+    expected_parquet_files: int,
+    coverage_rate: float | None,
+    train_rate: float | None,
+    trainer_active: bool,
+    quality_overall: str,
+) -> dict[str, Any]:
+    if manifest_unique_inputs <= 0:
+        coverage_level = "low"
+    elif manifest_overlap_inputs == 0 and coverage_rate is not None and coverage_rate > 0:
+        coverage_level = "high"
+    elif manifest_overlap_inputs <= max(2, expected_parquet_files // 200):
+        coverage_level = "medium"
+    else:
+        coverage_level = "low"
+
+    if train_rate is not None and train_rate > 0:
+        train_level = "high"
+    elif trainer_active:
+        train_level = "medium"
+    else:
+        train_level = "low"
+
+    if quality_overall in {"improving", "flat"}:
+        quality_level = "high"
+    elif quality_overall in {"warming", "unknown"}:
+        quality_level = "medium"
+    else:
+        quality_level = "low"
+
+    overall = (
+        _confidence_score(coverage_level)
+        + _confidence_score(train_level)
+        + _confidence_score(quality_level)
+    ) / 3.0
+    return {
+        "coverage": coverage_level,
+        "train_eta": train_level,
+        "quality": quality_level,
+        "overall_score": round(overall, 4),
+    }
+
+
 def _manifest_input_coverage(shards_root: Path) -> dict[str, int]:
     if not shards_root.exists():
         return {
@@ -660,6 +834,7 @@ def collect_status(args: argparse.Namespace) -> dict[str, Any]:
     train_target_step = _effective_train_target_step(args.train_target_step, sup_dir, train_step)
     supervisor_gate = _latest_supervisor_gate(sup_dir)
     generation_gate_latest = _latest_generation_summary(sup_dir)
+    quality_heartbeat = _quality_heartbeat(sup_dir)
 
     active = {
         "hf_watchdog": _pgrep_root_count(r"hf_download_watchdog\.sh"),
@@ -880,6 +1055,16 @@ def collect_status(args: argparse.Namespace) -> dict[str, Any]:
         "task_status": task_status,
         "supervisor_gate": supervisor_gate,
         "generation_gate_latest": generation_gate_latest,
+        "quality_heartbeat": quality_heartbeat,
+        "status_confidence": _status_confidence(
+            manifest_overlap_inputs=manifest_overlap_inputs,
+            manifest_unique_inputs=manifest_unique_inputs,
+            expected_parquet_files=int(args.expected_parquet_files),
+            coverage_rate=coverage_rate,
+            train_rate=step_rate,
+            trainer_active=(active.get("trainer", 0) > 0),
+            quality_overall=str(quality_heartbeat.get("overall", "unknown")),
+        ),
         "system_commands": system_commands,
     }
     return status
@@ -895,6 +1080,8 @@ def write_reports(status: dict[str, Any], output_json: Path, output_text: Path) 
     p = status["active_processes"]
     c = status["system_commands"]
     g = status.get("generation_gate_latest", {})
+    q = status.get("quality_heartbeat", {})
+    confidence = status.get("status_confidence", {})
     supervisor_gate = status.get("supervisor_gate", "unknown")
     task_status = status.get("task_status", {})
     task_order = [
@@ -952,6 +1139,10 @@ def write_reports(status: dict[str, Any], output_json: Path, output_text: Path) 
             *task_lines,
             "generation_gate_latest:"
             f" step={g.get('step')} rc={g.get('generation_rc')} pass_rate={g.get('pass_rate')} regression_pass={g.get('regression_pass')}",
+            "quality_heartbeat:"
+            f" overall={q.get('overall')} eval_state={q.get('eval_state')} gen_state={q.get('gen_state')}",
+            "status_confidence:"
+            f" coverage={confidence.get('coverage')} train_eta={confidence.get('train_eta')} quality={confidence.get('quality')} overall_score={confidence.get('overall_score')}",
             "",
             "--- top -b -n 1 ---",
             c["top"]["output"],

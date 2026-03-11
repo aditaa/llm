@@ -418,6 +418,8 @@ Use a global tokenizer + `shard-corpus-batch` output root for multi-dataset runs
 For higher sustained GPU utilization on CUDA, use `--precision auto` and keep
 validation less frequent (`--eval-interval 500 --eval-steps 10`).
 If utilization is still bursty on smaller models, test `--compile-model`.
+`--compile-model` now warms the compiled graph and safely falls back to eager mode on
+backend/warmup failures; use `--compile-strict` to hard-fail instead.
 Training now supports:
 - warmup + cosine LR schedule (`--lr-schedule`, `--lr-warmup-steps`, `--lr-min-ratio`)
 - gradient accumulation (`--grad-accum-steps`)
@@ -426,6 +428,8 @@ Training now supports:
 - checkpoint retention pruning (`--checkpoint-keep-last`, `--checkpoint-keep-every`)
 - optional EMA weights (`--ema-decay`, `--ema-update-every`, `--ema-start-step`)
 - optional weights-only export (`--export-safetensors`)
+- shard sampler FD guardrail (`--sampler-max-open-shards`) to avoid too-many-open-files
+- sampled shard trace export (`--sampled-shards-trace`) for per-chunk true coverage accounting
 
 9. Generate text from a checkpoint:
 ```bash
@@ -621,6 +625,11 @@ Supervisor resume guardrails now validate `last.pt`/`ckpt_step_*.pt` before resu
 quarantine invalid checkpoint files automatically, then continue from the newest valid one.
 When post-chunk eval passes promotion logic (or beats prior pass-rate baseline), supervisor
 also exports `best.pt`, `best_eval_report.json`, and safetensors best aliases.
+Supervisor now updates `trained_batch_names.txt` from sampled shard traces produced by
+`llm.cli train --sampled-shards-trace ...` (actual touched batches), not full manifest lists.
+Supervisor can also auto-rollback to `best.pt` after sustained quality regressions; tune with
+`--quality-rollback-streak <N>` and `--quality-rollback-cooldown-steps <N>`
+(`0` streak disables rollback).
 Supervisor outputs:
 - `artifacts/reports/train_supervisor_350bt/train_trend.tsv` (per-chunk train telemetry)
 - `artifacts/reports/train_supervisor_350bt/eval_trend.tsv` (post-chunk eval trend, including regression/promotion columns)
@@ -646,6 +655,8 @@ Also reports hot-manifest metrics (`active_manifests`, `offloaded_manifests`,
 `active_manifests_with_symlink_bins`, `trained_batch_names_count`).
 Also reports `trainer_stall_seconds` and shard offload eligibility
 (`offload_eligible_batches`, raw/capped counts, trained-registry presence).
+Also reports `quality_heartbeat` (eval/gen trend state) and `status_confidence`
+(`coverage`, `train_eta`, `quality`, `overall_score`).
 Also includes per-task `RUN/STOP` state with stop reasons (for example `download complete`,
 `staging handled by stage-loop`, `idle between chunks/eval`, or gate waits).
 Task process counts are root-deduped (controller processes), so wrapper/child shells do not inflate `RUN xN`.
@@ -664,6 +675,7 @@ This is a live-only monitor (no report/status files written) and includes:
 - supervisor gate status (for example waiting on `min_unique_input_files`)
 - training row includes `stall=<seconds since last step progress>` for direct trainer stall visibility
 - quality heartbeat line (`improving`/`flat`/`regressed`/`warming`) based on latest eval + generation trends
+- confidence line (`coverage`, `train_eta`, `quality`, `overall`) to quickly judge status reliability
 - running project task states with pid/runtime/cpu/mem summaries
 - explicit stop reasons for tasks that are not running
 - alert rows for stage-controller health and shard-manifest stall conditions

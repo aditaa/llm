@@ -780,7 +780,7 @@ PYTHONPATH=src .venv/bin/python scripts/reconcile_offloaded_manifests.py \
 ```
 
 For timer automation, use the safe cycle wrapper
-(reconcile + rehydrate -> offload -> reconcile -> enforce-hot-manifests):
+(reconcile -> offload -> reconcile -> enforce-hot-manifests):
 ```bash
 bash scripts/shard_offload_cycle.sh
 ```

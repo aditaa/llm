@@ -750,6 +750,14 @@ def _task_status(pattern: str) -> tuple[int, list[str]]:
     return len(root_pids), rows
 
 
+def _stage_loop_uses_stage_copy() -> bool:
+    rc, text = _run_capture(["pgrep", "-af", r"fineweb_stage_shard_loop\.sh"], timeout=5)
+    if rc != 0 or not text:
+        return True
+    # New direct Ceph mode is default unless --enable-stage-copy is present.
+    return any("--enable-stage-copy" in line for line in text.splitlines())
+
+
 def _stop_reason(
     task_name: str,
     *,
@@ -764,6 +772,7 @@ def _stop_reason(
     task_counts: dict[str, int],
     offload_eligible_batches: int,
     trained_registry_present: bool,
+    stage_copy_enabled: bool,
 ) -> str:
     if task_name == "hf-watchdog":
         if warm_parquet >= expected_parquet_files:
@@ -803,10 +812,12 @@ def _stop_reason(
         if coverage_complete:
             return "all expected parquet processed"
         if task_counts.get("stage-loop", 0) > 0:
-            if hot_parquet <= 0:
+            if stage_copy_enabled and hot_parquet <= 0:
                 if hot_incomplete > 0:
                     return "finalizing staged parquet copies"
                 return "waiting for staged hot parquet"
+            if not stage_copy_enabled:
+                return "idle between direct-source shard batches"
             return "idle between shard batches"
         return "not started"
     if task_name == "shard-verify":
@@ -1050,6 +1061,7 @@ def _render(
     task_lines: list[str] = []
     task_counts: dict[str, int] = {}
     task_rows: dict[str, list[str]] = {}
+    stage_copy_enabled = _stage_loop_uses_stage_copy()
     for name, pattern in tasks:
         count, rows = _task_status(pattern)
         task_counts[name] = count
@@ -1070,6 +1082,7 @@ def _render(
                 task_counts=task_counts,
                 offload_eligible_batches=offload_eligible_batches,
                 trained_registry_present=offload_registry_present,
+                stage_copy_enabled=stage_copy_enabled,
             )
             task_lines.append(f"{name:16} STOP | {reason}")
             continue

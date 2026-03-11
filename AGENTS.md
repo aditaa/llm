@@ -139,7 +139,7 @@ Keep PR scope narrow; split refactors and features into separate PRs.
 - Use `stage_fineweb_from_warm.sh --copy-jobs <N>` to parallelize warm->hot staging copies
 - Use `stage_fineweb_from_warm.sh --min-free-gib <N>` to keep a hot-disk free-space floor during staging
 - Use `stage_fineweb_from_warm.sh --skip-list <bad_file_list>` to avoid re-staging known-bad parquet basenames
-- For long-running 350BT ingestion on limited hot disk, use `scripts/fineweb_stage_shard_loop.sh` for staged processing and automatic hot-space reclaim
+- For long-running 350BT ingestion, use `scripts/fineweb_stage_shard_loop.sh` in direct-source mode (default: read parquet from Ceph path directly) and keep shard outputs hot-local
 - `fineweb_stage_shard_loop.sh` supports automatic training-focused mode after full coverage (`--expected-unique-input-files 510` + default coverage-complete mode) to pause staging/sharding churn once all inputs are represented
 - For unattended long 350BT ingestion, run `scripts/fineweb_stage_shard_watchdog.sh` to auto-restart stage-loop worker exits/stalls
 - `fineweb_stage_shard_watchdog.sh` now holds worker restarts when manifest unique-input coverage reaches target (`--expected-unique-input-files`)
@@ -148,22 +148,24 @@ Keep PR scope narrow; split refactors and features into separate PRs.
 - `fineweb_stage_shard_watchdog.sh` progress snapshot includes hot `.incomplete` file count/bytes so active warm->hot copy phases are not treated as stalls
 - `fineweb_stage_shard_watchdog.sh` now also cleans stale stage-loop/shard-worker processes before relaunch so only one controller remains active
 - `fineweb_stage_shard_watchdog.sh` can adopt an already-running stage-loop controller (default) so watchdog restarts do not leave direct loop runs unmanaged; use `--no-adopt-existing-loop` to force fresh worker launch
-- Use `fineweb_stage_shard_loop.sh --hot-queue-min-files <N>` to keep a bounded hot parquet queue and reduce sharder copy stalls
+- Use `fineweb_stage_shard_loop.sh --enable-stage-copy --hot-queue-min-files <N>` only when you explicitly want legacy warm->hot parquet staging
 - `stage_fineweb_from_warm.sh` now uses a per-destination lock so stage-loop and prefetch worker staging calls serialize safely
 - `stage_fineweb_from_warm.sh --lock-wait-seconds 0` (default) skips quickly when another staging call holds the lock; tune if you want blocking behavior
 - `stage_fineweb_from_warm.sh` only applies rsync `--contimeout` for rsync-daemon sources (`rsync://` or `::`); local/NFS paths avoid this flag
-- Use `fineweb_stage_shard_loop.sh --stage-copy-jobs <N>` to forward parallel staging copy workers into each stage cycle
-- Use `fineweb_stage_shard_loop.sh --no-auto-tune-stage-copy-jobs` to pin copy workers, or keep default copy auto-tune enabled (`--auto-tune-min-copy-jobs`, `--auto-tune-max-copy-jobs`, `--auto-tune-iowait-low-pct`, `--auto-tune-iowait-high-pct`) for queue/iowait-driven staging throughput control
-- Use `fineweb_stage_shard_loop.sh --stage-min-free-gib <N>` so staging never drives hot disk below a free-space guardrail
+- Use `fineweb_stage_shard_loop.sh --enable-stage-copy --stage-copy-jobs <N>` to forward parallel staging copy workers into each stage cycle
+- Use `fineweb_stage_shard_loop.sh --enable-stage-copy --no-auto-tune-stage-copy-jobs` to pin copy workers, or keep default copy auto-tune enabled (`--auto-tune-min-copy-jobs`, `--auto-tune-max-copy-jobs`, `--auto-tune-iowait-low-pct`, `--auto-tune-iowait-high-pct`) for queue/iowait-driven staging throughput control
+- Use `fineweb_stage_shard_loop.sh --enable-stage-copy --stage-min-free-gib <N>` so staging never drives hot disk below a free-space guardrail
 - Use `fineweb_stage_shard_loop.sh --auto-tune-shard-jobs` to adapt shard parallelism and tokenizer threads from CPU load + batch runtime
 - Use `fineweb_stage_shard_loop.sh --sync-background --sync-max-inflight <N>` to overlap warm sync with next shard batches and reduce idle wait
+- Keep hot disk near target by enabling loop auto-offload (`--hot-max-used-pct 80` + `--offload-check-interval-seconds 120`), which offloads already-trained older shard batches without pausing sharding
 - Prefer larger shard files for throughput (`--shard-size-tokens 20000000` for FineWeb 350BT pipeline)
 - `fineweb_stage_shard_loop.sh` now drains background sync jobs on `INT`/`TERM` for safer restarts
 - Default systemd loop/watchdog templates now use stage free-space guardrails + auto-tune; override with `LLM_STAGE_SHARD_LOOP_ARGS` in `/etc/llm/llm.env` if needed
 - `fineweb_stage_shard_loop.sh` now preflights selected parquet files and quarantines failures into `artifacts/reports/fineweb_stage_shard_loop/quarantine_bad_parquet/`
 - Known-bad parquet basenames are tracked in `artifacts/reports/fineweb_stage_shard_loop/bad_parquet_files.txt` and skipped in future stage cycles
-- On shard-build non-OOM corruption failures, `fineweb_stage_shard_loop.sh` now attempts one warm->hot restage retry for that job before quarantining inputs as bad
-- Stage-loop now deep-validates newly staged parquet files before shard build (`--deep-validate-max-batches`, `--deep-validate-batch-size`) and quarantines early failures as `stage_deep_validation_failed`
+- On shard-build non-OOM corruption failures, `fineweb_stage_shard_loop.sh` attempts one warm->hot restage retry in stage-copy mode before quarantining inputs as bad
+- Stage-loop deep-validates newly staged parquet files in stage-copy mode (`--deep-validate-max-batches`, `--deep-validate-batch-size`) and quarantines early failures as `stage_deep_validation_failed`
+- Use `--parquet-validate-timeout-seconds <N>` to bound Ceph parquet validation/deep-validation calls and avoid startup hangs on single files
 - On startup, `fineweb_stage_shard_loop.sh` reconciles bad parquet entries against warm-source validity to avoid permanent false-positive skips
 - `fineweb_stage_shard_loop.sh` now bootstraps processed parquet basenames from existing manifests at startup, merges `processed + bad` into a stage skip list, and removes known files from hot storage before staging
 - Stage-loop batch guardrails now require valid report + manifest + non-empty shard files before marking files as processed/purging hot copies

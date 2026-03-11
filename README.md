@@ -244,7 +244,7 @@ bash scripts/hf_download_watchdog.sh \
 Use `--exit-on-complete` with expected file and/or byte targets so the watchdog exits once
 download is complete (instead of looping forever and relaunching workers).
 
-3ab. Stage FineWeb chunks from warm to hot as needed:
+3ab. (Optional legacy) Stage FineWeb chunks from warm to hot:
 ```bash
 bash scripts/stage_fineweb_from_warm.sh --max-files 4 --max-gib 8 --copy-jobs 2
 ```
@@ -254,13 +254,9 @@ Use `--min-free-gib <N>` to keep a floor of free space on hot storage while stag
 The staging script now copies into `*.parquet.incomplete` first and renames atomically,
 so sharding/preflight never reads partially written parquet files.
 
-3ac. Run rolling warm->hot staging + sharding loop (recommended for 350BT on limited hot disk):
+3ac. Run direct-from-Ceph sharding loop (recommended baseline):
 ```bash
 bash scripts/fineweb_stage_shard_loop.sh \
-  --hot-queue-min-files 18 \
-  --stage-max-files 12 \
-  --stage-copy-jobs 2 \
-  --stage-min-free-gib 80 \
   --process-max-files 12 \
   --shard-jobs 2 \
   --auto-tune-shard-jobs \
@@ -271,12 +267,16 @@ bash scripts/fineweb_stage_shard_loop.sh \
   --shard-size-tokens 20000000 \
   --sync-background \
   --sync-max-inflight 2 \
+  --hot-max-used-pct 80 \
   --sleep-seconds 60 \
   --shard-min-batch-size 512
 ```
-This loop stages bounded parquet files to hot storage, builds verified shard batches under
-`data/shards_global/fineweb-global-bpe-v1/`, syncs those batches back to warm storage,
-and purges processed hot parquet files.
+This loop reads parquet directly from Ceph (`/mnt/ceph/llm/data/...` by default),
+builds verified shard batches under `data/shards_global/fineweb-global-bpe-v1/`,
+and syncs each successful batch back to warm storage immediately.
+It keeps sharding moving while automatically offloading older already-trained shard batches
+when hot-disk usage exceeds `--hot-max-used-pct` (default 80), rather than pausing sharding.
+Use `--enable-stage-copy` only if you explicitly want warm->hot parquet staging.
 Before sharding each batch, the loop now runs a parquet preflight check (row groups/rows/field),
 quarantines failing hot files, and records their basenames in
 `artifacts/reports/fineweb_stage_shard_loop/bad_parquet_files.txt` so they are skipped in future staging.
@@ -285,11 +285,8 @@ builds a combined stage skip list (`processed + bad`), and removes already-known
 so restarted loops continue forward instead of re-staging the earliest parquet files.
 It also reconciles `bad_parquet_files.txt` against warm-source parquet validity on startup, so
 transient hot-copy failures do not permanently blacklist valid warm files.
-`--hot-queue-min-files` keeps a small parquet queue staged locally so shard building is less likely to idle on copy waits.
-`--stage-copy-jobs` controls warm->hot copy parallelism for staging throughput.
-Stage copy workers can now auto-tune from queue deficit + host iowait
-(`--no-auto-tune-stage-copy-jobs` to pin manually).
-`--stage-min-free-gib` prevents staging from filling hot disk below a safety floor.
+In direct-source mode, `--hot-queue-min-files`/`--stage-*` options are inactive unless
+`--enable-stage-copy` is set.
 `--auto-tune-shard-jobs` adapts `--shard-jobs` (and matching tokenizer threads) from loadavg + batch runtime.
 `--sync-background` overlaps warm-storage sync with the next shard batch to reduce idle gaps.
 `--shard-size-tokens 20000000` reduces shard file-count overhead vs the old 5M-token default.
@@ -297,11 +294,12 @@ If a shard build fails with OOM-like errors, the loop retries automatically with
 Batch guardrails now require valid report/manifest + non-empty shard outputs before files are marked
 processed or purged from hot storage.
 If a shard build fails with non-OOM corruption errors (for example parquet decode errors),
-the loop first attempts a one-time warm->hot restage retry for that job's inputs.
+the loop can attempt a one-time warm->hot restage retry in stage-copy mode.
 If retry still fails, inputs are quarantined as bad and the loop continues with remaining files.
 Additionally, newly staged parquet files are deep-validated before shard build
 (configurable via `--deep-validate-max-batches` and `--deep-validate-batch-size`)
 to catch decode corruption earlier and quarantine files sooner.
+Use `--parquet-validate-timeout-seconds` to cap validation calls and avoid hangs on a single Ceph file.
 Guardrail checks are implemented in `src/llm/fineweb_guardrails.py` and are unit-tested.
 For 20-core hosts, `--shard-jobs 2 --tokenizer-threads 10 --encode-batch-size 1024` is the
 current high-throughput profile.
@@ -311,7 +309,7 @@ switches into training-focused mode and pauses additional stage/shard churn.
 3ad. Optional watchdog for stage/shard loop auto-restart on exit/stall:
 ```bash
 bash scripts/fineweb_stage_shard_watchdog.sh \
-  --worker-args "--hot-queue-min-files 18 --stage-max-files 12 --stage-copy-jobs 2 --process-max-files 12 --shard-jobs 2 --tokenizer-threads 10 --encode-batch-size 1024 --sleep-seconds 60 --shard-min-batch-size 512" \
+  --worker-args "--process-max-files 12 --shard-jobs 2 --tokenizer-threads 10 --encode-batch-size 1024 --hot-max-used-pct 80 --sleep-seconds 60 --shard-min-batch-size 512" \
   --check-interval-seconds 120 \
   --stall-seconds 5400
 ```
@@ -784,7 +782,7 @@ Environment template:
 
 Recommended `LLM_STAGE_SHARD_LOOP_ARGS` baseline for 20-core hosts:
 ```bash
-LLM_STAGE_SHARD_LOOP_ARGS="--hot-queue-min-files 10 --stage-max-files 8 --stage-copy-jobs 4 --stage-min-free-gib 80 --process-max-files 15 --shard-jobs 2 --auto-tune-shard-jobs --auto-tune-min-shard-jobs 2 --auto-tune-max-shard-jobs 3 --auto-tune-low-load-pct 80 --auto-tune-high-load-pct 95 --auto-tune-min-batch-seconds 300 --tokenizer-threads 10 --encode-batch-size 1024 --shard-size-tokens 20000000 --expected-unique-input-files 510 --coverage-complete-sleep-seconds 300 --sync-background --sync-max-inflight 2 --sleep-seconds 60 --shard-min-batch-size 512"
+LLM_STAGE_SHARD_LOOP_ARGS="--process-max-files 15 --shard-jobs 2 --auto-tune-shard-jobs --auto-tune-min-shard-jobs 2 --auto-tune-max-shard-jobs 3 --auto-tune-low-load-pct 80 --auto-tune-high-load-pct 95 --auto-tune-min-batch-seconds 300 --tokenizer-threads 10 --encode-batch-size 1024 --shard-size-tokens 20000000 --expected-unique-input-files 510 --coverage-complete-sleep-seconds 300 --sync-background --sync-max-inflight 2 --hot-max-used-pct 80 --offload-check-interval-seconds 120 --parquet-validate-timeout-seconds 180 --sleep-seconds 60 --shard-min-batch-size 512"
 ```
 Recommended stage watchdog wrapper:
 ```bash

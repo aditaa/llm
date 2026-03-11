@@ -3,6 +3,8 @@ set -euo pipefail
 
 WARM_PARQUET_DIR="/mnt/ceph/llm/data/fineweb/sample-350BT/sample/350BT"
 HOT_PARQUET_DIR="data/fineweb/sample-350BT/sample/350BT"
+SOURCE_PARQUET_DIR="$WARM_PARQUET_DIR"
+USE_STAGE_COPY=0
 SHARDS_ROOT="data/shards_global/fineweb-global-bpe-v1"
 TOKENIZER_PATH="artifacts/tokenizer/fineweb-global-bpe-v1.json"
 STATE_DIR="artifacts/reports/fineweb_stage_shard_loop"
@@ -58,7 +60,11 @@ ITERATIONS=0
 SYNC_TO_WARM=1
 SYNC_BACKGROUND=0
 SYNC_MAX_INFLIGHT=2
-PURGE_HOT=1
+PURGE_HOT=0
+AUTO_OFFLOAD_SHARDS=1
+HOT_MAX_USED_PCT=80
+OFFLOAD_CHECK_INTERVAL_SECONDS=120
+PARQUET_VALIDATE_TIMEOUT_SECONDS=180
 DRY_RUN=0
 CPU_CORES=1
 LAST_BATCH_SECONDS=0
@@ -75,6 +81,10 @@ and purge processed hot parquet files.
 Options:
   --warm-parquet-dir DIR      Warm source parquet dir
   --hot-parquet-dir DIR       Hot local parquet dir
+  --source-parquet-dir DIR    Parquet source directory used by shard builder
+                              (default: warm parquet dir)
+  --enable-stage-copy         Enable warm->hot parquet staging (legacy mode)
+                              instead of direct source reads
   --shards-root DIR           Root for new shard batch directories
   --tokenizer-path FILE       Shared tokenizer path (train once, then reuse)
   --state-dir DIR             State/log directory
@@ -158,6 +168,16 @@ Options:
   --sync-background           Run warm sync in background (non-blocking per batch)
   --sync-max-inflight N       Max in-flight background warm sync jobs (default: 2)
   --no-purge-hot              Keep processed parquet files on hot storage
+  --no-auto-offload-shards    Disable automatic shard offload when hot usage
+                              exceeds threshold
+  --hot-max-used-pct N        Trigger shard offload when hot disk used percent
+                              is above N (default: 80)
+  --offload-check-interval-seconds N
+                              Minimum seconds between offload checks/triggers
+                              (default: 120)
+  --parquet-validate-timeout-seconds N
+                              Timeout for parquet validation/deep-validation
+                              calls (default: 180)
   --dry-run                   Print actions without executing shard build/deletes
   -h, --help                  Show help
 
@@ -180,6 +200,14 @@ while [[ $# -gt 0 ]]; do
     --hot-parquet-dir)
       HOT_PARQUET_DIR="$2"
       shift 2
+      ;;
+    --source-parquet-dir)
+      SOURCE_PARQUET_DIR="$2"
+      shift 2
+      ;;
+    --enable-stage-copy)
+      USE_STAGE_COPY=1
+      shift
       ;;
     --shards-root)
       SHARDS_ROOT="$2"
@@ -389,6 +417,22 @@ while [[ $# -gt 0 ]]; do
       PURGE_HOT=0
       shift
       ;;
+    --no-auto-offload-shards)
+      AUTO_OFFLOAD_SHARDS=0
+      shift
+      ;;
+    --hot-max-used-pct)
+      HOT_MAX_USED_PCT="$2"
+      shift 2
+      ;;
+    --offload-check-interval-seconds)
+      OFFLOAD_CHECK_INTERVAL_SECONDS="$2"
+      shift 2
+      ;;
+    --parquet-validate-timeout-seconds)
+      PARQUET_VALIDATE_TIMEOUT_SECONDS="$2"
+      shift 2
+      ;;
     --dry-run)
       DRY_RUN=1
       shift
@@ -446,6 +490,9 @@ require_nonneg_int "max-rows-per-file" "$MAX_ROWS_PER_FILE"
 require_positive_int "sleep-seconds" "$SLEEP_SECONDS"
 require_nonneg_int "iterations" "$ITERATIONS"
 require_positive_int "sync-max-inflight" "$SYNC_MAX_INFLIGHT"
+require_nonneg_int "hot-max-used-pct" "$HOT_MAX_USED_PCT"
+require_positive_int "offload-check-interval-seconds" "$OFFLOAD_CHECK_INTERVAL_SECONDS"
+require_positive_int "parquet-validate-timeout-seconds" "$PARQUET_VALIDATE_TIMEOUT_SECONDS"
 
 require_positive_int "auto-tune-min-shard-jobs" "$AUTO_TUNE_MIN_SHARD_JOBS"
 require_positive_int "auto-tune-max-shard-jobs" "$AUTO_TUNE_MAX_SHARD_JOBS"
@@ -483,10 +530,26 @@ if [[ "$AUTO_TUNE_IOWAIT_HIGH_PCT" -gt 100 ]]; then
   echo "error: auto-tune-iowait-high-pct must be <= 100" >&2
   exit 2
 fi
+if [[ "$HOT_MAX_USED_PCT" -gt 100 ]]; then
+  echo "error: hot-max-used-pct must be <= 100" >&2
+  exit 2
+fi
+
+if [[ "$USE_STAGE_COPY" -ne 1 ]]; then
+  PURGE_HOT=0
+  SHARD_RESTAGE_ON_CORRUPT=0
+fi
 
 if [[ ! -d "$WARM_PARQUET_DIR" ]]; then
   echo "error: warm parquet dir not found: $WARM_PARQUET_DIR" >&2
   exit 1
+fi
+if [[ ! -d "$SOURCE_PARQUET_DIR" ]]; then
+  echo "error: source parquet dir not found: $SOURCE_PARQUET_DIR" >&2
+  exit 1
+fi
+if [[ "$USE_STAGE_COPY" -eq 1 ]] && [[ ! -d "$HOT_PARQUET_DIR" ]]; then
+  mkdir -p "$HOT_PARQUET_DIR"
 fi
 
 if [[ ! -x ".venv/bin/python" ]]; then
@@ -559,10 +622,26 @@ warm_tokenizer_dir="$WARM_ROOT/tokenizer"
 warm_reports_dir="$WARM_ROOT/reports/fineweb_stage_shard_loop"
 declare -a SYNC_PIDS=()
 declare -a ACTIVE_SHARD_PIDS=()
+OFFLOAD_PID=""
+OFFLOAD_LAST_CHECK_EPOCH=0
 SHOULD_STOP=0
 IOWAIT_PREV_TOTAL=""
 IOWAIT_PREV_WAIT=""
 COVERAGE_COMPLETE_REACHED=0
+
+OFFLOAD_ARGS_DEFAULT="--shards-root $SHARDS_ROOT --warm-shards-root $WARM_ROOT/shards_global/$(basename "$SHARDS_ROOT") --keep-local-batches 24 --target-free-gib 180 --max-batches 24 --disable-offloaded-manifests --require-trained-batches-file artifacts/reports/train_supervisor_phase1_talk/trained_batch_names.txt,artifacts/reports/train_supervisor_350bt/trained_batch_names.txt --skip-if-trained-file-missing --min-active-manifests 48 --min-active-train-tokens 40000000000"
+OFFLOAD_ARGS_RAW="${LLM_SHARD_OFFLOAD_ARGS:-$OFFLOAD_ARGS_DEFAULT}"
+
+expand_args() {
+  local raw="$1"
+  local -n out_ref="$2"
+  out_ref=()
+  eval "set -- $raw"
+  while [[ $# -gt 0 ]]; do
+    out_ref+=("$1")
+    shift
+  done
+}
 
 retune_tokenizer_threads() {
   local jobs="$1"
@@ -828,6 +907,9 @@ PY
 }
 
 purge_hot_known_files() {
+  if [[ "$USE_STAGE_COPY" -ne 1 ]]; then
+    return
+  fi
   local removed=0
   mapfile -t hot_files < <(find "$HOT_PARQUET_DIR" -maxdepth 1 -type f -name '*.parquet' -printf '%f\n' | sort)
   for name in "${hot_files[@]}"; do
@@ -846,7 +928,7 @@ purge_hot_known_files() {
 
 count_hot_eligible_files() {
   local count=0
-  mapfile -t hot_files < <(find "$HOT_PARQUET_DIR" -maxdepth 1 -type f -name '*.parquet' -printf '%f\n' | sort)
+  mapfile -t hot_files < <(find "$SOURCE_PARQUET_DIR" -maxdepth 1 -type f -name '*.parquet' -printf '%f\n' | sort)
   for name in "${hot_files[@]}"; do
     if is_bad_parquet_name "$name" || is_processed_parquet_name "$name"; then
       continue
@@ -859,7 +941,7 @@ count_hot_eligible_files() {
 list_hot_eligible_files() {
   local -n out_ref="$1"
   out_ref=()
-  mapfile -t hot_files < <(find "$HOT_PARQUET_DIR" -maxdepth 1 -type f -name '*.parquet' -printf '%f\n' | sort)
+  mapfile -t hot_files < <(find "$SOURCE_PARQUET_DIR" -maxdepth 1 -type f -name '*.parquet' -printf '%f\n' | sort)
   local name
   for name in "${hot_files[@]}"; do
     if is_bad_parquet_name "$name" || is_processed_parquet_name "$name"; then
@@ -877,7 +959,7 @@ mark_bad_parquet() {
   printf '%s\n' "$name" >> "$BAD_PARQUET_FILE"
   sort -u "$BAD_PARQUET_FILE" -o "$BAD_PARQUET_FILE"
 
-  if [[ -f "$parquet_path" ]]; then
+  if [[ "$USE_STAGE_COPY" -eq 1 ]] && [[ -f "$parquet_path" ]]; then
     local ts
     ts="$(date +%Y%m%d_%H%M%S)"
     local quarantine_path="$QUARANTINE_DIR/${name}.bad_${ts}"
@@ -897,7 +979,7 @@ mark_bad_from_files_list() {
   local name
   while IFS= read -r name; do
     [[ -z "$name" ]] && continue
-    mark_bad_parquet "$HOT_PARQUET_DIR/$name" "$reason"
+    mark_bad_parquet "$SOURCE_PARQUET_DIR/$name" "$reason"
   done < "$files_list"
 }
 
@@ -909,6 +991,10 @@ shard_log_has_corrupt_error() {
 }
 
 restage_files_from_list() {
+  if [[ "$USE_STAGE_COPY" -ne 1 ]]; then
+    log "restage_skip reason=stage_copy_disabled"
+    return 1
+  fi
   local files_list="$1"
   local reason="$2"
   if [[ ! -f "$files_list" ]]; then
@@ -1003,7 +1089,11 @@ reconcile_bad_parquet_from_warm() {
 validate_parquet_file() {
   local parquet_path="$1"
   local field_name="$2"
-  PYTHONPATH=src .venv/bin/python - "$parquet_path" "$field_name" <<'PY'
+  local -a cmd=(env PYTHONPATH=src .venv/bin/python - "$parquet_path" "$field_name")
+  if command -v timeout >/dev/null 2>&1; then
+    cmd=(timeout --signal=TERM "${PARQUET_VALIDATE_TIMEOUT_SECONDS}s" "${cmd[@]}")
+  fi
+  "${cmd[@]}" <<'PY'
 import sys
 from pyarrow import parquet as pq
 
@@ -1026,7 +1116,11 @@ validate_parquet_file_deep() {
   local field_name="$2"
   local scan_batch_size="$3"
   local scan_max_batches="$4"
-  PYTHONPATH=src .venv/bin/python - "$parquet_path" "$field_name" "$scan_batch_size" "$scan_max_batches" <<'PY'
+  local -a cmd=(env PYTHONPATH=src .venv/bin/python - "$parquet_path" "$field_name" "$scan_batch_size" "$scan_max_batches")
+  if command -v timeout >/dev/null 2>&1; then
+    cmd=(timeout --signal=TERM "${PARQUET_VALIDATE_TIMEOUT_SECONDS}s" "${cmd[@]}")
+  fi
+  "${cmd[@]}" <<'PY'
 import sys
 from pyarrow import parquet as pq
 
@@ -1067,7 +1161,7 @@ preflight_selected_files() {
       log "preflight_skip_known_bad file=$name"
       continue
     fi
-    local hot_path="$HOT_PARQUET_DIR/$name"
+    local hot_path="$SOURCE_PARQUET_DIR/$name"
     if [[ ! -f "$hot_path" ]]; then
       log "preflight_skip_missing file=$name"
       continue
@@ -1124,6 +1218,9 @@ validate_batch_guardrails() {
 }
 
 stage_once() {
+  if [[ "$USE_STAGE_COPY" -ne 1 ]]; then
+    return 0
+  fi
   refresh_stage_skip_list
 
   local hot_count
@@ -1222,7 +1319,7 @@ stage_once() {
 select_unprocessed_files() {
   local -n out_ref="$1"
   out_ref=()
-  mapfile -t all_files < <(find "$HOT_PARQUET_DIR" -maxdepth 1 -type f -name '*.parquet' -printf '%f\n' | sort)
+  mapfile -t all_files < <(find "$SOURCE_PARQUET_DIR" -maxdepth 1 -type f -name '*.parquet' -printf '%f\n' | sort)
   for name in "${all_files[@]}"; do
     if grep -Fqx "$name" "$PROCESSED_FILE"; then
       continue
@@ -1327,6 +1424,70 @@ drain_sync_jobs() {
   log "batch_sync_drain_done"
 }
 
+prune_offload_job() {
+  if [[ -z "$OFFLOAD_PID" ]]; then
+    return
+  fi
+  if kill -0 "$OFFLOAD_PID" 2>/dev/null; then
+    return
+  fi
+  if wait "$OFFLOAD_PID"; then
+    log "offload_done pid=$OFFLOAD_PID"
+  else
+    log "offload_failed pid=$OFFLOAD_PID"
+  fi
+  OFFLOAD_PID=""
+}
+
+hot_disk_used_pct() {
+  local pct
+  pct="$(df -P "$SHARDS_ROOT" 2>/dev/null | awk 'NR==2 {gsub(/%/, "", $5); print $5}')"
+  if [[ "$pct" =~ ^[0-9]+$ ]]; then
+    echo "$pct"
+    return
+  fi
+  echo "-1"
+}
+
+maybe_trigger_shard_offload() {
+  if [[ "$AUTO_OFFLOAD_SHARDS" -ne 1 || "$DRY_RUN" -eq 1 ]]; then
+    return
+  fi
+  local now_epoch
+  now_epoch="$(date +%s)"
+  if [[ "$OFFLOAD_LAST_CHECK_EPOCH" -gt 0 ]]; then
+    local elapsed=$((now_epoch - OFFLOAD_LAST_CHECK_EPOCH))
+    if [[ "$elapsed" -lt "$OFFLOAD_CHECK_INTERVAL_SECONDS" ]]; then
+      return
+    fi
+  fi
+  OFFLOAD_LAST_CHECK_EPOCH="$now_epoch"
+
+  prune_offload_job
+  if [[ -n "$OFFLOAD_PID" ]]; then
+    return
+  fi
+
+  local used_pct
+  used_pct="$(hot_disk_used_pct)"
+  if ! [[ "$used_pct" =~ ^[0-9]+$ ]] || [[ "$used_pct" -lt 0 ]]; then
+    log "offload_skip reason=disk_pct_unknown"
+    return
+  fi
+  if [[ "$used_pct" -le "$HOT_MAX_USED_PCT" ]]; then
+    return
+  fi
+
+  local -a offload_args=()
+  expand_args "$OFFLOAD_ARGS_RAW" offload_args
+  (
+    exec 9>&-
+    PYTHONPATH=src .venv/bin/python scripts/offload_shard_bins_to_warm.py "${offload_args[@]}"
+  ) >> "$LOG_FILE" 2>&1 &
+  OFFLOAD_PID="$!"
+  log "offload_start pid=$OFFLOAD_PID used_pct=$used_pct threshold_pct=$HOT_MAX_USED_PCT args=$OFFLOAD_ARGS_RAW"
+}
+
 terminate_active_shard_jobs() {
   if [[ "${#ACTIVE_SHARD_PIDS[@]}" -eq 0 ]]; then
     return
@@ -1354,6 +1515,10 @@ on_loop_signal() {
   log "loop_signal signal=$sig action=terminate_shard_jobs_drain_sync_then_exit"
   terminate_active_shard_jobs
   drain_sync_jobs
+  prune_offload_job
+  if [[ -n "$OFFLOAD_PID" ]]; then
+    kill -TERM "$OFFLOAD_PID" 2>/dev/null || true
+  fi
   exit 0
 }
 
@@ -1389,7 +1554,7 @@ run_shard_job() {
       # Prevent shard subprocesses (including tee) from inheriting the loop lock FD.
       exec 9>&-
       TOKENIZERS_PARALLELISM=true RAYON_NUM_THREADS="$TOKENIZER_THREADS" PYTHONPATH=src .venv/bin/python scripts/fineweb_parquet_to_shards.py \
-        --input-dir "$HOT_PARQUET_DIR" \
+        --input-dir "$SOURCE_PARQUET_DIR" \
         --files-list "$files_list" \
         --output-dir "$output_dir" \
         "$tok_arg_flag" "$tok_arg_path" \
@@ -1627,8 +1792,8 @@ process_batch() {
   log "batch_done id=$batch_id"
 }
 
-log "loop_start warm_parquet_dir=$WARM_PARQUET_DIR hot_parquet_dir=$HOT_PARQUET_DIR"
-log "loop_config shards_root=$SHARDS_ROOT tokenizer_path=$TOKENIZER_PATH iterations=$ITERATIONS hot_queue_min_files=$HOT_QUEUE_MIN_FILES stage_copy_jobs=$STAGE_COPY_JOBS stage_min_free_gib=$STAGE_MIN_FREE_GIB shard_jobs=$SHARD_JOBS tokenizer_threads=$TOKENIZER_THREADS shard_size_tokens=$SHARD_SIZE_TOKENS shard_retry_on_oom=$SHARD_RETRY_ON_OOM shard_restage_on_corrupt=$SHARD_RESTAGE_ON_CORRUPT deep_validate_stage_new_files=$DEEP_VALIDATE_STAGE_NEW_FILES deep_validate_max_batches=$DEEP_VALIDATE_MAX_BATCHES deep_validate_batch_size=$DEEP_VALIDATE_BATCH_SIZE sync_to_warm=$SYNC_TO_WARM sync_background=$SYNC_BACKGROUND sync_max_inflight=$SYNC_MAX_INFLIGHT auto_tune_shard_jobs=$AUTO_TUNE_SHARD_JOBS auto_tune_bounds=${AUTO_TUNE_MIN_SHARD_JOBS}-${AUTO_TUNE_MAX_SHARD_JOBS} auto_tune_load_pct=${AUTO_TUNE_LOW_LOAD_PCT}-${AUTO_TUNE_HIGH_LOAD_PCT} auto_tune_core_budget=$AUTO_TUNE_CORE_BUDGET auto_tune_stage_copy_jobs=$AUTO_TUNE_STAGE_COPY_JOBS auto_tune_copy_bounds=${AUTO_TUNE_MIN_COPY_JOBS}-${AUTO_TUNE_MAX_COPY_JOBS} auto_tune_iowait_pct=${AUTO_TUNE_IOWAIT_LOW_PCT}-${AUTO_TUNE_IOWAIT_HIGH_PCT} expected_unique_input_files=$EXPECTED_UNIQUE_INPUT_FILES coverage_complete_mode=$COVERAGE_COMPLETE_MODE coverage_complete_sleep_seconds=$COVERAGE_COMPLETE_SLEEP_SECONDS bad_parquet_file=$BAD_PARQUET_FILE quarantine_dir=$QUARANTINE_DIR"
+log "loop_start source_parquet_dir=$SOURCE_PARQUET_DIR warm_parquet_dir=$WARM_PARQUET_DIR hot_parquet_dir=$HOT_PARQUET_DIR"
+log "loop_config shards_root=$SHARDS_ROOT tokenizer_path=$TOKENIZER_PATH iterations=$ITERATIONS use_stage_copy=$USE_STAGE_COPY hot_queue_min_files=$HOT_QUEUE_MIN_FILES stage_copy_jobs=$STAGE_COPY_JOBS stage_min_free_gib=$STAGE_MIN_FREE_GIB shard_jobs=$SHARD_JOBS tokenizer_threads=$TOKENIZER_THREADS shard_size_tokens=$SHARD_SIZE_TOKENS shard_retry_on_oom=$SHARD_RETRY_ON_OOM shard_restage_on_corrupt=$SHARD_RESTAGE_ON_CORRUPT deep_validate_stage_new_files=$DEEP_VALIDATE_STAGE_NEW_FILES deep_validate_max_batches=$DEEP_VALIDATE_MAX_BATCHES deep_validate_batch_size=$DEEP_VALIDATE_BATCH_SIZE parquet_validate_timeout_seconds=$PARQUET_VALIDATE_TIMEOUT_SECONDS sync_to_warm=$SYNC_TO_WARM sync_background=$SYNC_BACKGROUND sync_max_inflight=$SYNC_MAX_INFLIGHT auto_offload_shards=$AUTO_OFFLOAD_SHARDS hot_max_used_pct=$HOT_MAX_USED_PCT offload_check_interval_seconds=$OFFLOAD_CHECK_INTERVAL_SECONDS auto_tune_shard_jobs=$AUTO_TUNE_SHARD_JOBS auto_tune_bounds=${AUTO_TUNE_MIN_SHARD_JOBS}-${AUTO_TUNE_MAX_SHARD_JOBS} auto_tune_load_pct=${AUTO_TUNE_LOW_LOAD_PCT}-${AUTO_TUNE_HIGH_LOAD_PCT} auto_tune_core_budget=$AUTO_TUNE_CORE_BUDGET auto_tune_stage_copy_jobs=$AUTO_TUNE_STAGE_COPY_JOBS auto_tune_copy_bounds=${AUTO_TUNE_MIN_COPY_JOBS}-${AUTO_TUNE_MAX_COPY_JOBS} auto_tune_iowait_pct=${AUTO_TUNE_IOWAIT_LOW_PCT}-${AUTO_TUNE_IOWAIT_HIGH_PCT} expected_unique_input_files=$EXPECTED_UNIQUE_INPUT_FILES coverage_complete_mode=$COVERAGE_COMPLETE_MODE coverage_complete_sleep_seconds=$COVERAGE_COMPLETE_SLEEP_SECONDS bad_parquet_file=$BAD_PARQUET_FILE quarantine_dir=$QUARANTINE_DIR"
 trap 'on_loop_signal INT' INT
 trap 'on_loop_signal TERM' TERM
 reconcile_bad_parquet_from_warm
@@ -1641,6 +1806,7 @@ while true; do
     log "loop_stop_requested reason=signal"
     break
   fi
+  maybe_trigger_shard_offload
   if [[ "$SYNC_BACKGROUND" -eq 1 ]]; then
     prune_sync_jobs
   fi
@@ -1695,10 +1861,12 @@ while true; do
   completed_batches=$((completed_batches + 1))
   maybe_auto_tune_parallelism "$completed_batches"
   stage_once
+  maybe_trigger_shard_offload
 
   if [[ "$ITERATIONS" -gt 0 && "$completed_batches" -ge "$ITERATIONS" ]]; then
     log "loop_done reason=iterations_reached completed_batches=$completed_batches"
     drain_sync_jobs
+    prune_offload_job
     break
   fi
 done

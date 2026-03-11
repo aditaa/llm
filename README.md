@@ -779,7 +779,8 @@ PYTHONPATH=src .venv/bin/python scripts/reconcile_offloaded_manifests.py \
   --rehydrate-active-symlink-bins
 ```
 
-For timer automation, use the safe cycle wrapper (reconcile -> offload -> reconcile):
+For timer automation, use the safe cycle wrapper
+(reconcile + rehydrate -> offload -> reconcile -> enforce-hot-manifests):
 ```bash
 bash scripts/shard_offload_cycle.sh
 ```

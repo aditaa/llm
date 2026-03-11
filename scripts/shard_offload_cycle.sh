@@ -7,7 +7,7 @@ set -euo pipefail
 # 3) Reconcile again to self-heal mismatches
 
 OFFLOAD_ARGS_DEFAULT="--shards-root data/shards_global/fineweb-global-bpe-v1 --warm-shards-root /mnt/ceph/llm/data/shards_global/fineweb-global-bpe-v1 --keep-local-batches 24 --target-free-gib 180 --max-batches 24 --disable-offloaded-manifests --require-trained-batches-file artifacts/reports/train_supervisor_phase1_talk/trained_batch_names.txt,artifacts/reports/train_supervisor_350bt/trained_batch_names.txt --skip-if-trained-file-missing --min-active-manifests 48 --min-active-train-tokens 40000000000"
-RECONCILE_ARGS_DEFAULT="--shards-root data/shards_global/fineweb-global-bpe-v1 --trained-batches-file artifacts/reports/train_supervisor_phase1_talk/trained_batch_names.txt,artifacts/reports/train_supervisor_350bt/trained_batch_names.txt --skip-if-trained-file-missing"
+RECONCILE_ARGS_DEFAULT="--shards-root data/shards_global/fineweb-global-bpe-v1 --trained-batches-file artifacts/reports/train_supervisor_phase1_talk/trained_batch_names.txt,artifacts/reports/train_supervisor_350bt/trained_batch_names.txt --skip-if-trained-file-missing --rehydrate-active-symlink-bins"
 
 OFFLOAD_ARGS_RAW="${LLM_SHARD_OFFLOAD_ARGS:-$OFFLOAD_ARGS_DEFAULT}"
 RECONCILE_ARGS_RAW="${LLM_SHARD_OFFLOAD_RECONCILE_ARGS:-$RECONCILE_ARGS_DEFAULT}"
@@ -39,9 +39,25 @@ run_cycle "pre"
 declare -a offload_args=()
 expand_args "$OFFLOAD_ARGS_RAW" offload_args
 
+shards_root_from_args() {
+  local default_root="data/shards_global/fineweb-global-bpe-v1"
+  local idx
+  for ((idx = 0; idx < ${#offload_args[@]}; idx++)); do
+    if [[ "${offload_args[$idx]}" == "--shards-root" ]] && ((idx + 1 < ${#offload_args[@]})); then
+      echo "${offload_args[$((idx + 1))]}"
+      return 0
+    fi
+  done
+  echo "$default_root"
+}
+
 echo "[$(date -Iseconds)] offload_cycle_offload args=${OFFLOAD_ARGS_RAW}"
 PYTHONPATH=src .venv/bin/python scripts/offload_shard_bins_to_warm.py "${offload_args[@]}"
 
 run_cycle "post"
+
+SHARDS_ROOT="$(shards_root_from_args)"
+echo "[$(date -Iseconds)] offload_cycle_enforce_hot_only shards_root=$SHARDS_ROOT"
+PYTHONPATH=src .venv/bin/python scripts/enforce_hot_only_manifests.py --shards-root "$SHARDS_ROOT"
 
 echo "[$(date -Iseconds)] offload_cycle_done"

@@ -791,9 +791,15 @@ PYTHONPATH=src .venv/bin/python scripts/reconcile_offloaded_manifests.py \
   --shards-root data/shards_global/fineweb-global-bpe-v1 \
   --trained-batches-file artifacts/reports/train_supervisor_phase1_talk/trained_batch_names.txt,artifacts/reports/train_supervisor_350bt/trained_batch_names.txt \
   --skip-if-trained-file-missing \
-  --min-active-unique-input-files 510 \
+  --min-active-unique-input-files 240 \
+  --max-restore 4 \
+  --warm-shards-root /mnt/ceph/llm/data/shards_global/fineweb-global-bpe-v1 \
+  --rehydrate-restored-bins \
   --rehydrate-active-symlink-bins
 ```
+Use a realistic `--min-active-unique-input-files` floor for your hot-disk budget.
+On ~800-900 GiB hot disks, `240` is a practical rolling target.
+
 
 For timer automation, use the safe cycle wrapper
 (reconcile -> offload -> reconcile -> enforce-hot-manifests):
@@ -816,7 +822,7 @@ LLM_STAGE_SHARD_WATCHDOG_ARGS="--worker-args \"${LLM_STAGE_SHARD_LOOP_ARGS}\" --
 ```
 Recommended shard-offload cycle overrides:
 ```bash
-LLM_SHARD_OFFLOAD_RECONCILE_ARGS="--shards-root data/shards_global/fineweb-global-bpe-v1 --trained-batches-file artifacts/reports/train_supervisor_phase1_talk/trained_batch_names.txt,artifacts/reports/train_supervisor_350bt/trained_batch_names.txt --skip-if-trained-file-missing --min-active-unique-input-files 510 --rehydrate-active-symlink-bins"
+LLM_SHARD_OFFLOAD_RECONCILE_ARGS="--shards-root data/shards_global/fineweb-global-bpe-v1 --trained-batches-file artifacts/reports/train_supervisor_phase1_talk/trained_batch_names.txt,artifacts/reports/train_supervisor_350bt/trained_batch_names.txt --skip-if-trained-file-missing --min-active-unique-input-files 240 --max-restore 4 --warm-shards-root /mnt/ceph/llm/data/shards_global/fineweb-global-bpe-v1 --rehydrate-restored-bins --rehydrate-active-symlink-bins"
 LLM_SHARD_OFFLOAD_ARGS="--shards-root data/shards_global/fineweb-global-bpe-v1 --warm-shards-root /mnt/ceph/llm/data/shards_global/fineweb-global-bpe-v1 --keep-local-batches 24 --target-free-gib 180 --max-batches 16 --disable-offloaded-manifests --require-trained-batches-file artifacts/reports/train_supervisor_phase1_talk/trained_batch_names.txt,artifacts/reports/train_supervisor_350bt/trained_batch_names.txt --skip-if-trained-file-missing --min-manifest-unique-input-files 510 --min-active-manifests 48 --min-active-train-tokens 40000000000"
 ```
 

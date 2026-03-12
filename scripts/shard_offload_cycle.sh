@@ -7,7 +7,7 @@ set -euo pipefail
 # 3) Reconcile again to self-heal mismatches
 
 OFFLOAD_ARGS_DEFAULT="--shards-root data/shards_global/fineweb-global-bpe-v1 --warm-shards-root /mnt/ceph/llm/data/shards_global/fineweb-global-bpe-v1 --keep-local-batches 24 --target-free-gib 180 --max-batches 24 --disable-offloaded-manifests --require-trained-batches-file artifacts/reports/train_supervisor_phase1_talk/trained_batch_names.txt,artifacts/reports/train_supervisor_350bt/trained_batch_names.txt --skip-if-trained-file-missing --min-active-manifests 48 --min-active-train-tokens 40000000000"
-RECONCILE_ARGS_DEFAULT="--shards-root data/shards_global/fineweb-global-bpe-v1 --trained-batches-file artifacts/reports/train_supervisor_phase1_talk/trained_batch_names.txt,artifacts/reports/train_supervisor_350bt/trained_batch_names.txt --skip-if-trained-file-missing"
+RECONCILE_ARGS_DEFAULT="--shards-root data/shards_global/fineweb-global-bpe-v1 --trained-batches-file artifacts/reports/train_supervisor_phase1_talk/trained_batch_names.txt,artifacts/reports/train_supervisor_350bt/trained_batch_names.txt --skip-if-trained-file-missing --min-active-unique-input-files 240 --max-restore 4 --warm-shards-root /mnt/ceph/llm/data/shards_global/fineweb-global-bpe-v1 --rehydrate-restored-bins --rehydrate-active-symlink-bins"
 
 OFFLOAD_ARGS_RAW="${LLM_SHARD_OFFLOAD_ARGS:-$OFFLOAD_ARGS_DEFAULT}"
 RECONCILE_ARGS_RAW="${LLM_SHARD_OFFLOAD_RECONCILE_ARGS:-$RECONCILE_ARGS_DEFAULT}"

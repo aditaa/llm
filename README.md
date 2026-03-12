@@ -605,8 +605,9 @@ Successful chunks update `artifacts/reports/train_supervisor_phase1_talk/trained
 which can be used to gate shard offload so only already-trained batches move to warm storage.
 On each supervisor loop, hot-only manifest guard now runs automatically and disables any
 active manifest that references symlinked shard bins.
-Supervisor also runs hot-shard warmup before each chunk by default, hydrating missing
-active shard bins from Ceph into hot storage (`scripts/hot_shard_warmup.py`).
+Supervisor runs hot-shard warmup before each chunk and also a background warmup loop
+during chunk training by default, hydrating missing active shard bins from Ceph into
+hot storage (`scripts/hot_shard_warmup.py`) while GPU work is running.
 When monitoring this profile, point status tools at that state dir:
 `PYTHONPATH=src .venv/bin/python scripts/pipeline_live_view.py --supervisor-state-dir artifacts/reports/train_supervisor_phase1_talk`
 and
@@ -630,6 +631,9 @@ Use `--sampler-strategy balanced --sampler-min-full-passes <X>` to keep shard ex
 mixed and evenly distributed while guaranteeing minimum per-shard pass coverage each chunk.
 Tune Ceph warm->hot hydration with `--hot-shard-warmup-workers <N>` and
 `--hot-shard-warmup-max-files <N>` (or disable with `--no-hot-shard-warmup`).
+Tune concurrent prefetch with `--hot-shard-warmup-background-interval-seconds <N>`,
+`--hot-shard-warmup-background-max-files <N>`, or disable with
+`--no-hot-shard-warmup-background`.
 Supervisor enforces a singleton lock at
 `artifacts/reports/train_supervisor_350bt/supervisor.lock`.
 Add `--no-train-fail-on-eval-regression` if you want chunk runs to continue even when

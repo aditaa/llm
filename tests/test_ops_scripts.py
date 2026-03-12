@@ -74,6 +74,8 @@ class ScriptTests(unittest.TestCase):
         self.assertIn("--sampler-min-full-passes", proc.stdout)
         self.assertIn("--hot-shard-warmup-workers", proc.stdout)
         self.assertIn("--warm-shards-root", proc.stdout)
+        self.assertIn("--no-hot-shard-warmup-background", proc.stdout)
+        self.assertIn("--hot-shard-warmup-background-interval-seconds", proc.stdout)
 
     def test_cli_train_help_lists_sampler_and_compile_safety_flags(self) -> None:
         proc = subprocess.run(

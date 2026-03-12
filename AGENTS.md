@@ -44,6 +44,7 @@ Use the `Makefile` as the source of truth:
 - `make reconcile-offloaded-manifests`: usage helper for restoring risky offloaded manifests and optional bin rehydrate
 - `make shard-offload-cycle`: usage helper for safe reconcile -> offload -> reconcile timer cycle
 - `make offload-shard-bins-warm`: usage helper for replacing older local shard `.bin` files with warm-storage symlinks, disabling offloaded manifests, gating offload by trained-batch registry, and honoring hot-coverage safety floors
+- `make hot-shard-warmup`: usage helper for hydrating active shard bins from warm to hot storage before training
 - `make enforce-hot-manifests`: usage helper for disabling active manifests that reference symlinked shard bins
 - `make fineweb-stage-shard-loop`: usage helper for rolling warm->hot stage + shard + verify + sync + purge
 - `make fineweb-stage-shard-watchdog`: usage helper for auto-restart watchdog around the stage/shard loop
@@ -190,6 +191,8 @@ Keep PR scope narrow; split refactors and features into separate PRs.
 - Phase-1 launcher writes supervisor state to `artifacts/reports/train_supervisor_phase1_talk`; pipeline status tools now auto-detect between phase1 + standard state dirs (override with `--supervisor-state-dir` when needed)
 - Phase-1 launcher uses lower-variance generation gating (`--generation-temperature 0.2 --generation-top-k 1`)
 - Supervisor now runs hot-manifest guard each loop (`scripts/enforce_hot_only_manifests.py`) to auto-disable active manifests that reference symlinked shard bins
+- Supervisor now supports pre-train hot-shard warmup (`scripts/hot_shard_warmup.py`) to hydrate missing/symlinked active shard bins from Ceph into hot storage (`--hot-shard-warmup-workers`, `--hot-shard-warmup-max-files`, `--no-hot-shard-warmup`)
+- Prefer supervisor `--sampler-strategy balanced --sampler-min-full-passes <X>` for even shard mixing with guaranteed minimum per-shard full-pass coverage per chunk
 - On 12 GB RTX 5070 profiles, start supervisor with `--batch-size 12 --target-effective-batch 24 --min-batch-size 6 --max-batch-size 20 --batch-step 2` to avoid early OOM churn
 - Use supervisor `--train-stall-check-seconds` + `--train-stall-kill-seconds` to auto-restart stuck train chunks when step progress stops
 - Supervisor writes chunk trends to `artifacts/reports/train_supervisor_350bt/train_trend.tsv` and post-chunk eval trends to `artifacts/reports/train_supervisor_350bt/eval_trend.tsv`

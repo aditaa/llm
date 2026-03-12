@@ -224,10 +224,7 @@ class TrainDataTests(unittest.TestCase):
                 "line_count": 10,
                 "train": {
                     "total_tokens": 480,
-                    "shards": [
-                        {"path": f"train_{idx:06d}.bin", "tokens": 80}
-                        for idx in range(6)
-                    ],
+                    "shards": [{"path": f"train_{idx:06d}.bin", "tokens": 80} for idx in range(6)],
                 },
                 "val": {"total_tokens": 40, "shards": [{"path": "val_000000.bin", "tokens": 40}]},
             }
@@ -252,6 +249,32 @@ class TrainDataTests(unittest.TestCase):
             payload = json.loads(trace_path.read_text(encoding="utf-8"))
             self.assertIn("sampled_shards", payload)
             self.assertTrue(payload["sampled_shards"])
+            self.assertEqual(payload["sampling_strategy"], "weighted")
+
+    def test_sampler_balanced_strategy_distributes_evenly(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            shard_paths: list[Path] = []
+            for idx in range(5):
+                shard_path = root / f"train_{idx:06d}.bin"
+                _write_shard(shard_path, list(range(80)))
+                shard_paths.append(shard_path)
+
+            sampler = ShardBatchSampler(
+                shard_paths=shard_paths,
+                token_dtype="uint16",
+                context_length=8,
+                seed=123,
+                device=torch.device("cpu"),
+                sampling_strategy="balanced",
+            )
+            for _ in range(17):
+                sampler.sample_batch(batch_size=3)
+
+            sampled = dict(sampler.sampled_shard_rows())
+            self.assertEqual(len(sampled), len(shard_paths))
+            counts = [sampled[path.resolve()] for path in shard_paths]
+            self.assertLessEqual(max(counts) - min(counts), 1)
 
     def test_ema_state_update(self) -> None:
         model = torch.nn.Linear(2, 2, bias=False)
@@ -363,6 +386,61 @@ class TrainDataTests(unittest.TestCase):
             payload = json.loads(trace.read_text(encoding="utf-8"))
             self.assertIn("sampled_shards", payload)
             self.assertTrue(payload["sampled_shards"])
+
+    def test_run_training_rejects_unmet_sampler_min_full_passes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            ds = root / "dataset"
+            out = root / "out"
+            tok = root / "tok.json"
+
+            vocab_size = _write_tokenizer(tok, "simple tiny corpus for training")
+            _write_shard(ds / "train_000000.bin", list(range(200)))
+            _write_shard(ds / "train_000001.bin", list(range(200)))
+            _write_shard(ds / "val_000000.bin", list(range(120)))
+            manifest = {
+                "input_path": "x.txt",
+                "tokenizer_path": str(tok),
+                "tokenizer_hash": tokenizer_fingerprint(tok),
+                "tokenizer_contract_hash": tokenizer_contract_fingerprint(tok),
+                "tokenizer_vocab_size": vocab_size,
+                "token_dtype": "uint16",
+                "shard_size_tokens": 1024,
+                "val_ratio": 0.01,
+                "seed": 42,
+                "max_lines": 0,
+                "line_count": 10,
+                "train": {
+                    "total_tokens": 400,
+                    "shards": [
+                        {"path": "train_000000.bin", "tokens": 200},
+                        {"path": "train_000001.bin", "tokens": 200},
+                    ],
+                },
+                "val": {"total_tokens": 120, "shards": [{"path": "val_000000.bin", "tokens": 120}]},
+            }
+            (ds / "manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+
+            with self.assertRaises(ValueError):
+                run_training(
+                    TrainConfig(
+                        shards_path=ds,
+                        output_dir=out,
+                        max_steps=1,
+                        batch_size=1,
+                        context_length=16,
+                        grad_accum_steps=1,
+                        eval_interval=1,
+                        eval_steps=1,
+                        log_interval=1,
+                        device="cpu",
+                        n_layers=1,
+                        n_heads=1,
+                        d_model=32,
+                        sampler_strategy="balanced",
+                        sampler_min_full_passes=1,
+                    )
+                )
 
 
 if __name__ == "__main__":

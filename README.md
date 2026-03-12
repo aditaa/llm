@@ -68,6 +68,7 @@ make fineweb-revalidate-bad-parquet # print bad parquet revalidate/restage usage
 make reconcile-offloaded-manifests # print offloaded-manifest reconcile usage
 make shard-offload-cycle # print safe reconcile->offload->reconcile usage
 make offload-shard-bins-warm # print shard .bin offload-to-warm usage
+make hot-shard-warmup # print active-shard warm->hot hydration usage
 make fineweb-stage-shard-loop # print rolling stage->shard->verify->sync->purge usage
 make fineweb-stage-shard-watchdog # print auto-restart watchdog usage for stage/shard loop
 make lr-sweep-350bt # print RTX 5070 LR sweep usage for staged 350BT shards
@@ -429,6 +430,8 @@ Training now supports:
 - optional EMA weights (`--ema-decay`, `--ema-update-every`, `--ema-start-step`)
 - optional weights-only export (`--export-safetensors`)
 - shard sampler FD guardrail (`--sampler-max-open-shards`) to avoid too-many-open-files
+- balanced shuffled shard cycling (`--sampler-strategy balanced`) for even shard usage
+- minimum full-pass gate (`--sampler-min-full-passes <X>`) to enforce at-least-X passes
 - sampled shard trace export (`--sampled-shards-trace`) for per-chunk true coverage accounting
 
 9. Generate text from a checkpoint:
@@ -576,6 +579,8 @@ bash scripts/train_supervisor_rtx5070_350bt.sh \
   --batch-size 12 \
   --target-effective-batch 24 \
   --min-unique-input-files 510 \
+  --sampler-strategy balanced \
+  --sampler-min-full-passes 1 \
   --min-batch-size 6 \
   --max-batch-size 20 \
   --batch-step 2 \
@@ -600,6 +605,8 @@ Successful chunks update `artifacts/reports/train_supervisor_phase1_talk/trained
 which can be used to gate shard offload so only already-trained batches move to warm storage.
 On each supervisor loop, hot-only manifest guard now runs automatically and disables any
 active manifest that references symlinked shard bins.
+Supervisor also runs hot-shard warmup before each chunk by default, hydrating missing
+active shard bins from Ceph into hot storage (`scripts/hot_shard_warmup.py`).
 When monitoring this profile, point status tools at that state dir:
 `PYTHONPATH=src .venv/bin/python scripts/pipeline_live_view.py --supervisor-state-dir artifacts/reports/train_supervisor_phase1_talk`
 and
@@ -619,6 +626,10 @@ Use `--dedupe-report-keep <N>` to cap saved dedupe report/log artifacts during l
 Use `--min-unique-input-files <N>` to hold training until enough unique parquet inputs are represented in manifests.
 Use `--min-train-tokens <N>` to gate startup by total train-token coverage instead of raw file count.
 Use `--lr-schedule constant` in supervisor for late-step recovery runs where cosine decay is too aggressive.
+Use `--sampler-strategy balanced --sampler-min-full-passes <X>` to keep shard exposure
+mixed and evenly distributed while guaranteeing minimum per-shard pass coverage each chunk.
+Tune Ceph warm->hot hydration with `--hot-shard-warmup-workers <N>` and
+`--hot-shard-warmup-max-files <N>` (or disable with `--no-hot-shard-warmup`).
 Supervisor enforces a singleton lock at
 `artifacts/reports/train_supervisor_350bt/supervisor.lock`.
 Add `--no-train-fail-on-eval-regression` if you want chunk runs to continue even when

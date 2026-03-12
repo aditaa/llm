@@ -9,6 +9,7 @@ set -euo pipefail
 # - automatic post-chunk eval + trend files
 
 SHARDS_PATH="data/shards_global/fineweb-global-bpe-v1"
+WARM_SHARDS_ROOT="/mnt/ceph/llm/data/shards_global/fineweb-global-bpe-v1"
 OUTPUT_DIR="artifacts/checkpoints/fineweb-350bt-bpe-v2-run1"
 STATE_DIR="artifacts/reports/train_supervisor_350bt"
 
@@ -44,6 +45,13 @@ CHECKPOINT_KEEP_EVERY=10000
 EMA_DECAY="0.0"
 EMA_UPDATE_EVERY=1
 EMA_START_STEP=0
+SAMPLER_STRATEGY="balanced"
+SAMPLER_MIN_FULL_PASSES=1
+
+HOT_SHARD_WARMUP=1
+HOT_SHARD_WARMUP_WORKERS=4
+HOT_SHARD_WARMUP_MAX_FILES=0
+HOT_SHARD_WARMUP_ALLOW_MISSING_WARM=0
 
 AUTO_TUNE=1
 BATCH_STEP=2
@@ -124,6 +132,8 @@ Core options:
   --shards-path DIR            Root containing shard manifest.json files
   --output-dir DIR             Training output directory (last.pt lives here)
   --state-dir DIR              Supervisor logs/state directory
+  --warm-shards-root DIR       Warm shard root used for hot warmup hydration
+                               (default: /mnt/ceph/llm/data/shards_global/fineweb-global-bpe-v1)
   --poll-seconds N             Sleep between checks/restarts (default: 120)
   --step-chunk N               Steps per training cycle before restart (default: 2000)
   --min-manifests N            Wait until at least N manifests exist (default: 1)
@@ -165,6 +175,17 @@ Training shape:
   --ema-decay X                EMA decay for model weights (default: 0.0 disabled)
   --ema-update-every N         EMA update interval in optimizer steps (default: 1)
   --ema-start-step N           First optimizer step to apply EMA updates (default: 0)
+  --sampler-strategy MODE      Train sampler mode: weighted|balanced (default: balanced)
+  --sampler-min-full-passes N  Require at least N guaranteed full shard passes per chunk
+                               when using balanced sampler (default: 1)
+
+Hot-set warmup:
+  --no-hot-shard-warmup        Disable pre-train warm->hot shard hydration
+  --hot-shard-warmup-workers N Parallel warmup copy workers (default: 4)
+  --hot-shard-warmup-max-files N
+                               Cap warmup copy file count per loop (default: 0 = all)
+  --hot-shard-warmup-allow-missing-warm
+                               Continue even when warm shard copies are missing
 
 Auto-tune options:
   --no-auto-tune               Disable automatic batch tuning
@@ -272,6 +293,7 @@ USAGE
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --shards-path) SHARDS_PATH="$2"; shift 2 ;;
+    --warm-shards-root) WARM_SHARDS_ROOT="$2"; shift 2 ;;
     --output-dir) OUTPUT_DIR="$2"; shift 2 ;;
     --state-dir) STATE_DIR="$2"; shift 2 ;;
     --poll-seconds) POLL_SECONDS="$2"; shift 2 ;;
@@ -309,6 +331,12 @@ while [[ $# -gt 0 ]]; do
     --ema-decay) EMA_DECAY="$2"; shift 2 ;;
     --ema-update-every) EMA_UPDATE_EVERY="$2"; shift 2 ;;
     --ema-start-step) EMA_START_STEP="$2"; shift 2 ;;
+    --sampler-strategy) SAMPLER_STRATEGY="$2"; shift 2 ;;
+    --sampler-min-full-passes) SAMPLER_MIN_FULL_PASSES="$2"; shift 2 ;;
+    --no-hot-shard-warmup) HOT_SHARD_WARMUP=0; shift ;;
+    --hot-shard-warmup-workers) HOT_SHARD_WARMUP_WORKERS="$2"; shift 2 ;;
+    --hot-shard-warmup-max-files) HOT_SHARD_WARMUP_MAX_FILES="$2"; shift 2 ;;
+    --hot-shard-warmup-allow-missing-warm) HOT_SHARD_WARMUP_ALLOW_MISSING_WARM=1; shift ;;
     --no-auto-tune) AUTO_TUNE=0; shift ;;
     --batch-step) BATCH_STEP="$2"; shift 2 ;;
     --min-batch-size) MIN_BATCH_SIZE="$2"; shift 2 ;;
@@ -416,6 +444,26 @@ if [[ "$BATCH_SIZE" -le 0 || "$GRAD_ACCUM_STEPS" -le 0 ]]; then
 fi
 if [[ "$LR_SCHEDULE" != "constant" && "$LR_SCHEDULE" != "cosine" ]]; then
   echo "error: lr-schedule must be one of: constant, cosine" >&2
+  exit 1
+fi
+if [[ "$SAMPLER_STRATEGY" != "weighted" && "$SAMPLER_STRATEGY" != "balanced" ]]; then
+  echo "error: sampler-strategy must be one of: weighted, balanced" >&2
+  exit 1
+fi
+if ! [[ "$SAMPLER_MIN_FULL_PASSES" =~ ^[0-9]+$ ]]; then
+  echo "error: sampler-min-full-passes must be an integer >= 0" >&2
+  exit 1
+fi
+if ! [[ "$HOT_SHARD_WARMUP_WORKERS" =~ ^[0-9]+$ ]] || [[ "$HOT_SHARD_WARMUP_WORKERS" -le 0 ]]; then
+  echo "error: hot-shard-warmup-workers must be an integer > 0" >&2
+  exit 1
+fi
+if ! [[ "$HOT_SHARD_WARMUP_MAX_FILES" =~ ^[0-9]+$ ]]; then
+  echo "error: hot-shard-warmup-max-files must be an integer >= 0" >&2
+  exit 1
+fi
+if [[ "$HOT_SHARD_WARMUP" -eq 1 && ! -d "$WARM_SHARDS_ROOT" ]]; then
+  echo "error: warm-shards-root not found: $WARM_SHARDS_ROOT" >&2
   exit 1
 fi
 if [[ "$CHECKPOINT_KEEP_LAST" -lt 0 || "$CHECKPOINT_KEEP_EVERY" -lt 0 ]]; then
@@ -1018,6 +1066,41 @@ run_hot_manifest_guard() {
     return 0
   fi
   log "$guard_out"
+}
+
+run_hot_shard_warmup() {
+  if [[ "$HOT_SHARD_WARMUP" -ne 1 ]]; then
+    return 0
+  fi
+  local warmup_report="$STATE_DIR/hot_shard_warmup_latest.json"
+  local -a warmup_args=(
+    --shards-root "$SHARDS_PATH"
+    --warm-shards-root "$WARM_SHARDS_ROOT"
+    --workers "$HOT_SHARD_WARMUP_WORKERS"
+    --report-output "$warmup_report"
+  )
+  if [[ "$HOT_SHARD_WARMUP_MAX_FILES" -gt 0 ]]; then
+    warmup_args+=(--max-files "$HOT_SHARD_WARMUP_MAX_FILES")
+  fi
+  if [[ "$HOT_SHARD_WARMUP_ALLOW_MISSING_WARM" -eq 1 ]]; then
+    warmup_args+=(--allow-missing-warm)
+  fi
+  local warmup_out
+  set +e
+  warmup_out="$(
+    PYTHONPATH=src \
+    "$PYTHON_BIN" scripts/hot_shard_warmup.py \
+      "${warmup_args[@]}" \
+      2>&1
+  )"
+  local rc=$?
+  set -e
+  if [[ "$rc" -ne 0 ]]; then
+    log "hot_shard_warmup_failed rc=$rc detail=$(echo "$warmup_out" | tr '\n' ' ')"
+    return "$rc"
+  fi
+  log "$warmup_out"
+  return 0
 }
 
 run_manifest_dedupe() {
@@ -1806,7 +1889,7 @@ fi
 failure_streak=0
 successful_chunks=0
 log "supervisor_start shards_path=$SHARDS_PATH output_dir=$OUTPUT_DIR step_chunk=$STEP_CHUNK"
-log "tuning_start batch_size=$BATCH_SIZE grad_accum=$GRAD_ACCUM_STEPS auto_tune=$AUTO_TUNE target_effective_batch=$TARGET_EFFECTIVE_BATCH train_fail_on_eval_regression=$TRAIN_FAIL_ON_EVAL_REGRESSION checkpoint_keep_last=$CHECKPOINT_KEEP_LAST checkpoint_keep_every=$CHECKPOINT_KEEP_EVERY allow_context_extension=$ALLOW_CONTEXT_EXTENSION learning_rate=$LEARNING_RATE lr_schedule=$LR_SCHEDULE lr_warmup_steps=$LR_WARMUP_STEPS lr_min_ratio=$LR_MIN_RATIO ema_decay=$EMA_DECAY ema_update_every=$EMA_UPDATE_EVERY ema_start_step=$EMA_START_STEP generation_gate=$GENERATION_GATE generation_every_chunks=$GENERATION_EVERY_CHUNKS generation_stop_on_fail=$GENERATION_STOP_ON_FAIL holdout_gate=$HOLDOUT_GATE holdout_suite=${HOLDOUT_SUITE:-none} holdout_every_chunks=$HOLDOUT_EVERY_CHUNKS holdout_stop_on_fail=$HOLDOUT_STOP_ON_FAIL promotion_require_policy_pass=$PROMOTION_REQUIRE_POLICY_PASS promotion_require_generation_pass=$PROMOTION_REQUIRE_GENERATION_PASS promotion_require_holdout_pass=$PROMOTION_REQUIRE_HOLDOUT_PASS promotion_min_quality_streak=$PROMOTION_MIN_QUALITY_STREAK quality_rollback_streak=$QUALITY_ROLLBACK_STREAK quality_rollback_cooldown_steps=$QUALITY_ROLLBACK_COOLDOWN_STEPS dedupe_overlap_manifests=$DEDUPE_OVERLAP_MANIFESTS dedupe_keep=$DEDUPE_KEEP dedupe_dry_run=$DEDUPE_DRY_RUN min_train_tokens=$MIN_TRAIN_TOKENS train_stall_check_seconds=$TRAIN_STALL_CHECK_SECONDS train_stall_kill_seconds=$TRAIN_STALL_KILL_SECONDS"
+log "tuning_start batch_size=$BATCH_SIZE grad_accum=$GRAD_ACCUM_STEPS auto_tune=$AUTO_TUNE target_effective_batch=$TARGET_EFFECTIVE_BATCH train_fail_on_eval_regression=$TRAIN_FAIL_ON_EVAL_REGRESSION checkpoint_keep_last=$CHECKPOINT_KEEP_LAST checkpoint_keep_every=$CHECKPOINT_KEEP_EVERY allow_context_extension=$ALLOW_CONTEXT_EXTENSION learning_rate=$LEARNING_RATE lr_schedule=$LR_SCHEDULE lr_warmup_steps=$LR_WARMUP_STEPS lr_min_ratio=$LR_MIN_RATIO ema_decay=$EMA_DECAY ema_update_every=$EMA_UPDATE_EVERY ema_start_step=$EMA_START_STEP sampler_strategy=$SAMPLER_STRATEGY sampler_min_full_passes=$SAMPLER_MIN_FULL_PASSES hot_shard_warmup=$HOT_SHARD_WARMUP hot_shard_warmup_workers=$HOT_SHARD_WARMUP_WORKERS hot_shard_warmup_max_files=$HOT_SHARD_WARMUP_MAX_FILES generation_gate=$GENERATION_GATE generation_every_chunks=$GENERATION_EVERY_CHUNKS generation_stop_on_fail=$GENERATION_STOP_ON_FAIL holdout_gate=$HOLDOUT_GATE holdout_suite=${HOLDOUT_SUITE:-none} holdout_every_chunks=$HOLDOUT_EVERY_CHUNKS holdout_stop_on_fail=$HOLDOUT_STOP_ON_FAIL promotion_require_policy_pass=$PROMOTION_REQUIRE_POLICY_PASS promotion_require_generation_pass=$PROMOTION_REQUIRE_GENERATION_PASS promotion_require_holdout_pass=$PROMOTION_REQUIRE_HOLDOUT_PASS promotion_min_quality_streak=$PROMOTION_MIN_QUALITY_STREAK quality_rollback_streak=$QUALITY_ROLLBACK_STREAK quality_rollback_cooldown_steps=$QUALITY_ROLLBACK_COOLDOWN_STEPS dedupe_overlap_manifests=$DEDUPE_OVERLAP_MANIFESTS dedupe_keep=$DEDUPE_KEEP dedupe_dry_run=$DEDUPE_DRY_RUN min_train_tokens=$MIN_TRAIN_TOKENS train_stall_check_seconds=$TRAIN_STALL_CHECK_SECONDS train_stall_kill_seconds=$TRAIN_STALL_KILL_SECONDS"
 backfill_trained_batch_registry
 ensure_single_supervisor_process
 
@@ -1832,6 +1915,11 @@ while true; do
     sleep "$POLL_SECONDS"
     continue
   fi
+  if ! run_hot_shard_warmup; then
+    log "waiting_for_hot_shard_warmup sleep=${POLL_SECONDS}s"
+    sleep "$POLL_SECONDS"
+    continue
+  fi
 
   resume_ckpt="$(select_resume_checkpoint)"
   if [[ -n "$resume_ckpt" ]]; then
@@ -1853,7 +1941,7 @@ while true; do
     resume_args=(--resume-from "$resume_ckpt")
   fi
 
-  log "train_launch manifests=$mcount unique_inputs=$unique_inputs train_tokens=$train_tokens overlap_inputs=$overlap_inputs overlap_manifests=$overlap_manifests step_now=$step_now target_step=$target_step batch_size=$BATCH_SIZE grad_accum=$GRAD_ACCUM_STEPS resume=${resume_ckpt:-none} chunk_batches=$chunk_batches_count chunk_batches_file=$chunk_batches_file sampled_trace=$sampled_shards_trace run_log=$run_log"
+  log "train_launch manifests=$mcount unique_inputs=$unique_inputs train_tokens=$train_tokens overlap_inputs=$overlap_inputs overlap_manifests=$overlap_manifests step_now=$step_now target_step=$target_step batch_size=$BATCH_SIZE grad_accum=$GRAD_ACCUM_STEPS sampler_strategy=$SAMPLER_STRATEGY sampler_min_full_passes=$SAMPLER_MIN_FULL_PASSES resume=${resume_ckpt:-none} chunk_batches=$chunk_batches_count chunk_batches_file=$chunk_batches_file sampled_trace=$sampled_shards_trace run_log=$run_log"
 
   train_gate_args=()
   if [[ "$TRAIN_FAIL_ON_EVAL_REGRESSION" -eq 1 ]]; then
@@ -1891,6 +1979,8 @@ while true; do
       --precision "$PRECISION" \
       --checkpoint-keep-last "$CHECKPOINT_KEEP_LAST" \
       --checkpoint-keep-every "$CHECKPOINT_KEEP_EVERY" \
+      --sampler-strategy "$SAMPLER_STRATEGY" \
+      --sampler-min-full-passes "$SAMPLER_MIN_FULL_PASSES" \
       --sampled-shards-trace "$sampled_shards_trace" \
       --sampled-shards-trace-min-rows 1 \
       --ema-decay "$EMA_DECAY" \

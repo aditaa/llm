@@ -571,6 +571,8 @@ def cmd_train(
     compile_mode: str,
     compile_strict: bool,
     sampler_max_open_shards: int,
+    sampler_strategy: str,
+    sampler_min_full_passes: int,
     sampled_shards_trace: str | None,
     sampled_shards_trace_min_rows: int,
     export_safetensors: bool,
@@ -621,6 +623,8 @@ def cmd_train(
         compile_mode=compile_mode,
         compile_strict=compile_strict,
         sampler_max_open_shards=sampler_max_open_shards,
+        sampler_strategy=sampler_strategy,
+        sampler_min_full_passes=sampler_min_full_passes,
         sampled_shards_trace=(Path(sampled_shards_trace) if sampled_shards_trace else None),
         sampled_shards_trace_min_rows=sampled_shards_trace_min_rows,
         export_safetensors=export_safetensors,
@@ -1361,6 +1365,24 @@ def parse_args() -> argparse.Namespace:
         help="Max open shard memmaps per train/val sampler to limit file descriptors",
     )
     train_parser.add_argument(
+        "--sampler-strategy",
+        choices=["weighted", "balanced"],
+        default="weighted",
+        help=(
+            "Shard sampling strategy: weighted (token-proportional random) or "
+            "balanced (shuffled full-cycle over shards)"
+        ),
+    )
+    train_parser.add_argument(
+        "--sampler-min-full-passes",
+        type=int,
+        default=0,
+        help=(
+            "When > 0 with --sampler-strategy balanced, require this many guaranteed full "
+            "passes over all eligible train shards in the configured run window"
+        ),
+    )
+    train_parser.add_argument(
         "--sampled-shards-trace",
         default=None,
         help="Optional JSON path to write sampled shard coverage trace for this run",
@@ -1667,6 +1689,8 @@ def main() -> int:
             compile_mode=args.compile_mode,
             compile_strict=args.compile_strict,
             sampler_max_open_shards=args.sampler_max_open_shards,
+            sampler_strategy=args.sampler_strategy,
+            sampler_min_full_passes=args.sampler_min_full_passes,
             sampled_shards_trace=args.sampled_shards_trace,
             sampled_shards_trace_min_rows=args.sampled_shards_trace_min_rows,
             export_safetensors=args.export_safetensors,

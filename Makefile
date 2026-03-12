@@ -4,7 +4,7 @@ ifneq ("$(wildcard .venv/bin/python)","")
 PYTHON=.venv/bin/python
 endif
 
-.PHONY: setup-dev setup-train setup-infer doctor install-server-system install-systemd-services install-user-systemd-services test lint format typecheck smoke extract-zim train-tokenizer train-tokenizer-global corpus-quality-report clean-corpus-batch dataset-risk-report pull-hf-rows fineweb-parquet-to-shards fineweb-manifest-dedupe stage-fineweb-from-warm fineweb-revalidate-bad-parquet enforce-hot-manifests reconcile-offloaded-manifests shard-offload-cycle offload-shard-bins-warm fineweb-stage-shard-loop fineweb-stage-shard-watchdog lr-sweep-350bt benchmark-rtx5070 train-350bt-v2 train-350bt-ctx1024 train-supervisor-350bt train-supervisor-phase1-talk pipeline-eta pipeline-live shard-corpus-batch verify-shards train generate average-checkpoints eval-checkpoint render-eval-dashboard package-inference-bundle sync-warm hydrate-warm offload-zim checkpoint-offload-prune set-swappiness hf-download-resumable hf-download-watchdog hf-prepare-publish hf-download-model serve-openai publish-wiki
+.PHONY: setup-dev setup-train setup-infer doctor install-server-system install-systemd-services install-user-systemd-services test lint format typecheck smoke extract-zim train-tokenizer train-tokenizer-global corpus-quality-report clean-corpus-batch dataset-risk-report pull-hf-rows fineweb-parquet-to-shards fineweb-manifest-dedupe stage-fineweb-from-warm fineweb-revalidate-bad-parquet enforce-hot-manifests reconcile-offloaded-manifests shard-offload-cycle offload-shard-bins-warm hot-shard-warmup fineweb-stage-shard-loop fineweb-stage-shard-watchdog lr-sweep-350bt benchmark-rtx5070 train-350bt-v2 train-350bt-ctx1024 train-supervisor-350bt train-supervisor-phase1-talk pipeline-eta pipeline-live shard-corpus-batch verify-shards train generate average-checkpoints eval-checkpoint render-eval-dashboard package-inference-bundle sync-warm hydrate-warm offload-zim checkpoint-offload-prune set-swappiness hf-download-resumable hf-download-watchdog hf-prepare-publish hf-download-model serve-openai publish-wiki
 
 setup-dev:
 	bash scripts/bootstrap_dev.sh
@@ -103,6 +103,10 @@ offload-shard-bins-warm:
 	@echo "Usage:"
 	@echo "  PYTHONPATH=src $(PYTHON) scripts/offload_shard_bins_to_warm.py --keep-local-batches 24 --target-free-gib 180 --max-batches 40 --disable-offloaded-manifests --require-trained-batches-file artifacts/reports/train_supervisor_phase1_talk/trained_batch_names.txt,artifacts/reports/train_supervisor_350bt/trained_batch_names.txt --skip-if-trained-file-missing --min-manifest-unique-input-files 510 --min-active-manifests 48 --min-active-train-tokens 40000000000"
 
+hot-shard-warmup:
+	@echo "Usage:"
+	@echo "  PYTHONPATH=src $(PYTHON) scripts/hot_shard_warmup.py --shards-root data/shards_global/fineweb-global-bpe-v1 --warm-shards-root /mnt/ceph/llm/data/shards_global/fineweb-global-bpe-v1 --workers 4"
+
 fineweb-stage-shard-loop:
 	@echo "Usage:"
 	@echo "  bash scripts/fineweb_stage_shard_loop.sh --hot-queue-min-files 18 --stage-max-files 12 --stage-copy-jobs 2 --process-max-files 12 --shard-jobs 2 --tokenizer-threads 10 --encode-batch-size 1024 --sleep-seconds 60 --shard-min-batch-size 512"
@@ -154,7 +158,7 @@ verify-shards:
 
 train:
 	@echo "Usage:"
-	@echo "  PYTHONPATH=src $(PYTHON) -m llm.cli train --shards-path data/shards/<dataset> --output-dir artifacts/checkpoints/<run_name> --lr-schedule cosine --lr-warmup-steps 200 --grad-accum-steps 1 --checkpoint-keep-last 6 --checkpoint-keep-every 10000 --fail-on-eval-regression"
+	@echo "  PYTHONPATH=src $(PYTHON) -m llm.cli train --shards-path data/shards/<dataset> --output-dir artifacts/checkpoints/<run_name> --lr-schedule cosine --lr-warmup-steps 200 --grad-accum-steps 1 --sampler-strategy balanced --sampler-min-full-passes 1 --checkpoint-keep-last 6 --checkpoint-keep-every 10000 --fail-on-eval-regression"
 
 generate:
 	@echo "Usage:"

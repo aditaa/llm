@@ -59,6 +59,8 @@ class TrainConfig:
     compile_mode: str = "reduce-overhead"
     compile_strict: bool = False
     sampler_max_open_shards: int = 256
+    sampler_strategy: str = "weighted"
+    sampler_min_full_passes: int = 0
     sampled_shards_trace: Path | None = None
     sampled_shards_trace_min_rows: int = 1
     export_safetensors: bool = False
@@ -153,10 +155,7 @@ def _build_optimizer(
             continue
         lowered = name.lower()
         no_decay = (
-            param.ndim < 2
-            or lowered.endswith("bias")
-            or "norm" in lowered
-            or "embed" in lowered
+            param.ndim < 2 or lowered.endswith("bias") or "norm" in lowered or "embed" in lowered
         )
         if no_decay:
             no_decay_params.append(param)
@@ -306,6 +305,7 @@ class ShardBatchSampler:
         seed: int,
         device: torch.device,
         max_open_shards: int = 256,
+        sampling_strategy: str = "weighted",
     ) -> None:
         if context_length <= 0:
             raise ValueError("context_length must be > 0")
@@ -316,6 +316,10 @@ class ShardBatchSampler:
         self.device = device
         self.dtype = _np_dtype(token_dtype)
         self.max_open_shards = max_open_shards
+        normalized_strategy = sampling_strategy.strip().lower()
+        if normalized_strategy not in {"weighted", "balanced"}:
+            raise ValueError("sampling_strategy must be one of: weighted, balanced")
+        self.sampling_strategy = normalized_strategy
         self.shard_paths = [path.resolve() for path in shard_paths]
         self._array_cache: OrderedDict[int, np.memmap[Any, Any]] = OrderedDict()
         self._sampled_rows: dict[int, int] = {}
@@ -341,6 +345,8 @@ class ShardBatchSampler:
         probs = np.asarray(self.weights, dtype=np.float64)
         self._weight_probs = probs / probs.sum()
         self._offsets = np.arange(self.context_length, dtype=np.int64)
+        self._cycle_order = np.empty(0, dtype=np.int32)
+        self._cycle_pos = 0
 
     def _get_array(self, idx: int) -> np.memmap[Any, Any]:
         cached = self._array_cache.get(idx)
@@ -363,10 +369,14 @@ class ShardBatchSampler:
                 rows.append((self.shard_paths[idx], count))
         return rows
 
+    def eligible_shard_count(self) -> int:
+        return len(self.eligible)
+
     def write_sample_trace(self, path: Path, *, min_rows: int = 1) -> int:
         sampled = self.sampled_shard_rows(min_rows=min_rows)
         payload = {
             "context_length": self.context_length,
+            "sampling_strategy": self.sampling_strategy,
             "sampled_shards": [
                 {
                     "path": str(shard_path),
@@ -380,6 +390,25 @@ class ShardBatchSampler:
         path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
         return len(sampled)
 
+    def _sample_shard_indices(self, batch_size: int) -> np.ndarray[Any, Any]:
+        if self.sampling_strategy == "weighted":
+            return self.np_rng.choice(self._eligible_np, size=batch_size, p=self._weight_probs)
+
+        chosen = np.empty(batch_size, dtype=np.int32)
+        written = 0
+        while written < batch_size:
+            if self._cycle_pos >= int(self._cycle_order.size):
+                self._cycle_order = self.np_rng.permutation(self._eligible_np)
+                self._cycle_pos = 0
+            remaining_cycle = int(self._cycle_order.size) - self._cycle_pos
+            take = min(batch_size - written, remaining_cycle)
+            chosen[written : written + take] = self._cycle_order[
+                self._cycle_pos : self._cycle_pos + take
+            ]
+            self._cycle_pos += take
+            written += take
+        return chosen
+
     def close(self) -> None:
         self._array_cache.clear()
 
@@ -391,7 +420,7 @@ class ShardBatchSampler:
             raise ValueError("batch_size must be > 0")
         x = np.zeros((batch_size, self.context_length), dtype=np.int64)
         y = np.zeros((batch_size, self.context_length), dtype=np.int64)
-        chosen = self.np_rng.choice(self._eligible_np, size=batch_size, p=self._weight_probs)
+        chosen = self._sample_shard_indices(batch_size)
         for arr_idx in np.unique(chosen):
             rows = np.nonzero(chosen == arr_idx)[0]
             idx = int(arr_idx)
@@ -860,6 +889,11 @@ def run_training(config: TrainConfig) -> dict[str, Any]:
 
     if config.sampler_max_open_shards <= 0:
         raise ValueError("sampler_max_open_shards must be > 0")
+    normalized_sampler_strategy = config.sampler_strategy.strip().lower()
+    if normalized_sampler_strategy not in {"weighted", "balanced"}:
+        raise ValueError("sampler_strategy must be one of: weighted, balanced")
+    if config.sampler_min_full_passes < 0:
+        raise ValueError("sampler_min_full_passes must be >= 0")
     if config.sampled_shards_trace_min_rows <= 0:
         raise ValueError("sampled_shards_trace_min_rows must be > 0")
 
@@ -870,6 +904,7 @@ def run_training(config: TrainConfig) -> dict[str, Any]:
         seed=config.seed,
         device=device,
         max_open_shards=config.sampler_max_open_shards,
+        sampling_strategy=normalized_sampler_strategy,
     )
     val_sampler = ShardBatchSampler(
         shard_paths=info.val_shards,
@@ -878,7 +913,26 @@ def run_training(config: TrainConfig) -> dict[str, Any]:
         seed=config.seed + 1,
         device=device,
         max_open_shards=config.sampler_max_open_shards,
+        sampling_strategy="weighted",
     )
+    planned_steps = max(0, config.max_steps - start_step)
+    planned_sample_rows = planned_steps * config.grad_accum_steps * config.batch_size
+    train_eligible_shards = train_sampler.eligible_shard_count()
+    train_guaranteed_full_passes = (
+        planned_sample_rows // train_eligible_shards if train_eligible_shards > 0 else 0
+    )
+    if (
+        normalized_sampler_strategy == "balanced"
+        and config.sampler_min_full_passes > 0
+        and train_guaranteed_full_passes < config.sampler_min_full_passes
+    ):
+        raise ValueError(
+            "sampler_min_full_passes cannot be met by this run configuration: "
+            f"requested={config.sampler_min_full_passes} "
+            f"guaranteed={train_guaranteed_full_passes} "
+            f"planned_sample_rows={planned_sample_rows} "
+            f"eligible_shards={train_eligible_shards}"
+        )
     frozen_eval_batches: list[tuple[Tensor, Tensor]] | None = None
     if config.eval_freeze_batches:
         frozen_eval_batches = [
@@ -930,6 +984,11 @@ def run_training(config: TrainConfig) -> dict[str, Any]:
     print(f"compile_model_active={int(compile_active)}")
     print(f"compile_state={compile_state}")
     print(f"sampler_max_open_shards={config.sampler_max_open_shards}")
+    print(f"sampler_strategy={normalized_sampler_strategy}")
+    print(f"sampler_min_full_passes={config.sampler_min_full_passes}")
+    print(f"train_sampler_eligible_shards={train_eligible_shards}")
+    print(f"train_sampler_planned_sample_rows={planned_sample_rows}")
+    print(f"train_sampler_guaranteed_full_passes={train_guaranteed_full_passes}")
     print(f"eval_freeze_batches={int(config.eval_freeze_batches)}")
     print(f"fail_on_eval_regression={int(config.fail_on_eval_regression)}")
     if config.compile_model:

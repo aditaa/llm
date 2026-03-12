@@ -70,6 +70,10 @@ class ScriptTests(unittest.TestCase):
         self.assertIn("--holdout-suite", proc.stdout)
         self.assertIn("--holdout-every-chunks", proc.stdout)
         self.assertIn("--promotion-min-quality-streak", proc.stdout)
+        self.assertIn("--sampler-strategy", proc.stdout)
+        self.assertIn("--sampler-min-full-passes", proc.stdout)
+        self.assertIn("--hot-shard-warmup-workers", proc.stdout)
+        self.assertIn("--warm-shards-root", proc.stdout)
 
     def test_cli_train_help_lists_sampler_and_compile_safety_flags(self) -> None:
         proc = subprocess.run(
@@ -82,8 +86,71 @@ class ScriptTests(unittest.TestCase):
         )
         self.assertEqual(proc.returncode, 0, msg=proc.stderr)
         self.assertIn("--sampler-max-open-shards", proc.stdout)
+        self.assertIn("--sampler-strategy", proc.stdout)
+        self.assertIn("--sampler-min-full-passes", proc.stdout)
         self.assertIn("--sampled-shards-trace", proc.stdout)
         self.assertIn("--compile-strict", proc.stdout)
+
+    def test_hot_shard_warmup_hydrates_missing_and_symlinked_files(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            shards_root = root / "shards"
+            warm_root = root / "warm"
+            batch = "batch_0001"
+            local_batch = shards_root / batch
+            warm_batch = warm_root / batch
+            local_batch.mkdir(parents=True, exist_ok=True)
+            warm_batch.mkdir(parents=True, exist_ok=True)
+
+            warm_train = warm_batch / "train_000000.bin"
+            warm_val = warm_batch / "val_000000.bin"
+            warm_train.write_bytes(b"train-bytes")
+            warm_val.write_bytes(b"val-bytes")
+
+            # train shard missing locally, val shard present as symlink.
+            local_val = local_batch / "val_000000.bin"
+            local_val.symlink_to(warm_val.resolve())
+
+            manifest = {
+                "train": {"shards": [{"path": "train_000000.bin"}]},
+                "val": {"shards": [{"path": "val_000000.bin"}]},
+            }
+            (local_batch / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+            report = root / "report.json"
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    "scripts/hot_shard_warmup.py",
+                    "--shards-root",
+                    str(shards_root),
+                    "--warm-shards-root",
+                    str(warm_root),
+                    "--report-output",
+                    str(report),
+                    "--workers",
+                    "2",
+                ],
+                cwd=Path(__file__).resolve().parents[1],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(proc.returncode, 0, msg=proc.stderr)
+            self.assertIn("hot_shard_warmup_done", proc.stdout)
+
+            local_train = local_batch / "train_000000.bin"
+            self.assertTrue(local_train.exists())
+            self.assertFalse(local_train.is_symlink())
+            self.assertEqual(local_train.read_bytes(), b"train-bytes")
+            self.assertTrue(local_val.exists())
+            self.assertFalse(local_val.is_symlink())
+            self.assertEqual(local_val.read_bytes(), b"val-bytes")
+
+            payload = json.loads(report.read_text(encoding="utf-8"))
+            summary = payload["summary"]
+            self.assertEqual(summary["hydrated_files"], 2)
+            self.assertEqual(summary["missing_warm_files"], 0)
 
     def test_stage_loop_help_lists_stage_copy_jobs(self) -> None:
         proc = subprocess.run(

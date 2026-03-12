@@ -58,6 +58,7 @@ Use the `Makefile` as the source of truth:
 - `make pipeline-live`: usage helper for a live terminal pipeline dashboard
 - `make shard-corpus-batch`: usage helper for batch sharding with a shared tokenizer
 - `make checkpoint-offload-prune`: usage helper for checkpoint warm sync + local prune policy
+- `make checkpoint-step-offload`: usage helper for offloading older `ckpt_step_*.pt` files to warm storage while preserving newest local resume steps
 - `make set-swappiness`: usage helper for host swappiness tuning (root)
 - `make hf-download-resumable`: usage helper for self-healing Hugging Face resume-download worker
 - `make hf-download-watchdog`: usage helper for watchdog auto-restart around stalled/exited HF download workers
@@ -72,7 +73,7 @@ CI/CD workflows:
 - `.github/workflows/ci.yml`: script sanity (`bash -n` + `py_compile`), lint, typecheck, tests, smoke, and gate job
 - `.github/workflows/wiki-sync.yml`: publishes wiki pages on `main` doc changes
 - `.github/dependabot.yml`: weekly dependency update PRs for `pip`, `requirements/`, and GitHub Actions
-- maintenance units: `deploy/systemd/llm-checkpoint-offload-prune.service` + `.timer`, `deploy/systemd/llm-bad-parquet-revalidate.service` + `.timer`, `deploy/systemd/llm-shard-offload.service` + `.timer`, `deploy/systemd/llm-vm-swappiness.service`
+- maintenance units: `deploy/systemd/llm-checkpoint-offload-prune.service` + `.timer`, `deploy/systemd/llm-checkpoint-step-offload.service` + `.timer`, `deploy/systemd/llm-bad-parquet-revalidate.service` + `.timer`, `deploy/systemd/llm-shard-offload.service` + `.timer`, `deploy/systemd/llm-vm-swappiness.service`
 
 ## Coding Style & Naming Conventions
 - Python 3.10+, 4-space indentation, UTF-8 files
@@ -239,6 +240,7 @@ Keep PR scope narrow; split refactors and features into separate PRs.
 - Use `--grad-accum-steps` when VRAM is tight and you need higher effective batch
 - Keep disk use bounded with `llm.cli train --checkpoint-keep-last <N> --checkpoint-keep-every <M>`
 - Use `scripts/checkpoint_offload_prune.sh` to sync checkpoint runs to warm storage and prune older local runs (keep active + newest local)
+- Use `scripts/checkpoint_step_offload.sh` to offload older `ckpt_step_*.pt` files from active runs to warm storage on a short cadence (for example every 10 minutes) while keeping newest local resume checkpoints
 - Tune host swap behavior with `sudo bash scripts/set_swappiness.sh --value 10 --persist` (or set `LLM_SWAPPINESS=10` in `/etc/llm/llm.env` for systemd)
 - For context-extension continuation, resume with `llm.cli train --allow-context-extension --context-length 1024 ...`
 - Use EMA for long runs with `--ema-decay 0.999 --ema-start-step <warmup_end>` and generate with `--use-ema` when present

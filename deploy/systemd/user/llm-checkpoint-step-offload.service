@@ -1,0 +1,13 @@
+[Unit]
+Description=LLM Checkpoint Step Offload To Warm Storage
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=__REPO_DIR__
+EnvironmentFile=-%h/.config/llm/llm.env
+ExecStart=/bin/bash -lc 'cd __REPO_DIR__ && mkdir -p artifacts/reports && exec flock -n artifacts/reports/checkpoint_step_offload.lock bash scripts/checkpoint_step_offload.sh ${LLM_CHECKPOINT_STEP_OFFLOAD_ARGS:-}'
+Nice=10
+IOSchedulingClass=idle
+NoNewPrivileges=true

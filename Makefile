@@ -4,7 +4,7 @@ ifneq ("$(wildcard .venv/bin/python)","")
 PYTHON=.venv/bin/python
 endif
 
-.PHONY: setup-dev setup-train setup-infer doctor install-server-system install-systemd-services install-user-systemd-services test lint format typecheck smoke extract-zim train-tokenizer train-tokenizer-global corpus-quality-report clean-corpus-batch dataset-risk-report pull-hf-rows fineweb-parquet-to-shards fineweb-manifest-dedupe stage-fineweb-from-warm fineweb-revalidate-bad-parquet enforce-hot-manifests reconcile-offloaded-manifests shard-offload-cycle offload-shard-bins-warm hot-shard-warmup fineweb-stage-shard-loop fineweb-stage-shard-watchdog lr-sweep-350bt benchmark-rtx5070 train-350bt-v2 train-350bt-ctx1024 train-supervisor-350bt train-supervisor-phase1-talk pipeline-eta pipeline-live shard-corpus-batch verify-shards train generate average-checkpoints eval-checkpoint render-eval-dashboard package-inference-bundle sync-warm hydrate-warm offload-zim checkpoint-offload-prune set-swappiness hf-download-resumable hf-download-watchdog hf-prepare-publish hf-download-model serve-openai publish-wiki
+.PHONY: setup-dev setup-train setup-infer doctor install-server-system install-systemd-services install-user-systemd-services test lint format typecheck smoke extract-zim train-tokenizer train-tokenizer-global corpus-quality-report clean-corpus-batch dataset-risk-report pull-hf-rows fineweb-parquet-to-shards fineweb-manifest-dedupe stage-fineweb-from-warm fineweb-revalidate-bad-parquet enforce-hot-manifests reconcile-offloaded-manifests shard-offload-cycle offload-shard-bins-warm hot-shard-warmup fineweb-stage-shard-loop fineweb-stage-shard-watchdog lr-sweep-350bt benchmark-rtx5070 train-350bt-v2 train-350bt-ctx1024 train-supervisor-350bt train-supervisor-phase1-talk pipeline-eta pipeline-live shard-corpus-batch verify-shards train generate average-checkpoints eval-checkpoint render-eval-dashboard package-inference-bundle sync-warm hydrate-warm offload-zim checkpoint-offload-prune checkpoint-step-offload set-swappiness hf-download-resumable hf-download-watchdog hf-prepare-publish hf-download-model serve-openai publish-wiki
 
 setup-dev:
 	bash scripts/bootstrap_dev.sh
@@ -195,6 +195,10 @@ offload-zim:
 checkpoint-offload-prune:
 	@echo "Sync local checkpoints to warm storage and prune older local runs."
 	@echo "Usage: bash scripts/checkpoint_offload_prune.sh --local-checkpoints-dir artifacts/checkpoints --warm-checkpoints-dir /mnt/ceph/llm/data/checkpoints --keep-local-runs 1"
+
+checkpoint-step-offload:
+	@echo "Offload older ckpt_step_*.pt files to warm storage while keeping newest local steps."
+	@echo "Usage: bash scripts/checkpoint_step_offload.sh --local-checkpoints-dir artifacts/checkpoints --warm-checkpoints-dir /mnt/ceph/llm/data/checkpoints --keep-last-steps 6 --max-files 24"
 
 set-swappiness:
 	@echo "Set vm.swappiness for training hosts (root required)."

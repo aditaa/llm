@@ -86,6 +86,7 @@ make sync-warm   # sync raw/training data + artifacts to warm storage
 make hydrate-warm # hydrate hot workspace from warm storage
 make offload-zim # continuously move raw ZIMs hot -> warm
 make checkpoint-offload-prune # sync checkpoints to warm and prune older local runs
+make checkpoint-step-offload # offload older ckpt_step_*.pt while keeping newest local resume steps
 make set-swappiness # print vm.swappiness tuning usage (root)
 make hf-prepare-publish # print HF bundle/publish usage
 make hf-download-model # print full HF model download usage

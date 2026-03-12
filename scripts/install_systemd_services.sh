@@ -18,7 +18,7 @@ Usage:
 Install and optionally enable/start systemd service units for long-running
 LLM pipeline workers (supervisor + stage/shard watchdog, optional HF watchdog).
 Also installs maintenance units (checkpoint offload/prune timer + bad-parquet
-revalidate timer + shard-offload timer + VM swappiness tune service).
+revalidate timer + shard-offload timer + checkpoint step offload timer + VM swappiness tune service).
 
 Options:
   --repo-dir DIR            Repository directory baked into unit files
@@ -26,7 +26,7 @@ Options:
   --systemd-dir DIR         Unit install directory (default: /etc/systemd/system)
   --env-target FILE         Environment file path (default: /etc/llm/llm.env)
   --install-watchdog        Also install/enable HF watchdog service unit
-  --no-maintenance          Skip maintenance units (offload/revalidate/shard-offload timers + VM tuning)
+  --no-maintenance          Skip maintenance units (offload/revalidate/shard-offload/step-offload timers + VM tuning)
   --no-enable               Do not run systemctl enable
   --no-start                Do not run systemctl restart/start
   -h, --help                Show help
@@ -126,6 +126,8 @@ fi
 if [[ "$INSTALL_MAINTENANCE" -eq 1 ]]; then
   install_unit "llm-checkpoint-offload-prune.service" "llm-checkpoint-offload-prune.service"
   install_unit "llm-checkpoint-offload-prune.timer" "llm-checkpoint-offload-prune.timer"
+  install_unit "llm-checkpoint-step-offload.service" "llm-checkpoint-step-offload.service"
+  install_unit "llm-checkpoint-step-offload.timer" "llm-checkpoint-step-offload.timer"
   install_unit "llm-bad-parquet-revalidate.service" "llm-bad-parquet-revalidate.service"
   install_unit "llm-bad-parquet-revalidate.timer" "llm-bad-parquet-revalidate.timer"
   install_unit "llm-shard-offload.service" "llm-shard-offload.service"
@@ -152,7 +154,7 @@ if [[ "$INSTALL_WATCHDOG" -eq 1 ]]; then
 fi
 if [[ "$INSTALL_MAINTENANCE" -eq 1 ]]; then
   units+=(llm-vm-swappiness.service)
-  timer_units+=(llm-checkpoint-offload-prune.timer llm-bad-parquet-revalidate.timer llm-shard-offload.timer)
+  timer_units+=(llm-checkpoint-offload-prune.timer llm-checkpoint-step-offload.timer llm-bad-parquet-revalidate.timer llm-shard-offload.timer)
 fi
 
 if [[ "$ENABLE" -eq 1 ]]; then

@@ -115,6 +115,8 @@ Installed units:
 - `llm-hf-download-watchdog.service` (optional but recommended for long HF pulls)
 - `llm-checkpoint-offload-prune.service`
 - `llm-checkpoint-offload-prune.timer`
+- `llm-checkpoint-step-offload.service`
+- `llm-checkpoint-step-offload.timer`
 - `llm-bad-parquet-revalidate.service`
 - `llm-bad-parquet-revalidate.timer`
 - `llm-vm-swappiness.service`
@@ -129,12 +131,14 @@ Environment file:
 - Set `LLM_TRAIN_SUPERVISOR_ARGS` to tune training readiness gates (for example
   `--min-train-tokens 40000000000` to gate by token coverage instead of only file count)
 - Set `LLM_CHECKPOINT_OFFLOAD_ARGS` for warm-sync + prune policy (for example keep newest local run only)
+- Set `LLM_CHECKPOINT_STEP_OFFLOAD_ARGS` for frequent older-step offload while keeping recent local resume checkpoints
 - Set `LLM_BAD_PARQUET_REVALIDATE_ARGS` for periodic bad-parquet recovery/restage policy
 - Set `LLM_SWAPPINESS=10` to reduce swap churn; `llm-vm-swappiness.service` applies this at boot
 Useful commands:
 ```bash
 sudo systemctl status llm-train-supervisor.service
 sudo systemctl status llm-checkpoint-offload-prune.timer
+sudo systemctl status llm-checkpoint-step-offload.timer
 sudo systemctl status llm-bad-parquet-revalidate.timer
 sudo systemctl restart llm-train-supervisor.service
 sudo journalctl -u llm-train-supervisor.service -f

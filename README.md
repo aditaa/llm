@@ -269,7 +269,7 @@ bash scripts/fineweb_stage_shard_loop.sh \
   --shard-size-tokens 20000000 \
   --sync-background \
   --sync-max-inflight 2 \
-  --hot-max-used-pct 80 \
+  --hot-max-used-pct 95 \
   --sleep-seconds 60 \
   --shard-min-batch-size 512
 ```
@@ -311,7 +311,7 @@ switches into training-focused mode and pauses additional stage/shard churn.
 3ad. Optional watchdog for stage/shard loop auto-restart on exit/stall:
 ```bash
 bash scripts/fineweb_stage_shard_watchdog.sh \
-  --worker-args "--process-max-files 12 --shard-jobs 2 --tokenizer-threads 10 --encode-batch-size 1024 --hot-max-used-pct 80 --sleep-seconds 60 --shard-min-batch-size 512" \
+  --worker-args "--process-max-files 12 --shard-jobs 2 --tokenizer-threads 10 --encode-batch-size 1024 --hot-max-used-pct 95 --sleep-seconds 60 --shard-min-batch-size 512" \
   --check-interval-seconds 120 \
   --stall-seconds 5400
 ```
@@ -764,7 +764,7 @@ Offload older shard binaries to warm storage while keeping training hot-only:
 ```bash
 PYTHONPATH=src .venv/bin/python scripts/offload_shard_bins_to_warm.py \
   --keep-local-batches 24 \
-  --target-free-gib 180 \
+  --target-free-gib 47 \
   --max-batches 40 \
   --disable-offloaded-manifests \
   --require-trained-batches-file artifacts/reports/train_supervisor_phase1_talk/trained_batch_names.txt,artifacts/reports/train_supervisor_350bt/trained_batch_names.txt \
@@ -814,7 +814,7 @@ Environment template:
 
 Recommended `LLM_STAGE_SHARD_LOOP_ARGS` baseline for 20-core hosts:
 ```bash
-LLM_STAGE_SHARD_LOOP_ARGS="--process-max-files 15 --shard-jobs 2 --auto-tune-shard-jobs --auto-tune-min-shard-jobs 2 --auto-tune-max-shard-jobs 3 --auto-tune-low-load-pct 80 --auto-tune-high-load-pct 95 --auto-tune-min-batch-seconds 300 --tokenizer-threads 10 --encode-batch-size 1024 --shard-size-tokens 20000000 --expected-unique-input-files 510 --coverage-complete-sleep-seconds 300 --sync-background --sync-max-inflight 2 --hot-max-used-pct 80 --offload-check-interval-seconds 120 --parquet-validate-timeout-seconds 180 --sleep-seconds 60 --shard-min-batch-size 512"
+LLM_STAGE_SHARD_LOOP_ARGS="--process-max-files 15 --shard-jobs 2 --auto-tune-shard-jobs --auto-tune-min-shard-jobs 2 --auto-tune-max-shard-jobs 3 --auto-tune-low-load-pct 80 --auto-tune-high-load-pct 95 --auto-tune-min-batch-seconds 300 --tokenizer-threads 10 --encode-batch-size 1024 --shard-size-tokens 20000000 --expected-unique-input-files 510 --coverage-complete-sleep-seconds 300 --sync-background --sync-max-inflight 2 --hot-max-used-pct 95 --offload-check-interval-seconds 120 --parquet-validate-timeout-seconds 180 --sleep-seconds 60 --shard-min-batch-size 512"
 ```
 Recommended stage watchdog wrapper:
 ```bash
@@ -823,7 +823,7 @@ LLM_STAGE_SHARD_WATCHDOG_ARGS="--worker-args \"${LLM_STAGE_SHARD_LOOP_ARGS}\" --
 Recommended shard-offload cycle overrides:
 ```bash
 LLM_SHARD_OFFLOAD_RECONCILE_ARGS="--shards-root data/shards_global/fineweb-global-bpe-v1 --trained-batches-file artifacts/reports/train_supervisor_phase1_talk/trained_batch_names.txt,artifacts/reports/train_supervisor_350bt/trained_batch_names.txt --skip-if-trained-file-missing --min-active-unique-input-files 240 --max-restore 4 --warm-shards-root /mnt/ceph/llm/data/shards_global/fineweb-global-bpe-v1 --rehydrate-restored-bins --rehydrate-active-symlink-bins"
-LLM_SHARD_OFFLOAD_ARGS="--shards-root data/shards_global/fineweb-global-bpe-v1 --warm-shards-root /mnt/ceph/llm/data/shards_global/fineweb-global-bpe-v1 --keep-local-batches 24 --target-free-gib 180 --max-batches 16 --disable-offloaded-manifests --require-trained-batches-file artifacts/reports/train_supervisor_phase1_talk/trained_batch_names.txt,artifacts/reports/train_supervisor_350bt/trained_batch_names.txt --skip-if-trained-file-missing --min-manifest-unique-input-files 510 --min-active-manifests 48 --min-active-train-tokens 40000000000"
+LLM_SHARD_OFFLOAD_ARGS="--shards-root data/shards_global/fineweb-global-bpe-v1 --warm-shards-root /mnt/ceph/llm/data/shards_global/fineweb-global-bpe-v1 --keep-local-batches 24 --target-free-gib 47 --max-batches 16 --disable-offloaded-manifests --require-trained-batches-file artifacts/reports/train_supervisor_phase1_talk/trained_batch_names.txt,artifacts/reports/train_supervisor_350bt/trained_batch_names.txt --skip-if-trained-file-missing --min-manifest-unique-input-files 510 --min-active-manifests 48 --min-active-train-tokens 40000000000"
 ```
 
 ## Inference Bundle Packaging

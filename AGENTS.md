@@ -159,7 +159,7 @@ Keep PR scope narrow; split refactors and features into separate PRs.
 - Use `fineweb_stage_shard_loop.sh --enable-stage-copy --stage-min-free-gib <N>` so staging never drives hot disk below a free-space guardrail
 - Use `fineweb_stage_shard_loop.sh --auto-tune-shard-jobs` to adapt shard parallelism and tokenizer threads from CPU load + batch runtime
 - Use `fineweb_stage_shard_loop.sh --sync-background --sync-max-inflight <N>` to overlap warm sync with next shard batches and reduce idle wait
-- Keep hot disk near target by enabling loop auto-offload (`--hot-max-used-pct 80` + `--offload-check-interval-seconds 120`), which offloads already-trained older shard batches without pausing sharding
+- Keep hot disk near target by enabling loop auto-offload (`--hot-max-used-pct 95` + `--offload-check-interval-seconds 120`), which offloads already-trained older shard batches without pausing sharding
 - Prefer larger shard files for throughput (`--shard-size-tokens 20000000` for FineWeb 350BT pipeline)
 - `fineweb_stage_shard_loop.sh` now drains background sync jobs on `INT`/`TERM` for safer restarts
 - Default systemd loop/watchdog templates now use stage free-space guardrails + auto-tune; override with `LLM_STAGE_SHARD_LOOP_ARGS` in `/etc/llm/llm.env` if needed

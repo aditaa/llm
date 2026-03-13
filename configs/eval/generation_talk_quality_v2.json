@@ -1,0 +1,140 @@
+{
+  "name": "generation_talk_quality_v2",
+  "description": "Stronger phase-1 generation gate for English fluency, factuality basics, and anti-gibberish behavior.",
+  "cases": [
+    {
+      "id": "talk_natural_greeting",
+      "category": "conversation",
+      "prompt": "User: Hi, I had a rough day. Reply with a short friendly message and ask one follow-up question.\nAssistant:",
+      "checks": {
+        "min_completion_chars": 70,
+        "expect_any": ["?", "sorry", "hope", "tomorrow"],
+        "reject_any": ["i can't", "i cannot", "i'm unable"],
+        "max_repeated_char_run": 7,
+        "max_non_ascii_ratio": 0.03,
+        "max_url_count": 0
+      }
+    },
+    {
+      "id": "talk_translate_short",
+      "category": "translation",
+      "prompt": "Translate to English: Muchas gracias por todo.",
+      "checks": {
+        "min_completion_chars": 14,
+        "expect_any": ["thank", "everything", "very much"],
+        "max_url_count": 0
+      }
+    },
+    {
+      "id": "talk_factual_days_week",
+      "category": "factual_qa",
+      "prompt": "How many days are in a week?",
+      "checks": {
+        "min_completion_chars": 3,
+        "expect_any": ["7", "seven"],
+        "max_url_count": 0
+      }
+    },
+    {
+      "id": "talk_factual_capital_japan",
+      "category": "factual_qa",
+      "prompt": "What is the capital city of Japan?",
+      "checks": {
+        "min_completion_chars": 5,
+        "expect_any": ["tokyo"],
+        "max_url_count": 0
+      }
+    },
+    {
+      "id": "talk_factual_largest_ocean",
+      "category": "factual_qa",
+      "prompt": "Which ocean is the largest on Earth?",
+      "checks": {
+        "min_completion_chars": 7,
+        "expect_any": ["pacific"],
+        "max_url_count": 0
+      }
+    },
+    {
+      "id": "talk_simple_math",
+      "category": "reasoning",
+      "prompt": "Compute 18 + 27 and answer with a short sentence.",
+      "checks": {
+        "min_completion_chars": 2,
+        "expect_any": ["45"],
+        "max_url_count": 0
+      }
+    },
+    {
+      "id": "talk_instruction_two_sentences",
+      "category": "instruction_following",
+      "prompt": "In two short sentences, explain why sleep helps memory.",
+      "checks": {
+        "min_completion_chars": 85,
+        "expect_any": ["sleep", "memory", "brain", "learn"],
+        "max_repeated_char_run": 7,
+        "max_non_ascii_ratio": 0.03,
+        "max_url_count": 0
+      }
+    },
+    {
+      "id": "talk_instruction_three_bullets",
+      "category": "instruction_following",
+      "prompt": "Give exactly three bullet points with simple tips for improving spoken English.",
+      "checks": {
+        "min_completion_chars": 90,
+        "expect_any": ["-", "*", "1."],
+        "max_repeated_char_run": 7,
+        "max_non_ascii_ratio": 0.03,
+        "max_url_count": 0
+      }
+    },
+    {
+      "id": "talk_short_summary",
+      "category": "summarization",
+      "prompt": "Summarize in one sentence: \"The package arrived early, but one item was missing. Support shipped a replacement the same day.\"",
+      "checks": {
+        "min_completion_chars": 70,
+        "expect_any": ["package", "missing", "replacement"],
+        "max_repeated_char_run": 7,
+        "max_non_ascii_ratio": 0.03,
+        "max_url_count": 0
+      }
+    },
+    {
+      "id": "talk_paraphrase_plain_english",
+      "category": "paraphrase",
+      "prompt": "Rewrite this in simpler English: \"The committee postponed the meeting due to severe weather.\"",
+      "checks": {
+        "min_completion_chars": 55,
+        "expect_any": ["meeting", "weather", "postponed", "delayed"],
+        "max_url_count": 0
+      }
+    },
+    {
+      "id": "talk_clean_no_code",
+      "category": "clean_output",
+      "prompt": "Write one short paragraph in plain English about why daily walking is healthy.",
+      "checks": {
+        "min_completion_chars": 95,
+        "reject_any": ["```", "def ", "class ", "import ", "SELECT ", "function("],
+        "max_repeated_char_run": 7,
+        "max_non_ascii_ratio": 0.03,
+        "max_url_count": 0
+      }
+    },
+    {
+      "id": "talk_supportive_response",
+      "category": "conversation",
+      "prompt": "User: I failed an interview and feel discouraged. Give a brief supportive response.\nAssistant:",
+      "checks": {
+        "min_completion_chars": 75,
+        "expect_any": ["sorry", "next", "practice", "improve", "you can"],
+        "reject_any": ["i can't", "i cannot", "i'm unable"],
+        "max_repeated_char_run": 7,
+        "max_non_ascii_ratio": 0.03,
+        "max_url_count": 0
+      }
+    }
+  ]
+}

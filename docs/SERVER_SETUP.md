@@ -91,6 +91,28 @@ Rehydrate from warm storage:
 bash scripts/hydrate_from_warm_storage.sh /mnt/ceph/llm/data
 ```
 
+Simple full FineWeb-Edu sync to Ceph (resumable):
+
+```bash
+export HF_TOKEN=hf_xxx   # optional but recommended
+bash scripts/sync_fineweb_edu_full.sh /mnt/pve/cephfs/llm/data/fineweb/fineweb-edu-full
+```
+
+Pre-wipe safety checklist (before deleting/rebuilding hot disk contents):
+
+```bash
+git fetch --all --prune
+git status --short --branch
+git push
+bash scripts/sync_warm_storage.sh /mnt/ceph/llm/data
+stamp=$(date -u +%Y%m%dT%H%M%SZ)
+git ls-files --others --ignored --exclude-standard | sort \
+  > /mnt/ceph/llm/data/logs/git_untracked_all_${stamp}.txt
+```
+
+Do not wipe until the sync command exits successfully and
+`/mnt/ceph/llm/data/logs/last_sync_utc.txt` reflects this run.
+
 ## 8) Pre-Training Shard Integrity Check
 Run integrity checks before training starts:
 
@@ -115,6 +137,8 @@ Installed units:
 - `llm-hf-download-watchdog.service` (optional but recommended for long HF pulls)
 - `llm-checkpoint-offload-prune.service`
 - `llm-checkpoint-offload-prune.timer`
+- `llm-checkpoint-step-offload.service`
+- `llm-checkpoint-step-offload.timer`
 - `llm-bad-parquet-revalidate.service`
 - `llm-bad-parquet-revalidate.timer`
 - `llm-vm-swappiness.service`
@@ -129,16 +153,14 @@ Environment file:
 - Set `LLM_TRAIN_SUPERVISOR_ARGS` to tune training readiness gates (for example
   `--min-train-tokens 40000000000` to gate by token coverage instead of only file count)
 - Set `LLM_CHECKPOINT_OFFLOAD_ARGS` for warm-sync + prune policy (for example keep newest local run only)
+- Set `LLM_CHECKPOINT_STEP_OFFLOAD_ARGS` for frequent older-step offload while keeping recent local resume checkpoints
 - Set `LLM_BAD_PARQUET_REVALIDATE_ARGS` for periodic bad-parquet recovery/restage policy
 - Set `LLM_SWAPPINESS=10` to reduce swap churn; `llm-vm-swappiness.service` applies this at boot
-- Optional prefetch unit (only when you explicitly want separate prefetching in addition to stage-loop staging):
-  `bash scripts/install_systemd_services.sh --install-watchdog --install-prefetch`
-  installs `llm-fineweb-prefetch.service`
-
 Useful commands:
 ```bash
 sudo systemctl status llm-train-supervisor.service
 sudo systemctl status llm-checkpoint-offload-prune.timer
+sudo systemctl status llm-checkpoint-step-offload.timer
 sudo systemctl status llm-bad-parquet-revalidate.timer
 sudo systemctl restart llm-train-supervisor.service
 sudo journalctl -u llm-train-supervisor.service -f

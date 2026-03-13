@@ -43,6 +43,10 @@ WAIT_UNIQUE_RE = re.compile(r"waiting_for_unique_inputs have=(\d+) need=(\d+)")
 WAIT_TRAIN_TOKENS_RE = re.compile(r"waiting_for_train_tokens have_tokens=(\d+) need_tokens=(\d+)")
 BATCH_START_RE = re.compile(r"^\[([^\]]+)\]\s+batch_start id=(\S+)\s+files=(\d+)\b")
 BATCH_DONE_RE = re.compile(r"^\[([^\]]+)\]\s+batch_done id=(\S+)\b")
+SUPERVISOR_STATE_CANDIDATES = (
+    "artifacts/reports/train_supervisor_phase1_talk",
+    "artifacts/reports/train_supervisor_350bt",
+)
 
 
 def parse_args() -> argparse.Namespace:
@@ -53,7 +57,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--shards-root", default="data/shards_global/fineweb-global-bpe-v1")
     parser.add_argument("--stage-state-dir", default="artifacts/reports/fineweb_stage_shard_loop")
     parser.add_argument(
-        "--supervisor-state-dir", default="artifacts/reports/train_supervisor_350bt"
+        "--supervisor-state-dir",
+        default="",
+        help=(
+            "Supervisor state dir. Default: auto-detect newest existing path from "
+            "artifacts/reports/train_supervisor_phase1_talk and "
+            "artifacts/reports/train_supervisor_350bt."
+        ),
     )
     parser.add_argument("--expected-parquet-files", type=int, default=510)
     parser.add_argument("--expected-bytes", type=int, default=1061360917731)
@@ -209,7 +219,9 @@ def _latest_manifest_mtime(shards_root: Path) -> float | None:
     if not shards_root.exists():
         return None
     latest: float | None = None
-    for manifest_path in shards_root.rglob("manifest.json"):
+    manifests = list(shards_root.rglob("manifest.json"))
+    manifests.extend(shards_root.rglob("manifest.offloaded.json"))
+    for manifest_path in manifests:
         try:
             mtime = manifest_path.stat().st_mtime
         except OSError:
@@ -290,6 +302,37 @@ def _file_mtime(path: Path) -> float | None:
         return path.stat().st_mtime
     except OSError:
         return None
+
+
+def _dir_latest_mtime(path: Path) -> float:
+    latest = _file_mtime(path) or 0.0
+    for pattern in (
+        "supervisor_*.log",
+        "train_*.log",
+        "generation_trend.tsv",
+        "holdout_trend.tsv",
+        "eval_trend.tsv",
+    ):
+        for candidate in path.glob(pattern):
+            mtime = _file_mtime(candidate)
+            if mtime is not None and mtime > latest:
+                latest = mtime
+    return latest
+
+
+def _resolve_supervisor_state_dir(raw_value: str) -> Path:
+    requested = raw_value.strip()
+    if requested:
+        requested_path = Path(requested)
+        if requested_path.exists():
+            return requested_path
+
+    existing_candidates = [Path(p) for p in SUPERVISOR_STATE_CANDIDATES if Path(p).exists()]
+    if not existing_candidates:
+        if requested:
+            return Path(requested)
+        return Path(SUPERVISOR_STATE_CANDIDATES[-1])
+    return max(existing_candidates, key=_dir_latest_mtime)
 
 
 def _latest_train_step(supervisor_state_dir: Path) -> int:
@@ -381,6 +424,202 @@ def _latest_generation_summary(supervisor_state_dir: Path) -> tuple[str, str, st
     return (parts[2], parts[3], parts[8])
 
 
+def _parse_float(value: str) -> float | None:
+    text = value.strip()
+    if not text:
+        return None
+    try:
+        return float(text)
+    except ValueError:
+        return None
+
+
+def _trend_rows(path: Path, min_cols: int) -> list[list[str]]:
+    if not path.exists():
+        return []
+    rows: list[list[str]] = []
+    try:
+        with path.open("r", encoding="utf-8", errors="replace") as handle:
+            for line in handle:
+                row = line.strip()
+                if not row or row.startswith("run_tag\t"):
+                    continue
+                parts = row.split("\t")
+                if len(parts) >= min_cols:
+                    rows.append(parts)
+    except OSError:
+        return []
+    return rows
+
+
+def _trend_metric_state(
+    *,
+    latest_rc: str,
+    latest_regression_pass: str | None,
+    latest_pass: float | None,
+    latest_check: float | None,
+    latest_score: float | None,
+    prev_pass: float | None,
+    prev_check: float | None,
+    prev_score: float | None,
+    pass_eps: float,
+    check_eps: float,
+    score_eps: float,
+) -> str:
+    if latest_rc not in {"0", "NA", ""}:
+        return "regressed"
+    if latest_regression_pass in {"False", "0"}:
+        return "regressed"
+    if latest_pass is None or latest_check is None or latest_score is None:
+        return "warming"
+    if prev_pass is None or prev_check is None or prev_score is None:
+        return "warming"
+    d_pass = latest_pass - prev_pass
+    d_check = latest_check - prev_check
+    d_score = latest_score - prev_score
+    if d_pass < -pass_eps or d_check < -check_eps or d_score < -score_eps:
+        return "regressed"
+    if d_pass > pass_eps or d_check > check_eps or d_score > score_eps:
+        return "improving"
+    return "flat"
+
+
+def _quality_heartbeat(
+    supervisor_state_dir: Path,
+) -> tuple[str, str, str, str, str, str, str]:
+    eval_rows = _trend_rows(supervisor_state_dir / "eval_trend.tsv", min_cols=8)
+    gen_rows = _trend_rows(supervisor_state_dir / "generation_trend.tsv", min_cols=9)
+    holdout_rows = _trend_rows(supervisor_state_dir / "holdout_trend.tsv", min_cols=9)
+
+    eval_state = "unknown"
+    eval_note = "no eval trend data"
+    if eval_rows:
+        latest = eval_rows[-1]
+        prev = eval_rows[-2] if len(eval_rows) > 1 else None
+        latest_rc = latest[2].strip()
+        latest_pass = _parse_float(latest[3])
+        latest_check = _parse_float(latest[4])
+        latest_score = _parse_float(latest[5])
+        prev_pass = _parse_float(prev[3]) if prev is not None else None
+        prev_check = _parse_float(prev[4]) if prev is not None else None
+        prev_score = _parse_float(prev[5]) if prev is not None else None
+        regression_pass = latest[8].strip() if len(latest) > 8 else "NA"
+        if regression_pass not in {"True", "False", "1", "0"}:
+            regression_pass = "NA"
+        promotion_pass = latest[9].strip() if len(latest) > 9 else "NA"
+        if promotion_pass not in {"True", "False", "1", "0"}:
+            promotion_pass = "NA"
+
+        eval_state = _trend_metric_state(
+            latest_rc=latest_rc,
+            latest_regression_pass=(None if regression_pass == "NA" else regression_pass),
+            latest_pass=latest_pass,
+            latest_check=latest_check,
+            latest_score=latest_score,
+            prev_pass=prev_pass,
+            prev_check=prev_check,
+            prev_score=prev_score,
+            pass_eps=0.005,
+            check_eps=0.005,
+            score_eps=0.002,
+        )
+        eval_note = (
+            f"eval={eval_state} rc={latest_rc} "
+            f"pass={latest_pass:.3f}" if latest_pass is not None else f"eval={eval_state} rc={latest_rc}"
+        )
+        if latest_check is not None:
+            eval_note += f" check={latest_check:.3f}"
+        if latest_score is not None:
+            eval_note += f" score={latest_score:.3f}"
+        if regression_pass != "NA":
+            eval_note += f" regression_pass={regression_pass}"
+        if promotion_pass != "NA":
+            eval_note += f" promo_pass={promotion_pass}"
+
+    gen_state = "unknown"
+    gen_note = "gen=no generation trend data"
+    if gen_rows:
+        latest = gen_rows[-1]
+        prev = gen_rows[-2] if len(gen_rows) > 1 else None
+        latest_rc = latest[2].strip()
+        latest_pass = _parse_float(latest[3])
+        latest_check = _parse_float(latest[4])
+        latest_score = _parse_float(latest[5])
+        latest_regression_pass = latest[8].strip()
+        prev_pass = _parse_float(prev[3]) if prev is not None else None
+        prev_check = _parse_float(prev[4]) if prev is not None else None
+        prev_score = _parse_float(prev[5]) if prev is not None else None
+
+        gen_state = _trend_metric_state(
+            latest_rc=latest_rc,
+            latest_regression_pass=latest_regression_pass,
+            latest_pass=latest_pass,
+            latest_check=latest_check,
+            latest_score=latest_score,
+            prev_pass=prev_pass,
+            prev_check=prev_check,
+            prev_score=prev_score,
+            pass_eps=0.005,
+            check_eps=0.005,
+            score_eps=0.002,
+        )
+        gen_note = (
+            f"gen={gen_state} rc={latest_rc} "
+            f"pass={latest_pass:.3f}" if latest_pass is not None else f"gen={gen_state} rc={latest_rc}"
+        )
+        if latest_regression_pass:
+            gen_note += f" regression_pass={latest_regression_pass}"
+
+    holdout_state = "unknown"
+    holdout_note = "holdout=no holdout trend data"
+    if holdout_rows:
+        latest = holdout_rows[-1]
+        prev = holdout_rows[-2] if len(holdout_rows) > 1 else None
+        latest_rc = latest[2].strip()
+        latest_pass = _parse_float(latest[3])
+        latest_check = _parse_float(latest[4])
+        latest_score = _parse_float(latest[5])
+        latest_regression_pass = latest[8].strip()
+        prev_pass = _parse_float(prev[3]) if prev is not None else None
+        prev_check = _parse_float(prev[4]) if prev is not None else None
+        prev_score = _parse_float(prev[5]) if prev is not None else None
+
+        holdout_state = _trend_metric_state(
+            latest_rc=latest_rc,
+            latest_regression_pass=latest_regression_pass,
+            latest_pass=latest_pass,
+            latest_check=latest_check,
+            latest_score=latest_score,
+            prev_pass=prev_pass,
+            prev_check=prev_check,
+            prev_score=prev_score,
+            pass_eps=0.005,
+            check_eps=0.005,
+            score_eps=0.002,
+        )
+        holdout_note = (
+            f"holdout={holdout_state} rc={latest_rc} pass={latest_pass:.3f}"
+            if latest_pass is not None
+            else f"holdout={holdout_state} rc={latest_rc}"
+        )
+        if latest_regression_pass:
+            holdout_note += f" regression_pass={latest_regression_pass}"
+
+    states = {eval_state, gen_state, holdout_state}
+    if "regressed" in states:
+        overall = "regressed"
+    elif "improving" in states:
+        overall = "improving"
+    elif states <= {"unknown"}:
+        overall = "unknown"
+    elif "warming" in states:
+        overall = "warming"
+    else:
+        overall = "flat"
+
+    return (overall, eval_state, gen_state, holdout_state, eval_note, gen_note, holdout_note)
+
+
 def _eta_status_train_rate(status_path: Path, max_age_seconds: int, now_ts: float) -> float | None:
     if max_age_seconds <= 0 or not status_path.exists():
         return None
@@ -443,7 +682,9 @@ def _latest_supervisor_gate(supervisor_state_dir: Path) -> str:
 def _manifest_input_coverage(shards_root: Path) -> tuple[int, int, int]:
     if not shards_root.exists():
         return (0, 0, 0)
-    manifests = sorted(shards_root.rglob("manifest.json"))
+    manifests = list(shards_root.rglob("manifest.json"))
+    manifests.extend(shards_root.rglob("manifest.offloaded.json"))
+    manifests = sorted(manifests)
     file_counts: dict[str, int] = {}
     per_manifest: list[set[str]] = []
     for manifest_path in manifests:
@@ -532,6 +773,24 @@ def _offload_eligibility(
     max_offloadable = max(0, len(batch_names) - max(0, min_active_manifests))
     effective_eligible = min(raw_eligible, max_offloadable)
     return (effective_eligible, raw_eligible, max_offloadable, trained_registry_present)
+
+
+def _default_offload_trained_file(
+    supervisor_state_dir: Path,
+    configured_path: str,
+) -> Path:
+    if configured_path:
+        return Path(configured_path)
+    primary = supervisor_state_dir / "trained_batch_names.txt"
+    if primary.exists():
+        return primary
+    phase1 = Path("artifacts/reports/train_supervisor_phase1_talk/trained_batch_names.txt")
+    if phase1.exists():
+        return phase1
+    standard = Path("artifacts/reports/train_supervisor_350bt/trained_batch_names.txt")
+    if standard.exists():
+        return standard
+    return primary
 
 
 def _cpu_snapshot() -> tuple[int, int]:
@@ -693,6 +952,14 @@ def _task_status(pattern: str) -> tuple[int, list[str]]:
     return len(root_pids), rows
 
 
+def _stage_loop_uses_stage_copy() -> bool:
+    rc, text = _run_capture(["pgrep", "-af", r"fineweb_stage_shard_loop\.sh"], timeout=5)
+    if rc != 0 or not text:
+        return True
+    # New direct Ceph mode is default unless --enable-stage-copy is present.
+    return any("--enable-stage-copy" in line for line in text.splitlines())
+
+
 def _stop_reason(
     task_name: str,
     *,
@@ -707,6 +974,7 @@ def _stop_reason(
     task_counts: dict[str, int],
     offload_eligible_batches: int,
     trained_registry_present: bool,
+    stage_copy_enabled: bool,
 ) -> str:
     if task_name == "hf-watchdog":
         if warm_parquet >= expected_parquet_files:
@@ -724,12 +992,6 @@ def _stop_reason(
         if task_counts.get("download-worker", 0) > 0 or task_counts.get("hf-watchdog", 0) > 0:
             return "managed by resumable worker/watchdog"
         return "not started"
-    if task_name == "prefetch-worker":
-        if coverage_complete:
-            return "coverage complete"
-        if task_counts.get("stage-loop", 0) > 0:
-            return "staging handled by stage-loop"
-        return "not started"
     if task_name == "stage-watchdog":
         if coverage_complete:
             return "coverage complete"
@@ -746,10 +1008,12 @@ def _stop_reason(
         if coverage_complete:
             return "all expected parquet processed"
         if task_counts.get("stage-loop", 0) > 0:
-            if hot_parquet <= 0:
+            if stage_copy_enabled and hot_parquet <= 0:
                 if hot_incomplete > 0:
                     return "finalizing staged parquet copies"
                 return "waiting for staged hot parquet"
+            if not stage_copy_enabled:
+                return "idle between direct-source shard batches"
             return "idle between shard batches"
         return "not started"
     if task_name == "shard-verify":
@@ -823,6 +1087,55 @@ def _eta(remaining: float | None, rate_per_sec: float | None) -> str:
     return f"{mins}m"
 
 
+def _confidence_score(level: str) -> float:
+    if level == "high":
+        return 1.0
+    if level == "medium":
+        return 0.65
+    return 0.30
+
+
+def _status_confidence(
+    *,
+    manifest_overlap_inputs: int,
+    manifest_unique_inputs: int,
+    expected_parquet_files: int,
+    coverage_pps: float | None,
+    train_sps: float | None,
+    trainer_running: bool,
+    quality_state: str,
+) -> tuple[str, str, str, float]:
+    if manifest_unique_inputs <= 0:
+        coverage_level = "low"
+    elif manifest_overlap_inputs == 0 and coverage_pps is not None and coverage_pps > 0:
+        coverage_level = "high"
+    elif manifest_overlap_inputs <= max(2, expected_parquet_files // 200):
+        coverage_level = "medium"
+    else:
+        coverage_level = "low"
+
+    if train_sps is not None and train_sps > 0:
+        train_level = "high"
+    elif trainer_running:
+        train_level = "medium"
+    else:
+        train_level = "low"
+
+    if quality_state in {"improving", "flat"}:
+        quality_level = "high"
+    elif quality_state in {"warming", "unknown"}:
+        quality_level = "medium"
+    else:
+        quality_level = "low"
+
+    overall = (
+        _confidence_score(coverage_level)
+        + _confidence_score(train_level)
+        + _confidence_score(quality_level)
+    ) / 3.0
+    return (coverage_level, train_level, quality_level, overall)
+
+
 def _render(
     args: argparse.Namespace,
     state: SampleState,
@@ -837,7 +1150,7 @@ def _render(
     shards_root = Path(args.shards_root)
     stage_state_dir = Path(args.stage_state_dir)
     stage_state = stage_state_dir / "processed_parquet_files.txt"
-    sup_dir = Path(args.supervisor_state_dir)
+    sup_dir = _resolve_supervisor_state_dir(args.supervisor_state_dir)
 
     warm_parquet = _count_find(warm_dir, "*.parquet")
     warm_incomplete = _count_find(warm_dir, "*.incomplete")
@@ -854,11 +1167,7 @@ def _render(
     )
     processed_parquet = _count_nonempty_lines(stage_state)
     trained_batch_count = _count_nonempty_lines(sup_dir / "trained_batch_names.txt")
-    offload_trained_file = (
-        Path(args.offload_trained_batches_file)
-        if args.offload_trained_batches_file
-        else (sup_dir / "trained_batch_names.txt")
-    )
+    offload_trained_file = _default_offload_trained_file(sup_dir, args.offload_trained_batches_file)
     (
         offload_eligible_batches,
         offload_eligible_raw,
@@ -874,6 +1183,15 @@ def _render(
     train_target_step = _effective_train_target_step(args.train_target_step, sup_dir, train_step)
     supervisor_gate = _latest_supervisor_gate(sup_dir)
     gen_rc, gen_pass_rate, gen_regression_pass = _latest_generation_summary(sup_dir)
+    (
+        quality_state,
+        eval_quality_state,
+        gen_quality_state,
+        holdout_quality_state,
+        eval_quality_note,
+        gen_quality_note,
+        holdout_quality_note,
+    ) = _quality_heartbeat(sup_dir)
 
     dt = (now - state.ts) if state.ts is not None else None
     download_bps = _rate(warm_bytes, state.warm_bytes, dt)
@@ -974,7 +1292,6 @@ def _render(
     tasks = [
         ("hf-watchdog", r"hf_download_watchdog\.sh"),
         ("download-worker", r"hf_download_resumable\.sh"),
-        ("prefetch-worker", r"fineweb_prefetch_hot_queue\.sh"),
         ("stage-watchdog", r"fineweb_stage_shard_watchdog\.sh"),
         ("hf-download", r"\.venv/bin/hf download HuggingFaceFW/fineweb"),
         ("stage-loop", r"fineweb_stage_shard_loop\.sh"),
@@ -983,7 +1300,7 @@ def _render(
         ("train-supervisor", r"bash scripts/train_supervisor_rtx5070_350bt\.sh"),
         ("trainer", r"llm\.cli train"),
         ("eval-runner", r"eval_checkpoint_prompts\.py"),
-        ("generation-gate", r"eval_checkpoint_prompts\.py .*generation_smoke_suite_v1\.json"),
+        ("generation-gate", r"eval_checkpoint_prompts\.py .*configs/eval/generation_[^ ]+\.json"),
         ("shard-offload", r"scripts/offload_shard_bins_to_warm\.py"),
         ("zim-offload", r"zim_offload_worker\.sh"),
     ]
@@ -997,6 +1314,7 @@ def _render(
     task_lines: list[str] = []
     task_counts: dict[str, int] = {}
     task_rows: dict[str, list[str]] = {}
+    stage_copy_enabled = _stage_loop_uses_stage_copy()
     for name, pattern in tasks:
         count, rows = _task_status(pattern)
         task_counts[name] = count
@@ -1017,12 +1335,28 @@ def _render(
                 task_counts=task_counts,
                 offload_eligible_batches=offload_eligible_batches,
                 trained_registry_present=offload_registry_present,
+                stage_copy_enabled=stage_copy_enabled,
             )
             task_lines.append(f"{name:16} STOP | {reason}")
             continue
         rows = task_rows.get(name, [])
         summary = rows[0] if rows else "running"
         task_lines.append(f"{name:16} RUN x{count} | {summary}")
+
+    (
+        coverage_confidence,
+        train_confidence,
+        quality_confidence,
+        overall_confidence,
+    ) = _status_confidence(
+        manifest_overlap_inputs=manifest_overlap_inputs,
+        manifest_unique_inputs=manifest_unique_inputs,
+        expected_parquet_files=int(args.expected_parquet_files),
+        coverage_pps=coverage_pps,
+        train_sps=train_sps,
+        trainer_running=(task_counts.get("trainer", 0) > 0),
+        quality_state=quality_state,
+    )
 
     rem_bytes = max(0, int(args.expected_bytes) - warm_bytes)
     rem_files = max(0, int(args.expected_parquet_files) - warm_parquet)
@@ -1067,6 +1401,12 @@ def _render(
         alerts.append(
             f"trainer step stalled for {trainer_stall_seconds}s "
             f"(threshold={args.trainer_stall_alert_seconds}s)"
+        )
+    if quality_state == "regressed":
+        alerts.append("quality heartbeat regressed; inspect eval/generation trend deltas")
+    if overall_confidence < 0.55:
+        alerts.append(
+            "status confidence is low; verify coverage overlap, train step rate, and quality gates"
         )
     if active_symlink_manifests > 0:
         alerts.append(
@@ -1169,6 +1509,16 @@ def _render(
     lines.append(
         f"  GenGate:  latest_rc={gen_rc} latest_pass_rate={gen_pass_rate} "
         f"latest_regression_pass={gen_regression_pass}"
+    )
+    lines.append(
+        f"  Quality:  heartbeat={quality_state} eval={eval_quality_state} gen={gen_quality_state} holdout={holdout_quality_state}"
+    )
+    lines.append(
+        f"  QualityDetail: {eval_quality_note} | {gen_quality_note} | {holdout_quality_note}"
+    )
+    lines.append(
+        f"  Confidence: coverage={coverage_confidence} train_eta={train_confidence} "
+        f"quality={quality_confidence} overall={overall_confidence:.2f}"
     )
 
     lines.append("")

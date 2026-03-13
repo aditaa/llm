@@ -1,0 +1,12 @@
+[Unit]
+Description=LLM Checkpoint Step Offload Schedule
+
+[Timer]
+OnBootSec=5m
+OnUnitActiveSec=10m
+AccuracySec=1m
+Persistent=true
+Unit=llm-checkpoint-step-offload.service
+
+[Install]
+WantedBy=timers.target

@@ -43,7 +43,7 @@ bash scripts/bootstrap_dev.sh
 ```bash
 make setup-infer # install inference/deploy dependencies
 make install-systemd-services # install/reload long-run systemd units
-make install-user-systemd-services # install/reload user-level systemd units (no sudo)
+make install-user-systemd-services # install/reload user-level systemd units (no sudo; includes shard/checkpoint timers)
 make test        # run unit tests
 make lint        # run Ruff checks
 make format      # run Black formatter
@@ -64,12 +64,15 @@ make pull-hf-rows # print Hugging Face rows API pull helper usage
 make fineweb-parquet-to-shards # print direct FineWeb parquet->token-shards usage
 make fineweb-manifest-dedupe # print overlap-manifest dedupe helper usage
 make stage-fineweb-from-warm # print warm->hot FineWeb chunk staging usage
-make fineweb-prefetch-hot-queue # print hot-queue prefetch worker usage
 make fineweb-revalidate-bad-parquet # print bad parquet revalidate/restage usage
+make reconcile-offloaded-manifests # print offloaded-manifest reconcile usage
+make shard-offload-cycle # print safe reconcile->offload->reconcile usage
 make offload-shard-bins-warm # print shard .bin offload-to-warm usage
+make hot-shard-warmup # print active-shard warm->hot hydration usage
 make fineweb-stage-shard-loop # print rolling stage->shard->verify->sync->purge usage
 make fineweb-stage-shard-watchdog # print auto-restart watchdog usage for stage/shard loop
 make lr-sweep-350bt # print RTX 5070 LR sweep usage for staged 350BT shards
+make benchmark-rtx5070 # print short context/batch throughput benchmark usage
 make train-350bt-v2 # print 350BT long-run launcher usage
 make train-350bt-ctx1024 # print long-context continuation launcher usage
 make train-supervisor-350bt # print auto-resume trainer supervisor usage
@@ -78,11 +81,13 @@ make pipeline-eta # print combined download/shard/train ETA reporter usage
 make pipeline-live # print live terminal pipeline dashboard usage
 make shard-corpus-batch # print shared-tokenizer batch sharding usage
 make hf-download-resumable # print self-healing HF resume-download worker usage
+make hf-download-fineweb-edu-full # print simple full FineWeb-Edu sync usage
 make hf-download-watchdog # print auto-restart wrapper for stalled/exited HF downloads
 make sync-warm   # sync raw/training data + artifacts to warm storage
 make hydrate-warm # hydrate hot workspace from warm storage
 make offload-zim # continuously move raw ZIMs hot -> warm
 make checkpoint-offload-prune # sync checkpoints to warm and prune older local runs
+make checkpoint-step-offload # offload older ckpt_step_*.pt while keeping newest local resume steps
 make set-swappiness # print vm.swappiness tuning usage (root)
 make hf-prepare-publish # print HF bundle/publish usage
 make hf-download-model # print full HF model download usage
@@ -221,6 +226,19 @@ Notes:
 - Keep 350BT parquet on warm storage and stage bounded chunks to hot storage before sharding.
 - For unattended runs, wrap with `scripts/hf_download_watchdog.sh` to auto-restart on stalls.
 
+3ab. Simple full FineWeb-Edu sync script (direct to Ceph path):
+```bash
+# on the destination server
+cd /path/to/llm-repo
+export HF_TOKEN=hf_xxx   # optional but recommended
+bash scripts/sync_fineweb_edu_full.sh /mnt/pve/cephfs/llm/data/fineweb/fineweb-edu-full
+```
+Notes:
+- Downloads `HuggingFaceFW/fineweb-edu` parquet files (`data/*/*.parquet`).
+- Safe to rerun; resumes partial files automatically.
+- Override worker/retry behavior with env vars:
+  `MAX_WORKERS`, `ATTEMPT_TIMEOUT_SECONDS`, `RETRY_DELAY_SECONDS`, `MAX_RETRIES`.
+
 3aaa. Optional watchdog wrapper for stalled/exited downloads:
 ```bash
 bash scripts/hf_download_watchdog.sh \
@@ -242,7 +260,7 @@ bash scripts/hf_download_watchdog.sh \
 Use `--exit-on-complete` with expected file and/or byte targets so the watchdog exits once
 download is complete (instead of looping forever and relaunching workers).
 
-3ab. Stage FineWeb chunks from warm to hot as needed:
+3ab. (Optional legacy) Stage FineWeb chunks from warm to hot:
 ```bash
 bash scripts/stage_fineweb_from_warm.sh --max-files 4 --max-gib 8 --copy-jobs 2
 ```
@@ -252,13 +270,9 @@ Use `--min-free-gib <N>` to keep a floor of free space on hot storage while stag
 The staging script now copies into `*.parquet.incomplete` first and renames atomically,
 so sharding/preflight never reads partially written parquet files.
 
-3ac. Run rolling warm->hot staging + sharding loop (recommended for 350BT on limited hot disk):
+3ac. Run direct-from-Ceph sharding loop (recommended baseline):
 ```bash
 bash scripts/fineweb_stage_shard_loop.sh \
-  --hot-queue-min-files 18 \
-  --stage-max-files 12 \
-  --stage-copy-jobs 2 \
-  --stage-min-free-gib 80 \
   --process-max-files 12 \
   --shard-jobs 2 \
   --auto-tune-shard-jobs \
@@ -269,12 +283,16 @@ bash scripts/fineweb_stage_shard_loop.sh \
   --shard-size-tokens 20000000 \
   --sync-background \
   --sync-max-inflight 2 \
+  --hot-max-used-pct 95 \
   --sleep-seconds 60 \
   --shard-min-batch-size 512
 ```
-This loop stages bounded parquet files to hot storage, builds verified shard batches under
-`data/shards_global/fineweb-global-bpe-v1/`, syncs those batches back to warm storage,
-and purges processed hot parquet files.
+This loop reads parquet directly from Ceph (`/mnt/ceph/llm/data/...` by default),
+builds verified shard batches under `data/shards_global/fineweb-global-bpe-v1/`,
+and syncs each successful batch back to warm storage immediately.
+It keeps sharding moving while automatically offloading older already-trained shard batches
+when hot-disk usage exceeds `--hot-max-used-pct` (default 80), rather than pausing sharding.
+Use `--enable-stage-copy` only if you explicitly want warm->hot parquet staging.
 Before sharding each batch, the loop now runs a parquet preflight check (row groups/rows/field),
 quarantines failing hot files, and records their basenames in
 `artifacts/reports/fineweb_stage_shard_loop/bad_parquet_files.txt` so they are skipped in future staging.
@@ -283,25 +301,31 @@ builds a combined stage skip list (`processed + bad`), and removes already-known
 so restarted loops continue forward instead of re-staging the earliest parquet files.
 It also reconciles `bad_parquet_files.txt` against warm-source parquet validity on startup, so
 transient hot-copy failures do not permanently blacklist valid warm files.
-`--hot-queue-min-files` keeps a small parquet queue staged locally so shard building is less likely to idle on copy waits.
-`--stage-copy-jobs` controls warm->hot copy parallelism for staging throughput.
-`--stage-min-free-gib` prevents staging from filling hot disk below a safety floor.
+In direct-source mode, `--hot-queue-min-files`/`--stage-*` options are inactive unless
+`--enable-stage-copy` is set.
 `--auto-tune-shard-jobs` adapts `--shard-jobs` (and matching tokenizer threads) from loadavg + batch runtime.
 `--sync-background` overlaps warm-storage sync with the next shard batch to reduce idle gaps.
 `--shard-size-tokens 20000000` reduces shard file-count overhead vs the old 5M-token default.
 If a shard build fails with OOM-like errors, the loop retries automatically with a smaller batch size.
 Batch guardrails now require valid report/manifest + non-empty shard outputs before files are marked
 processed or purged from hot storage.
-If a shard build fails with non-OOM errors (for example parquet decode errors), that job's input files
-are quarantined as bad and the loop continues with remaining files.
+If a shard build fails with non-OOM corruption errors (for example parquet decode errors),
+the loop can attempt a one-time warm->hot restage retry in stage-copy mode.
+If retry still fails, inputs are quarantined as bad and the loop continues with remaining files.
+Additionally, newly staged parquet files are deep-validated before shard build
+(configurable via `--deep-validate-max-batches` and `--deep-validate-batch-size`)
+to catch decode corruption earlier and quarantine files sooner.
+Use `--parquet-validate-timeout-seconds` to cap validation calls and avoid hangs on a single Ceph file.
 Guardrail checks are implemented in `src/llm/fineweb_guardrails.py` and are unit-tested.
 For 20-core hosts, `--shard-jobs 2 --tokenizer-threads 10 --encode-batch-size 1024` is the
 current high-throughput profile.
+After full coverage (`--expected-unique-input-files`, default `510`), the loop now
+switches into training-focused mode and pauses additional stage/shard churn.
 
 3ad. Optional watchdog for stage/shard loop auto-restart on exit/stall:
 ```bash
 bash scripts/fineweb_stage_shard_watchdog.sh \
-  --worker-args "--hot-queue-min-files 18 --stage-max-files 12 --stage-copy-jobs 2 --process-max-files 12 --shard-jobs 2 --tokenizer-threads 10 --encode-batch-size 1024 --sleep-seconds 60 --shard-min-batch-size 512" \
+  --worker-args "--process-max-files 12 --shard-jobs 2 --tokenizer-threads 10 --encode-batch-size 1024 --hot-max-used-pct 95 --sleep-seconds 60 --shard-min-batch-size 512" \
   --check-interval-seconds 120 \
   --stall-seconds 5400
 ```
@@ -312,6 +336,8 @@ watchdog restarts do not leave direct loop runs unmanaged. Use `--no-adopt-exist
 to force launching a fresh worker process.
 Watchdog progress snapshots now include hot `.incomplete` file count/bytes, so long warm->hot
 copy phases are treated as active progress (not false stalls).
+Watchdog now also suppresses stall restarts after coverage completion
+(`--expected-unique-input-files`).
 
 3ad. Build tokenizer + token shards directly from FineWeb parquet:
 ```bash
@@ -408,6 +434,8 @@ Use a global tokenizer + `shard-corpus-batch` output root for multi-dataset runs
 For higher sustained GPU utilization on CUDA, use `--precision auto` and keep
 validation less frequent (`--eval-interval 500 --eval-steps 10`).
 If utilization is still bursty on smaller models, test `--compile-model`.
+`--compile-model` now warms the compiled graph and safely falls back to eager mode on
+backend/warmup failures; use `--compile-strict` to hard-fail instead.
 Training now supports:
 - warmup + cosine LR schedule (`--lr-schedule`, `--lr-warmup-steps`, `--lr-min-ratio`)
 - gradient accumulation (`--grad-accum-steps`)
@@ -416,6 +444,10 @@ Training now supports:
 - checkpoint retention pruning (`--checkpoint-keep-last`, `--checkpoint-keep-every`)
 - optional EMA weights (`--ema-decay`, `--ema-update-every`, `--ema-start-step`)
 - optional weights-only export (`--export-safetensors`)
+- shard sampler FD guardrail (`--sampler-max-open-shards`) to avoid too-many-open-files
+- balanced shuffled shard cycling (`--sampler-strategy balanced`) for even shard usage
+- minimum full-pass gate (`--sampler-min-full-passes <X>`) to enforce at-least-X passes
+- sampled shard trace export (`--sampled-shards-trace`) for per-chunk true coverage accounting
 
 9. Generate text from a checkpoint:
 ```bash
@@ -496,9 +528,6 @@ bash scripts/train_rtx5070_fineweb_350bt_bpe_v2_ctx1024.sh
 ```
 This path resumes from the base run and uses `--allow-context-extension`.
 
-Optional text-first path still exists for inspection-heavy runs:
-`parquet_to_corpus -> clean-corpus-batch -> train-tokenizer-global -> shard-corpus-batch`.
-
 ### Incremental FineWeb Adds While Training
 You can start training on a subset, then add new parquet files with the same tokenizer and resume:
 
@@ -543,15 +572,15 @@ On this 20-core host, default FineWeb shard splitting should use `15` parallel s
 ## RTX 5070 Tuned Profiles
 - Tuned profile docs: `docs/RTX5070_TUNING.md`
 - Saved JSON profiles:
-  - `configs/train/rtx5070/fineweb_global_bpe_v1_big.json` (recommended, BPE)
   - `configs/train/rtx5070/fineweb_350bt_bpe_v2_longrun.json` (350BT long-run preset)
-- Launch tuned big profile:
-```bash
-bash scripts/train_rtx5070_fineweb_bpe_v1_big.sh
-```
+-  `configs/train/rtx5070/fineweb_350bt_bpe_v2_ctx1024_stage.json` (ctx1024 continuation preset)
 - 350BT-first LR sweep (ctx 512, LR `2e-4..4e-4`):
 ```bash
 bash scripts/lr_sweep_rtx5070_fineweb_350bt_ctx512.sh
+```
+- Reproducible context/batch benchmark sweep (tok/s + GPU memory/util summary):
+```bash
+bash scripts/benchmark_rtx5070_context_profiles.sh --max-steps 1200 --compile-model
 ```
 - 350BT-first long run launcher:
 ```bash
@@ -565,6 +594,8 @@ bash scripts/train_supervisor_rtx5070_350bt.sh \
   --batch-size 12 \
   --target-effective-batch 24 \
   --min-unique-input-files 510 \
+  --sampler-strategy balanced \
+  --sampler-min-full-passes 1 \
   --min-batch-size 6 \
   --max-batch-size 20 \
   --batch-step 2 \
@@ -576,18 +607,29 @@ bash scripts/train_supervisor_rtx5070_350bt.sh \
 bash scripts/train_supervisor_phase1_english_talk.sh
 ```
 This uses `configs/eval/english_talk_suite_v1.json`,
-`configs/eval/generation_talk_smoke_v1.json`, and
-`configs/eval/promotion_policy_talk_v1.json`.
+`configs/eval/generation_talk_quality_v2.json`, and
+`configs/eval/promotion_policy_talk_recovery_v2.json`.
+It also runs a fixed holdout gate using
+`configs/eval/english_talk_holdout_suite_v1.json`.
 It also uses a dedicated state dir (`artifacts/reports/train_supervisor_phase1_talk`) and
 lower-variance generation-gate settings (`--generation-temperature 0.2 --generation-top-k 1`).
+Phase-1 launcher now defaults to recovery-friendly guardrails:
+`--lr-schedule constant`, `--generation-fail-below-pass-rate 0.35`,
+`--holdout-fail-below-pass-rate 0.35`, and `--promotion-min-quality-streak 2`.
 Successful chunks update `artifacts/reports/train_supervisor_phase1_talk/trained_batch_names.txt`,
 which can be used to gate shard offload so only already-trained batches move to warm storage.
 On each supervisor loop, hot-only manifest guard now runs automatically and disables any
 active manifest that references symlinked shard bins.
+Supervisor runs hot-shard warmup before each chunk and also a background warmup loop
+during chunk training by default, hydrating missing active shard bins from Ceph into
+hot storage (`scripts/hot_shard_warmup.py`) while GPU work is running.
 When monitoring this profile, point status tools at that state dir:
 `PYTHONPATH=src .venv/bin/python scripts/pipeline_live_view.py --supervisor-state-dir artifacts/reports/train_supervisor_phase1_talk`
 and
 `PYTHONPATH=src .venv/bin/python scripts/pipeline_eta_report.py --supervisor-state-dir artifacts/reports/train_supervisor_phase1_talk`.
+If `--supervisor-state-dir` is omitted, both tools now auto-detect the newest existing
+state dir between `artifacts/reports/train_supervisor_phase1_talk` and
+`artifacts/reports/train_supervisor_350bt`.
 For continuous 350BT ingestion/training, keep exactly one stage watchdog and one train supervisor running.
 Avoid launching one-off `llm.cli train --max-steps ...` jobs in parallel with the supervisor.
 Stage watchdog now performs stale worker cleanup before relaunch, so restarted controllers
@@ -599,6 +641,14 @@ Use `--no-dedupe-overlap-manifests` to disable, or `--dedupe-dry-run` to audit w
 Use `--dedupe-report-keep <N>` to cap saved dedupe report/log artifacts during long waits.
 Use `--min-unique-input-files <N>` to hold training until enough unique parquet inputs are represented in manifests.
 Use `--min-train-tokens <N>` to gate startup by total train-token coverage instead of raw file count.
+Use `--lr-schedule constant` in supervisor for late-step recovery runs where cosine decay is too aggressive.
+Use `--sampler-strategy balanced --sampler-min-full-passes <X>` to keep shard exposure
+mixed and evenly distributed while guaranteeing minimum per-shard pass coverage each chunk.
+Tune Ceph warm->hot hydration with `--hot-shard-warmup-workers <N>` and
+`--hot-shard-warmup-max-files <N>` (or disable with `--no-hot-shard-warmup`).
+Tune concurrent prefetch with `--hot-shard-warmup-background-interval-seconds <N>`,
+`--hot-shard-warmup-background-max-files <N>`, or disable with
+`--no-hot-shard-warmup-background`.
 Supervisor enforces a singleton lock at
 `artifacts/reports/train_supervisor_350bt/supervisor.lock`.
 Add `--no-train-fail-on-eval-regression` if you want chunk runs to continue even when
@@ -608,10 +658,18 @@ Supervisor resume guardrails now validate `last.pt`/`ckpt_step_*.pt` before resu
 quarantine invalid checkpoint files automatically, then continue from the newest valid one.
 When post-chunk eval passes promotion logic (or beats prior pass-rate baseline), supervisor
 also exports `best.pt`, `best_eval_report.json`, and safetensors best aliases.
+Promotion discipline supports stricter gating by requiring eval policy promotion,
+generation pass, holdout pass, and a minimum consecutive quality streak before best promotion.
+Supervisor now updates `trained_batch_names.txt` from sampled shard traces produced by
+`llm.cli train --sampled-shards-trace ...` (actual touched batches), not full manifest lists.
+Supervisor can also auto-rollback to `best.pt` after sustained quality regressions; tune with
+`--quality-rollback-streak <N>` and `--quality-rollback-cooldown-steps <N>`
+(`0` streak disables rollback).
 Supervisor outputs:
 - `artifacts/reports/train_supervisor_350bt/train_trend.tsv` (per-chunk train telemetry)
 - `artifacts/reports/train_supervisor_350bt/eval_trend.tsv` (post-chunk eval trend, including regression/promotion columns)
 - `artifacts/reports/train_supervisor_350bt/generation_trend.tsv` (scheduled generation-gate trend, with regression columns)
+- `artifacts/reports/train_supervisor_350bt/holdout_trend.tsv` (fixed holdout gate trend)
 - `artifacts/reports/train_supervisor_350bt/eval_dashboard.html` (rendered trend dashboard)
 - `artifacts/reports/train_supervisor_350bt/eval_dashboard_summary.json` (dashboard summary JSON)
 The supervisor now auto-selects the latest successful eval baseline from the same suite
@@ -628,10 +686,13 @@ Outputs:
 - `artifacts/reports/pipeline_status.txt`
 Includes embedded snapshots of `top -b -n1`, `free -h`, `nvidia-smi`, and `df -h`.
 Also reports manifest coverage metrics (`manifest_unique_input_files`, overlap counts, `coverage_complete`).
+Coverage metrics now include both active and offloaded manifests, so progress does not drop after safe offload.
 Also reports hot-manifest metrics (`active_manifests`, `offloaded_manifests`,
 `active_manifests_with_symlink_bins`, `trained_batch_names_count`).
 Also reports `trainer_stall_seconds` and shard offload eligibility
 (`offload_eligible_batches`, raw/capped counts, trained-registry presence).
+Also reports `quality_heartbeat` (eval/gen/holdout trend state) and `status_confidence`
+(`coverage`, `train_eta`, `quality`, `overall_score`).
 Also includes per-task `RUN/STOP` state with stop reasons (for example `download complete`,
 `staging handled by stage-loop`, `idle between chunks/eval`, or gate waits).
 Task process counts are root-deduped (controller processes), so wrapper/child shells do not inflate `RUN xN`.
@@ -649,6 +710,8 @@ This is a live-only monitor (no report/status files written) and includes:
 - manifest coverage status (`unique/510`, overlap inputs/manifests, coverage rate + ETA, completion flag)
 - supervisor gate status (for example waiting on `min_unique_input_files`)
 - training row includes `stall=<seconds since last step progress>` for direct trainer stall visibility
+- quality heartbeat line (`improving`/`flat`/`regressed`/`warming`) based on latest eval + generation trends
+- confidence line (`coverage`, `train_eta`, `quality`, `overall`) to quickly judge status reliability
 - running project task states with pid/runtime/cpu/mem summaries
 - explicit stop reasons for tasks that are not running
 - alert rows for stage-controller health and shard-manifest stall conditions
@@ -695,26 +758,17 @@ Templates:
 - `deploy/systemd/llm-vm-swappiness.service`
 - user equivalents under `deploy/systemd/user/`
 
-Note: prefetch is optional when stage-loop already uses hot-queue staging flags
-(`--hot-queue-min-files`, `--stage-max-files`, `--stage-copy-jobs`, `--stage-min-free-gib`).
-Install/enable the prefetch unit only when you explicitly want separate queue prefetching:
-
-```bash
-bash scripts/install_systemd_services.sh --install-watchdog --install-prefetch
-```
-
-If you run prefetch with stage-loop, keep auto skip enabled so it respects
-processed/bad parquet lists from `artifacts/reports/fineweb_stage_shard_loop/`.
-Prefetch now forwards `--min-free-gib` to `stage_fineweb_from_warm.sh`, so
-stage-loop and prefetch apply the same hot-disk free-space guardrail.
-
 Revalidate and optionally restore bad parquet files:
 ```bash
 PYTHONPATH=src .venv/bin/python scripts/revalidate_bad_parquet.py \
   --restage-valid \
+  --max-entries 200 \
+  --workers 8 \
   --max-restage-files 15 \
   --min-free-gib 80
 ```
+Use `--max-entries` for incremental backlog cleanup; unprocessed entries stay on the bad list.
+Use `--workers` to parallelize warm parquet validation on large bad-file backlogs.
 This also prunes `artifacts/reports/fineweb_stage_shard_loop/quarantine_bad_parquet` by default:
 - removes quarantine copies for files no longer marked bad
 - for still-bad files, keeps only the newest copy per basename (`--quarantine-keep-per-name 1`)
@@ -724,30 +778,66 @@ Offload older shard binaries to warm storage while keeping training hot-only:
 ```bash
 PYTHONPATH=src .venv/bin/python scripts/offload_shard_bins_to_warm.py \
   --keep-local-batches 24 \
-  --target-free-gib 180 \
+  --target-free-gib 47 \
   --max-batches 40 \
   --disable-offloaded-manifests \
-  --require-trained-batches-file artifacts/reports/train_supervisor_phase1_talk/trained_batch_names.txt \
-  --min-active-manifests 48
+  --require-trained-batches-file artifacts/reports/train_supervisor_phase1_talk/trained_batch_names.txt,artifacts/reports/train_supervisor_350bt/trained_batch_names.txt \
+  --skip-if-trained-file-missing \
+  --min-manifest-unique-input-files 510 \
+  --min-active-manifests 48 \
+  --min-active-train-tokens 40000000000
 ```
 This replaces older local shard `.bin` files with warm-storage symlinks and renames
 their `manifest.json` to `manifest.offloaded.json`, so `llm.cli train` only sees
 local hot-disk manifests while disk usage stays bounded.
 The `--require-trained-batches-file` guard prevents offloading any batch that has
 not yet been included in a successful supervisor training chunk.
-Use `--min-active-manifests` (and optional `--min-active-train-tokens`) as an offload
+You can pass a comma-separated fallback list of trained-batch registry files
+(for example phase1 + standard state dirs).
+Use `--min-manifest-unique-input-files` to block offload until dataset coverage is complete.
+Use `--min-active-manifests` and `--min-active-train-tokens` as offload
 safety floor so hot-local training coverage never drops below your target.
+
+Before offloading, reconcile previously offloaded manifests and re-enable any
+batch not proven trained (plus optional hot rehydrate of active symlink bins):
+```bash
+PYTHONPATH=src .venv/bin/python scripts/reconcile_offloaded_manifests.py \
+  --shards-root data/shards_global/fineweb-global-bpe-v1 \
+  --trained-batches-file artifacts/reports/train_supervisor_phase1_talk/trained_batch_names.txt,artifacts/reports/train_supervisor_350bt/trained_batch_names.txt \
+  --skip-if-trained-file-missing \
+  --min-active-unique-input-files 240 \
+  --max-restore 4 \
+  --warm-shards-root /mnt/ceph/llm/data/shards_global/fineweb-global-bpe-v1 \
+  --rehydrate-restored-bins \
+  --rehydrate-active-symlink-bins
+```
+Use a realistic `--min-active-unique-input-files` floor for your hot-disk budget.
+On ~800-900 GiB hot disks, `240` is a practical rolling target.
+
+
+For timer automation, use the safe cycle wrapper
+(reconcile -> offload -> reconcile -> enforce-hot-manifests):
+```bash
+bash scripts/shard_offload_cycle.sh
+```
 
 Environment template:
 - `deploy/systemd/llm.env.example` (installed to `/etc/llm/llm.env`)
+- Service units now pass through `LLM_*_ARGS` only when set; if unset, the underlying
+  scripts use their built-in defaults.
 
 Recommended `LLM_STAGE_SHARD_LOOP_ARGS` baseline for 20-core hosts:
 ```bash
-LLM_STAGE_SHARD_LOOP_ARGS="--hot-queue-min-files 10 --stage-max-files 8 --stage-copy-jobs 4 --stage-min-free-gib 80 --process-max-files 15 --shard-jobs 2 --auto-tune-shard-jobs --auto-tune-min-shard-jobs 2 --auto-tune-max-shard-jobs 3 --auto-tune-low-load-pct 80 --auto-tune-high-load-pct 95 --auto-tune-min-batch-seconds 300 --tokenizer-threads 10 --encode-batch-size 1024 --shard-size-tokens 20000000 --sync-background --sync-max-inflight 2 --sleep-seconds 60 --shard-min-batch-size 512"
+LLM_STAGE_SHARD_LOOP_ARGS="--process-max-files 15 --shard-jobs 2 --auto-tune-shard-jobs --auto-tune-min-shard-jobs 2 --auto-tune-max-shard-jobs 3 --auto-tune-low-load-pct 80 --auto-tune-high-load-pct 95 --auto-tune-min-batch-seconds 300 --tokenizer-threads 10 --encode-batch-size 1024 --shard-size-tokens 20000000 --expected-unique-input-files 510 --coverage-complete-sleep-seconds 300 --sync-background --sync-max-inflight 2 --hot-max-used-pct 95 --offload-check-interval-seconds 120 --parquet-validate-timeout-seconds 180 --sleep-seconds 60 --shard-min-batch-size 512"
 ```
 Recommended stage watchdog wrapper:
 ```bash
-LLM_STAGE_SHARD_WATCHDOG_ARGS="--worker-args \"${LLM_STAGE_SHARD_LOOP_ARGS}\" --check-interval-seconds 120 --stall-seconds 5400 --watchdog-log-file artifacts/reports/fineweb_stage_shard_loop/watchdog.log"
+LLM_STAGE_SHARD_WATCHDOG_ARGS="--worker-args \"${LLM_STAGE_SHARD_LOOP_ARGS}\" --expected-unique-input-files 510 --check-interval-seconds 120 --stall-seconds 5400 --watchdog-log-file artifacts/reports/fineweb_stage_shard_loop/watchdog.log"
+```
+Recommended shard-offload cycle overrides:
+```bash
+LLM_SHARD_OFFLOAD_RECONCILE_ARGS="--shards-root data/shards_global/fineweb-global-bpe-v1 --trained-batches-file artifacts/reports/train_supervisor_phase1_talk/trained_batch_names.txt,artifacts/reports/train_supervisor_350bt/trained_batch_names.txt --skip-if-trained-file-missing --min-active-unique-input-files 240 --max-restore 4 --warm-shards-root /mnt/ceph/llm/data/shards_global/fineweb-global-bpe-v1 --rehydrate-restored-bins --rehydrate-active-symlink-bins"
+LLM_SHARD_OFFLOAD_ARGS="--shards-root data/shards_global/fineweb-global-bpe-v1 --warm-shards-root /mnt/ceph/llm/data/shards_global/fineweb-global-bpe-v1 --keep-local-batches 24 --target-free-gib 47 --max-batches 16 --disable-offloaded-manifests --require-trained-batches-file artifacts/reports/train_supervisor_phase1_talk/trained_batch_names.txt,artifacts/reports/train_supervisor_350bt/trained_batch_names.txt --skip-if-trained-file-missing --min-manifest-unique-input-files 510 --min-active-manifests 48 --min-active-train-tokens 40000000000"
 ```
 
 ## Inference Bundle Packaging
@@ -787,6 +877,18 @@ This now syncs training-critical inputs/outputs including:
 `data/raw_zim`, `data/fineweb`, `data/cleaned`, `data/extracted`,
 `data/shards`, `data/shards_global`, `artifacts/tokenizer`,
 `artifacts/checkpoints`, and `artifacts/reports`.
+- Pre-wipe safety checklist (before deleting/rebuilding hot disk contents):
+```bash
+git fetch --all --prune
+git status --short --branch
+git push
+bash scripts/sync_warm_storage.sh /mnt/ceph/llm/data
+stamp=$(date -u +%Y%m%dT%H%M%SZ)
+git ls-files --others --ignored --exclude-standard | sort \
+  > /mnt/ceph/llm/data/logs/git_untracked_all_${stamp}.txt
+```
+Wait for sync completion, then confirm `/mnt/ceph/llm/data/logs/last_sync_utc.txt`
+was updated in the current run window.
 - Periodic checkpoint offload + local prune:
 ```bash
 bash scripts/checkpoint_offload_prune.sh \
@@ -821,7 +923,7 @@ bash scripts/hydrate_from_warm_storage.sh /mnt/ceph/llm/data
 - Batch corpus sharding (`shard-corpus-batch`) with one shared tokenizer.
 - Baseline GPT training (`train`) with checkpoint save/resume.
   - Default architecture: RoPE + RMSNorm + SwiGLU (`gpt_rope_rmsnorm_swiglu_v1`).
-  - Includes AdamW no-decay param groups, warmup/cosine LR, and grad accumulation.
+  - Includes AdamW no-decay param groups, constant or warmup/cosine LR, and grad accumulation.
 - Checkpoint-based text generation (`generate`) with temperature/top-k sampling.
 - Optional safetensors export for deployment (`--export-safetensors`).
 - Unit tests for tokenizer round-trips and unknown token behavior.
@@ -829,7 +931,7 @@ bash scripts/hydrate_from_warm_storage.sh /mnt/ceph/llm/data
 ## Next Milestones
 1. Expand checkpoint eval suite and track regressions in CI.
 2. Add tokenizer-aware dataset manifests for long-running incremental FineWeb phases.
-3. Add larger-context training profiles and memory/throughput benchmarking.
+3. Raise context length beyond 1024 and benchmark memory/throughput tradeoffs.
 4. Add finetuning flows for classification and instruction datasets.
 
 ## References

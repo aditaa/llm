@@ -1,0 +1,91 @@
+{
+  "name": "english_talk_holdout_suite_v1",
+  "description": "Frozen holdout suite for phase-1 English conversation quality. Keep prompts stable across runs for promotion discipline.",
+  "cases": [
+    {
+      "id": "holdout_small_talk_weather",
+      "category": "conversation",
+      "prompt": "User: Good morning. It looks rainy today. Reply naturally in plain English.\nAssistant:",
+      "checks": {
+        "min_completion_chars": 40,
+        "max_url_count": 0,
+        "max_repeated_char_run": 8,
+        "max_non_ascii_ratio": 0.05
+      }
+    },
+    {
+      "id": "holdout_translation_guten_tag",
+      "category": "translation",
+      "prompt": "Translate to English: Guten Tag.",
+      "checks": {
+        "min_completion_chars": 4,
+        "expect_any": ["good day", "hello"],
+        "max_url_count": 0
+      }
+    },
+    {
+      "id": "holdout_instruction_polite_email",
+      "category": "instruction_following",
+      "prompt": "Write two short sentences asking a teacher for an extension on homework in polite English.",
+      "checks": {
+        "min_completion_chars": 70,
+        "expect_any": ["please", "extension", "homework"],
+        "max_url_count": 0,
+        "max_repeated_char_run": 8
+      }
+    },
+    {
+      "id": "holdout_factual_ocean",
+      "category": "factual_qa",
+      "prompt": "User: Which ocean is the largest on Earth?\nAssistant:",
+      "checks": {
+        "min_completion_chars": 7,
+        "expect_any": ["pacific"],
+        "max_url_count": 0
+      }
+    },
+    {
+      "id": "holdout_rephrase_simple",
+      "category": "paraphrase",
+      "prompt": "Rewrite this in simpler English: The conference was postponed due to severe weather conditions.",
+      "checks": {
+        "min_completion_chars": 45,
+        "expect_any": ["conference", "weather", "delayed", "postponed"],
+        "max_url_count": 0
+      }
+    },
+    {
+      "id": "holdout_supportive_reply",
+      "category": "conversation",
+      "prompt": "User: I am overwhelmed with work this week. Give a short supportive response.\nAssistant:",
+      "checks": {
+        "min_completion_chars": 45,
+        "expect_any": ["sorry", "break", "help", "plan"],
+        "max_url_count": 0,
+        "max_repeated_char_run": 8
+      }
+    },
+    {
+      "id": "holdout_clean_english_only",
+      "category": "clean_output",
+      "prompt": "Write two short natural-English sentences about learning to cook.",
+      "checks": {
+        "min_completion_chars": 60,
+        "reject_any": ["```", "def ", "class ", "import "],
+        "max_url_count": 0,
+        "max_non_ascii_ratio": 0.03
+      }
+    },
+    {
+      "id": "holdout_follow_up_question",
+      "category": "conversation",
+      "prompt": "User: I started reading more books this year. Respond positively and ask one follow-up question.\nAssistant:",
+      "checks": {
+        "min_completion_chars": 50,
+        "expect_any": ["?", "great", "nice", "what"],
+        "max_url_count": 0,
+        "max_repeated_char_run": 8
+      }
+    }
+  ]
+}

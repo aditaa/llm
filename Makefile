@@ -4,7 +4,7 @@ ifneq ("$(wildcard .venv/bin/python)","")
 PYTHON=.venv/bin/python
 endif
 
-.PHONY: setup-dev setup-train setup-infer doctor install-server-system install-systemd-services install-user-systemd-services test lint format typecheck smoke extract-zim train-tokenizer train-tokenizer-global corpus-quality-report clean-corpus-batch dataset-risk-report pull-hf-rows parquet-to-corpus fineweb-parquet-to-shards fineweb-manifest-dedupe stage-fineweb-from-warm fineweb-prefetch-hot-queue fineweb-revalidate-bad-parquet enforce-hot-manifests offload-shard-bins-warm fineweb-stage-shard-loop fineweb-stage-shard-watchdog lr-sweep-350bt train-350bt-v2 train-350bt-ctx1024 train-supervisor-350bt train-supervisor-phase1-talk pipeline-eta pipeline-live shard-corpus-batch verify-shards train generate average-checkpoints eval-checkpoint render-eval-dashboard package-inference-bundle sync-warm hydrate-warm offload-zim checkpoint-offload-prune set-swappiness hf-download-resumable hf-download-watchdog hf-prepare-publish hf-download-model serve-openai publish-wiki
+.PHONY: setup-dev setup-train setup-infer doctor install-server-system install-systemd-services install-user-systemd-services test lint format typecheck smoke extract-zim train-tokenizer train-tokenizer-global corpus-quality-report clean-corpus-batch dataset-risk-report pull-hf-rows fineweb-parquet-to-shards fineweb-manifest-dedupe stage-fineweb-from-warm fineweb-revalidate-bad-parquet enforce-hot-manifests reconcile-offloaded-manifests shard-offload-cycle offload-shard-bins-warm hot-shard-warmup fineweb-stage-shard-loop fineweb-stage-shard-watchdog lr-sweep-350bt benchmark-rtx5070 train-350bt-v2 train-350bt-ctx1024 train-supervisor-350bt train-supervisor-phase1-talk pipeline-eta pipeline-live shard-corpus-batch verify-shards train generate average-checkpoints eval-checkpoint render-eval-dashboard package-inference-bundle sync-warm hydrate-warm offload-zim checkpoint-offload-prune checkpoint-step-offload set-swappiness hf-download-resumable hf-download-fineweb-edu-full hf-download-watchdog hf-prepare-publish hf-download-model serve-openai publish-wiki
 
 setup-dev:
 	bash scripts/bootstrap_dev.sh
@@ -70,10 +70,6 @@ pull-hf-rows:
 	@echo "Usage:"
 	@echo "  python3 scripts/pull_hf_rows.py --dataset HuggingFaceFW/fineweb --config sample-350BT --split train --output /mnt/ceph/llm/data/extracted/fineweb_sample-350BT_rows100k.txt --max-rows 100000"
 
-parquet-to-corpus:
-	@echo "Usage:"
-	@echo "  python3 scripts/parquet_to_corpus.py --input-dir data/fineweb/sample-350BT --output-dir data/extracted/fineweb/sample-350BT --field text"
-
 fineweb-parquet-to-shards:
 	@echo "Usage:"
 	@echo "  PYTHONPATH=src $(PYTHON) scripts/fineweb_parquet_to_shards.py --input-dir data/fineweb/sample-350BT --output-dir data/shards_global/fineweb-global-bpe-v1 --tokenizer-out artifacts/tokenizer/fineweb-global-bpe-v1.json --bpe-vocab-size 32000 --field text"
@@ -87,21 +83,29 @@ stage-fineweb-from-warm:
 	@echo "Usage:"
 	@echo "  bash scripts/stage_fineweb_from_warm.sh --max-files 4 --max-gib 8 --copy-jobs 2"
 
-fineweb-prefetch-hot-queue:
-	@echo "Usage:"
-	@echo "  bash scripts/fineweb_prefetch_hot_queue.sh --queue-min-files 18 --stage-max-files 12 --sleep-seconds 30 --auto-skip-state-dir artifacts/reports/fineweb_stage_shard_loop"
-
 fineweb-revalidate-bad-parquet:
 	@echo "Usage:"
-	@echo "  PYTHONPATH=src $(PYTHON) scripts/revalidate_bad_parquet.py --restage-valid --max-restage-files 15 --min-free-gib 80"
+	@echo "  PYTHONPATH=src $(PYTHON) scripts/revalidate_bad_parquet.py --max-entries 200 --workers 8 --restage-valid --max-restage-files 15 --min-free-gib 80"
 
 enforce-hot-manifests:
 	@echo "Usage:"
 	@echo "  PYTHONPATH=src $(PYTHON) scripts/enforce_hot_only_manifests.py --shards-root data/shards_global/fineweb-global-bpe-v1"
 
+reconcile-offloaded-manifests:
+	@echo "Usage:"
+	@echo "  PYTHONPATH=src $(PYTHON) scripts/reconcile_offloaded_manifests.py --shards-root data/shards_global/fineweb-global-bpe-v1 --trained-batches-file artifacts/reports/train_supervisor_phase1_talk/trained_batch_names.txt,artifacts/reports/train_supervisor_350bt/trained_batch_names.txt --skip-if-trained-file-missing --min-active-unique-input-files 510"
+
+shard-offload-cycle:
+	@echo "Usage:"
+	@echo "  bash scripts/shard_offload_cycle.sh"
+
 offload-shard-bins-warm:
 	@echo "Usage:"
-	@echo "  PYTHONPATH=src $(PYTHON) scripts/offload_shard_bins_to_warm.py --keep-local-batches 24 --target-free-gib 180 --max-batches 40 --disable-offloaded-manifests --require-trained-batches-file artifacts/reports/train_supervisor_phase1_talk/trained_batch_names.txt --min-active-manifests 48"
+	@echo "  PYTHONPATH=src $(PYTHON) scripts/offload_shard_bins_to_warm.py --keep-local-batches 24 --target-free-gib 180 --max-batches 40 --disable-offloaded-manifests --require-trained-batches-file artifacts/reports/train_supervisor_phase1_talk/trained_batch_names.txt,artifacts/reports/train_supervisor_350bt/trained_batch_names.txt --skip-if-trained-file-missing --min-manifest-unique-input-files 510 --min-active-manifests 48 --min-active-train-tokens 40000000000"
+
+hot-shard-warmup:
+	@echo "Usage:"
+	@echo "  PYTHONPATH=src $(PYTHON) scripts/hot_shard_warmup.py --shards-root data/shards_global/fineweb-global-bpe-v1 --warm-shards-root /mnt/ceph/llm/data/shards_global/fineweb-global-bpe-v1 --workers 4"
 
 fineweb-stage-shard-loop:
 	@echo "Usage:"
@@ -114,6 +118,10 @@ fineweb-stage-shard-watchdog:
 lr-sweep-350bt:
 	@echo "Usage:"
 	@echo "  bash scripts/lr_sweep_rtx5070_fineweb_350bt_ctx512.sh"
+
+benchmark-rtx5070:
+	@echo "Usage:"
+	@echo "  bash scripts/benchmark_rtx5070_context_profiles.sh --max-steps 1200 --compile-model"
 
 train-350bt-v2:
 	@echo "Usage:"
@@ -150,7 +158,7 @@ verify-shards:
 
 train:
 	@echo "Usage:"
-	@echo "  PYTHONPATH=src $(PYTHON) -m llm.cli train --shards-path data/shards/<dataset> --output-dir artifacts/checkpoints/<run_name> --lr-schedule cosine --lr-warmup-steps 200 --grad-accum-steps 1 --checkpoint-keep-last 6 --checkpoint-keep-every 10000 --fail-on-eval-regression"
+	@echo "  PYTHONPATH=src $(PYTHON) -m llm.cli train --shards-path data/shards/<dataset> --output-dir artifacts/checkpoints/<run_name> --lr-schedule cosine --lr-warmup-steps 200 --grad-accum-steps 1 --sampler-strategy balanced --sampler-min-full-passes 1 --checkpoint-keep-last 6 --checkpoint-keep-every 10000 --fail-on-eval-regression"
 
 generate:
 	@echo "Usage:"
@@ -188,6 +196,10 @@ checkpoint-offload-prune:
 	@echo "Sync local checkpoints to warm storage and prune older local runs."
 	@echo "Usage: bash scripts/checkpoint_offload_prune.sh --local-checkpoints-dir artifacts/checkpoints --warm-checkpoints-dir /mnt/ceph/llm/data/checkpoints --keep-local-runs 1"
 
+checkpoint-step-offload:
+	@echo "Offload older ckpt_step_*.pt files to warm storage while keeping newest local steps."
+	@echo "Usage: bash scripts/checkpoint_step_offload.sh --local-checkpoints-dir artifacts/checkpoints --warm-checkpoints-dir /mnt/ceph/llm/data/checkpoints --keep-last-steps 6 --max-files 24"
+
 set-swappiness:
 	@echo "Set vm.swappiness for training hosts (root required)."
 	@echo "Usage: sudo bash scripts/set_swappiness.sh --value 10 --persist"
@@ -195,6 +207,10 @@ set-swappiness:
 hf-download-resumable:
 	@echo "Run a self-healing Hugging Face download worker with resume + retries."
 	@echo "Usage: HF_TOKEN=hf_xxx bash scripts/hf_download_resumable.sh --dataset HuggingFaceFW/fineweb --repo-type dataset --include 'sample/350BT/*.parquet' --local-dir /mnt/ceph/llm/data/fineweb/sample-350BT --max-workers 6 --enable-hf-transfer --skip-dry-run --attempt-timeout-seconds 5400 --retry-delay-seconds 30 --max-retries 0 --log-file artifacts/reports/fineweb_350bt_download_resumable.log"
+
+hf-download-fineweb-edu-full:
+	@echo "Run simple resumable sync for full FineWeb-Edu parquet set."
+	@echo "Usage: HF_TOKEN=hf_xxx bash scripts/sync_fineweb_edu_full.sh /mnt/pve/cephfs/llm/data/fineweb/fineweb-edu-full"
 
 hf-download-watchdog:
 	@echo "Run watchdog wrapper that restarts stalled or exited HF download worker."

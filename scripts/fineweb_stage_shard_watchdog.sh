@@ -19,19 +19,22 @@ Options:
   --hot-parquet-dir DIR          Hot parquet directory for progress snapshot
   --shards-root DIR              Shards root for progress snapshot
   --processed-file FILE          Stage-loop processed parquet state file
+  --expected-unique-input-files N
+                                 Coverage target for manifest unique input files (default: 510, 0 disables)
   --no-adopt-existing-loop       Always launch a new stage-loop worker (do not adopt existing)
   --no-cleanup-stale-workers     Do not terminate stale loop/shard workers before relaunch
   -h, --help                     Show help
 USAGE
 }
 
-WORKER_ARGS="--hot-queue-min-files 10 --stage-max-files 8 --stage-copy-jobs 4 --stage-min-free-gib 80 --process-max-files 15 --shard-jobs 2 --auto-tune-shard-jobs --auto-tune-min-shard-jobs 2 --auto-tune-max-shard-jobs 3 --auto-tune-low-load-pct 80 --auto-tune-high-load-pct 95 --auto-tune-min-batch-seconds 300 --tokenizer-threads 10 --encode-batch-size 1024 --shard-size-tokens 20000000 --sync-background --sync-max-inflight 2 --sleep-seconds 60 --shard-min-batch-size 512"
+WORKER_ARGS="--hot-queue-min-files 10 --stage-max-files 8 --stage-copy-jobs 4 --stage-min-free-gib 80 --process-max-files 15 --shard-jobs 2 --auto-tune-shard-jobs --auto-tune-min-shard-jobs 2 --auto-tune-max-shard-jobs 3 --auto-tune-low-load-pct 80 --auto-tune-high-load-pct 95 --auto-tune-min-batch-seconds 300 --tokenizer-threads 10 --encode-batch-size 1024 --shard-size-tokens 20000000 --expected-unique-input-files 510 --coverage-complete-sleep-seconds 300 --sync-background --sync-max-inflight 2 --sleep-seconds 60 --shard-min-batch-size 512"
 WATCHDOG_LOG_FILE="artifacts/reports/fineweb_stage_shard_loop/watchdog.log"
 CHECK_INTERVAL_SECONDS=120
 STALL_SECONDS=1800
 HOT_PARQUET_DIR="data/fineweb/sample-350BT/sample/350BT"
 SHARDS_ROOT="data/shards_global/fineweb-global-bpe-v1"
 PROCESSED_FILE="artifacts/reports/fineweb_stage_shard_loop/processed_parquet_files.txt"
+EXPECTED_UNIQUE_INPUT_FILES=510
 LOCK_FILE=""
 ADOPT_EXISTING_LOOP=1
 CLEANUP_STALE_WORKERS=1
@@ -70,6 +73,10 @@ while [[ $# -gt 0 ]]; do
       PROCESSED_FILE="${2:-}"
       shift 2
       ;;
+    --expected-unique-input-files)
+      EXPECTED_UNIQUE_INPUT_FILES="${2:-}"
+      shift 2
+      ;;
     --no-adopt-existing-loop)
       ADOPT_EXISTING_LOOP=0
       shift
@@ -99,6 +106,10 @@ mkdir -p "$(dirname "$LOCK_FILE")"
 if ! command -v flock >/dev/null 2>&1; then
   echo "error: required command not found: flock" >&2
   exit 1
+fi
+if ! [[ "$EXPECTED_UNIQUE_INPUT_FILES" =~ ^[0-9]+$ ]]; then
+  echo "error: --expected-unique-input-files must be >= 0" >&2
+  exit 2
 fi
 
 exec 8>"$LOCK_FILE"
@@ -133,6 +144,32 @@ progress_snapshot() {
     "$processed_count" \
     "$incomplete_count" \
     "$incomplete_bytes"
+}
+
+manifest_unique_input_count() {
+  PYTHONPATH=src .venv/bin/python - "$SHARDS_ROOT" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+root = Path(sys.argv[1])
+unique: set[str] = set()
+manifests = list(root.rglob("manifest.json"))
+manifests.extend(root.rglob("manifest.offloaded.json"))
+for manifest_path in manifests:
+    try:
+        payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except Exception:
+        continue
+    raw_files = payload.get("input_files", [])
+    if not isinstance(raw_files, list):
+        continue
+    for raw in raw_files:
+        name = Path(str(raw)).name
+        if name:
+            unique.add(name)
+print(len(unique))
+PY
 }
 
 WORKER_PID=""
@@ -335,7 +372,7 @@ if ! start_worker; then
 fi
 last_snapshot="$(progress_snapshot)"
 last_progress_epoch="$(date +%s)"
-log "watchdog_start interval_seconds=$CHECK_INTERVAL_SECONDS stall_seconds=$STALL_SECONDS lock_file=$LOCK_FILE adopt_existing_loop=$ADOPT_EXISTING_LOOP snapshot=$last_snapshot"
+log "watchdog_start interval_seconds=$CHECK_INTERVAL_SECONDS stall_seconds=$STALL_SECONDS lock_file=$LOCK_FILE adopt_existing_loop=$ADOPT_EXISTING_LOOP expected_unique_input_files=$EXPECTED_UNIQUE_INPUT_FILES snapshot=$last_snapshot"
 
 while true; do
   sleep "$CHECK_INTERVAL_SECONDS"
@@ -363,6 +400,14 @@ while true; do
   fi
 
   if (( now_epoch - last_progress_epoch >= STALL_SECONDS )); then
+    if [[ "$EXPECTED_UNIQUE_INPUT_FILES" -gt 0 ]]; then
+      unique_inputs="$(manifest_unique_input_count)"
+      if [[ "$unique_inputs" =~ ^[0-9]+$ ]] && [[ "$unique_inputs" -ge "$EXPECTED_UNIQUE_INPUT_FILES" ]]; then
+        last_progress_epoch="$now_epoch"
+        log "worker_hold reason=coverage_complete unique_inputs=$unique_inputs expected=$EXPECTED_UNIQUE_INPUT_FILES"
+        continue
+      fi
+    fi
     log "worker_stalled elapsed=$((now_epoch - last_progress_epoch))s snapshot=$current_snapshot restarting"
     stop_worker "stall_timeout"
     sleep 5

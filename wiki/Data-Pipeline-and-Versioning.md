@@ -130,6 +130,12 @@ bash scripts/hf_download_watchdog.sh \
 The watchdog monitors parquet/incomplete byte growth and restarts the resumable worker if it exits or stalls.
 Use `--exit-on-complete` with expected targets so the watchdog exits when the download is actually complete.
 
+Simple full FineWeb-Edu sync (direct to Ceph path):
+```bash
+export HF_TOKEN=hf_xxx   # optional but recommended
+bash scripts/sync_fineweb_edu_full.sh /mnt/pve/cephfs/llm/data/fineweb/fineweb-edu-full
+```
+
 Hot-queue prefetch worker (stage on demand while training):
 ```bash
 bash scripts/fineweb_prefetch_hot_queue.sh \
@@ -254,6 +260,18 @@ Rehydrate local hot workspace from warm storage:
 ```bash
 bash scripts/hydrate_from_warm_storage.sh /mnt/ceph/llm/data
 ```
+
+Pre-wipe safety checklist:
+```bash
+git fetch --all --prune
+git status --short --branch
+git push
+bash scripts/sync_warm_storage.sh /mnt/ceph/llm/data
+stamp=$(date -u +%Y%m%dT%H%M%SZ)
+git ls-files --others --ignored --exclude-standard | sort \
+  > /mnt/ceph/llm/data/logs/git_untracked_all_${stamp}.txt
+```
+Only wipe after sync completion and a fresh `last_sync_utc.txt` timestamp.
 
 ## First-Pass Talking Profile
 For an English prose-first pass, generate include/exclude manifests and optionally move excluded ZIMs to warm storage:

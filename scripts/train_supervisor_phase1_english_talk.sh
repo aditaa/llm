@@ -9,6 +9,7 @@ exec bash scripts/train_supervisor_rtx5070_350bt.sh \
   --poll-seconds 60 \
   --batch-size 12 \
   --target-effective-batch 24 \
+  --lr-schedule constant \
   --min-train-tokens 30000000000 \
   --min-batch-size 6 \
   --max-batch-size 20 \
@@ -18,10 +19,16 @@ exec bash scripts/train_supervisor_rtx5070_350bt.sh \
   --ema-decay 0.999 \
   --dedupe-report-keep 240 \
   --eval-suite configs/eval/english_talk_suite_v1.json \
-  --eval-promotion-policy configs/eval/promotion_policy_talk_v1.json \
-  --generation-suite configs/eval/generation_talk_smoke_v1.json \
+  --eval-promotion-policy configs/eval/promotion_policy_talk_recovery_v2.json \
+  --promotion-min-quality-streak 2 \
+  --generation-suite configs/eval/generation_talk_quality_v2.json \
   --generation-temperature 0.2 \
   --generation-top-k 1 \
+  --generation-fail-below-pass-rate 0.35 \
   --generation-every-chunks 1 \
-  --no-train-fail-on-eval-regression \
+  --holdout-suite configs/eval/english_talk_holdout_suite_v1.json \
+  --holdout-temperature 0.2 \
+  --holdout-top-k 1 \
+  --holdout-fail-below-pass-rate 0.35 \
+  --holdout-every-chunks 1 \
   "$@"

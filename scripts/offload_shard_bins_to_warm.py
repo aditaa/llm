@@ -90,6 +90,14 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--skip-if-trained-file-missing",
+        action="store_true",
+        help=(
+            "When --require-trained-batches-file is set and file is missing, "
+            "exit 0 with a no-op report instead of raising."
+        ),
+    )
+    parser.add_argument(
         "--min-active-manifests",
         type=int,
         default=0,
@@ -107,7 +115,29 @@ def parse_args() -> argparse.Namespace:
             "aggregate train tokens in active manifest.json batches (default: 0)"
         ),
     )
+    parser.add_argument(
+        "--min-manifest-unique-input-files",
+        type=int,
+        default=0,
+        help=(
+            "Require at least this many unique input parquet basenames across "
+            "manifest.json + manifest.offloaded.json before offloading (default: 0)"
+        ),
+    )
     return parser.parse_args()
+
+
+def _resolve_trained_batches_file(raw_value: str) -> Path | None:
+    value = raw_value.strip()
+    if not value:
+        return None
+    if "," not in value:
+        return Path(value)
+    candidates = [Path(part.strip()) for part in value.split(",") if part.strip()]
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    return candidates[0] if candidates else None
 
 
 def _free_bytes(path: Path) -> int:
@@ -118,6 +148,29 @@ def _free_bytes(path: Path) -> int:
 def _iter_manifest_dirs(shards_root: Path) -> list[Path]:
     manifests = sorted(p for p in shards_root.rglob("manifest.json") if p.is_file())
     return [p.parent for p in manifests]
+
+
+def _iter_coverage_manifests(shards_root: Path) -> list[Path]:
+    manifests = list(shards_root.rglob("manifest.json"))
+    manifests.extend(shards_root.rglob("manifest.offloaded.json"))
+    return sorted(p for p in manifests if p.is_file())
+
+
+def _manifest_unique_input_files(shards_root: Path) -> int:
+    unique: set[str] = set()
+    for manifest_path in _iter_coverage_manifests(shards_root):
+        try:
+            payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except Exception:  # noqa: BLE001
+            continue
+        raw_files = payload.get("input_files", [])
+        if not isinstance(raw_files, list):
+            continue
+        for raw in raw_files:
+            name = Path(str(raw)).name
+            if name:
+                unique.add(name)
+    return len(unique)
 
 
 def _manifest_shard_relpaths(manifest_path: Path) -> list[Path]:
@@ -268,6 +321,8 @@ def main() -> int:
     target_free_bytes = int(args.target_free_gib) * 1024 * 1024 * 1024
     min_active_manifests = max(0, int(args.min_active_manifests))
     min_active_train_tokens = max(0, int(args.min_active_train_tokens))
+    min_manifest_unique_inputs = max(0, int(args.min_manifest_unique_input_files))
+    manifest_unique_inputs = _manifest_unique_input_files(shards_root)
 
     batch_dirs = _iter_manifest_dirs(shards_root)
     batch_dirs = sorted(batch_dirs, key=_batch_sort_key, reverse=True)
@@ -277,16 +332,65 @@ def main() -> int:
     if args.max_batches > 0:
         candidates = candidates[: int(args.max_batches)]
 
+    if min_manifest_unique_inputs > 0 and manifest_unique_inputs < min_manifest_unique_inputs:
+        summary = {
+            "shards_root": str(shards_root),
+            "warm_shards_root": str(warm_root),
+            "dry_run": bool(args.dry_run),
+            "keep_local_batches": keep_n,
+            "candidate_batches": len(candidates),
+            "files_linked": 0,
+            "bytes_freed_estimate": 0,
+            "status": "skip_coverage_not_ready",
+            "manifest_unique_input_files": manifest_unique_inputs,
+            "min_manifest_unique_input_files": min_manifest_unique_inputs,
+            "report_output": str(report_path),
+            "free_bytes_before": free_before,
+            "free_bytes_after": free_before,
+        }
+        payload = {"summary": summary, "results": [], "kept_batches": sorted(keep_set)}
+        report_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        print(
+            "shard_offload_skip",
+            f"reason=coverage_not_ready have={manifest_unique_inputs} need={min_manifest_unique_inputs}",
+            f"report={report_path}",
+        )
+        return 0
+
+    trained_batches_file = _resolve_trained_batches_file(args.require_trained_batches_file)
     trained_batches: set[str] | None = None
     if args.require_trained_batches_file:
-        trained_file = Path(args.require_trained_batches_file)
-        if not trained_file.exists():
-            raise FileNotFoundError(
-                f"trained batches file not found: {trained_file}"
-            )
+        if trained_batches_file is None:
+            raise FileNotFoundError("no valid trained batches file candidates provided")
+        if not trained_batches_file.exists():
+            if args.skip_if_trained_file_missing:
+                summary = {
+                    "shards_root": str(shards_root),
+                    "warm_shards_root": str(warm_root),
+                    "dry_run": bool(args.dry_run),
+                    "keep_local_batches": keep_n,
+                    "candidate_batches": len(candidates),
+                    "files_linked": 0,
+                    "bytes_freed_estimate": 0,
+                    "require_trained_batches_file": args.require_trained_batches_file,
+                    "resolved_trained_batches_file": str(trained_batches_file),
+                    "status": "skip_missing_trained_registry",
+                    "report_output": str(report_path),
+                    "free_bytes_before": free_before,
+                    "free_bytes_after": free_before,
+                }
+                payload = {"summary": summary, "results": [], "kept_batches": sorted(keep_set)}
+                report_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+                print(
+                    "shard_offload_skip",
+                    f"reason=missing_trained_registry file={trained_batches_file}",
+                    f"report={report_path}",
+                )
+                return 0
+            raise FileNotFoundError(f"trained batches file not found: {trained_batches_file}")
         trained_batches = {
             line.strip()
-            for line in trained_file.read_text(encoding="utf-8").splitlines()
+            for line in trained_batches_file.read_text(encoding="utf-8").splitlines()
             if line.strip() and not line.strip().startswith("#")
         }
 
@@ -325,7 +429,7 @@ def main() -> int:
                     status="skip_untrained_batch",
                     detail=(
                         "not_in_trained_registry:"
-                        f"{args.require_trained_batches_file}"
+                        f"{trained_batches_file}"
                     ),
                 )
             )
@@ -435,7 +539,12 @@ def main() -> int:
         "files_linked": total_linked,
         "bytes_freed_estimate": total_freed,
         "require_trained_batches_file": args.require_trained_batches_file,
+        "resolved_trained_batches_file": (
+            str(trained_batches_file) if trained_batches_file is not None else ""
+        ),
         "skip_untrained_batch_count": skipped_untrained,
+        "manifest_unique_input_files": manifest_unique_inputs,
+        "min_manifest_unique_input_files": min_manifest_unique_inputs,
         "min_active_manifests": min_active_manifests,
         "min_active_train_tokens": min_active_train_tokens,
         "skip_min_active_manifests_count": skipped_floor_manifests,

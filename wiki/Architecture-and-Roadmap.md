@@ -31,7 +31,7 @@ Current implemented modules:
 ### Phase 3
 - Sampling strategies (greedy, top-k, top-p)
 - Experiment configs and reproducibility controls
-- Runtime performance profiling
+- Runtime performance profiling (`scripts/benchmark_rtx5070_context_profiles.sh`)
 
 ### Phase 4
 - CI automation

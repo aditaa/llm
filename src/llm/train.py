@@ -6,6 +6,7 @@ import json
 import math
 import random
 import time
+from collections import OrderedDict
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, cast
@@ -56,6 +57,12 @@ class TrainConfig:
     tf32: bool = True
     compile_model: bool = False
     compile_mode: str = "reduce-overhead"
+    compile_strict: bool = False
+    sampler_max_open_shards: int = 256
+    sampler_strategy: str = "weighted"
+    sampler_min_full_passes: int = 0
+    sampled_shards_trace: Path | None = None
+    sampled_shards_trace_min_rows: int = 1
     export_safetensors: bool = False
     safetensors_every_checkpoint: bool = False
     checkpoint_keep_last: int = 0
@@ -69,6 +76,9 @@ class TrainConfig:
         payload["shards_path"] = str(self.shards_path)
         payload["output_dir"] = str(self.output_dir)
         payload["resume_from"] = str(self.resume_from) if self.resume_from else None
+        payload["sampled_shards_trace"] = (
+            str(self.sampled_shards_trace) if self.sampled_shards_trace else None
+        )
         return payload
 
 
@@ -145,10 +155,7 @@ def _build_optimizer(
             continue
         lowered = name.lower()
         no_decay = (
-            param.ndim < 2
-            or lowered.endswith("bias")
-            or "norm" in lowered
-            or "embed" in lowered
+            param.ndim < 2 or lowered.endswith("bias") or "norm" in lowered or "embed" in lowered
         )
         if no_decay:
             no_decay_params.append(param)
@@ -297,43 +304,135 @@ class ShardBatchSampler:
         context_length: int,
         seed: int,
         device: torch.device,
+        max_open_shards: int = 256,
+        sampling_strategy: str = "weighted",
     ) -> None:
         if context_length <= 0:
             raise ValueError("context_length must be > 0")
+        if max_open_shards <= 0:
+            raise ValueError("max_open_shards must be > 0")
         self.context_length = context_length
         self.np_rng = np.random.default_rng(seed)
         self.device = device
-        dtype = _np_dtype(token_dtype)
-        self.arrays = [np.memmap(path, mode="r", dtype=dtype) for path in shard_paths]
+        self.dtype = _np_dtype(token_dtype)
+        self.max_open_shards = max_open_shards
+        normalized_strategy = sampling_strategy.strip().lower()
+        if normalized_strategy not in {"weighted", "balanced"}:
+            raise ValueError("sampling_strategy must be one of: weighted, balanced")
+        self.sampling_strategy = normalized_strategy
+        self.shard_paths = [path.resolve() for path in shard_paths]
+        self._array_cache: OrderedDict[int, np.memmap[Any, Any]] = OrderedDict()
+        self._sampled_rows: dict[int, int] = {}
+        self._elem_size = self.dtype.itemsize
+        self.shard_sizes: list[int] = []
+        for path in self.shard_paths:
+            size_bytes = path.stat().st_size
+            if size_bytes % self._elem_size != 0:
+                raise ValueError(
+                    f"shard byte size is not aligned to dtype element size: {path} "
+                    f"(size={size_bytes}, itemsize={self._elem_size})"
+                )
+            self.shard_sizes.append(size_bytes // self._elem_size)
         self.eligible: list[int] = []
         self.weights: list[int] = []
-        for idx, arr in enumerate(self.arrays):
-            if int(arr.size) > context_length:
+        for idx, size in enumerate(self.shard_sizes):
+            if int(size) > context_length:
                 self.eligible.append(idx)
-                self.weights.append(int(arr.size) - context_length)
+                self.weights.append(int(size) - context_length)
         if not self.eligible:
             raise ValueError("no shards have enough tokens for context_length")
         self._eligible_np = np.asarray(self.eligible, dtype=np.int32)
         probs = np.asarray(self.weights, dtype=np.float64)
         self._weight_probs = probs / probs.sum()
         self._offsets = np.arange(self.context_length, dtype=np.int64)
+        self._cycle_order = np.empty(0, dtype=np.int32)
+        self._cycle_pos = 0
+
+    def _get_array(self, idx: int) -> np.memmap[Any, Any]:
+        cached = self._array_cache.get(idx)
+        if cached is not None:
+            self._array_cache.move_to_end(idx)
+            return cached
+
+        if len(self._array_cache) >= self.max_open_shards:
+            self._array_cache.popitem(last=False)
+        arr = np.memmap(self.shard_paths[idx], mode="r", dtype=self.dtype)
+        self._array_cache[idx] = arr
+        return arr
+
+    def sampled_shard_rows(self, *, min_rows: int = 1) -> list[tuple[Path, int]]:
+        if min_rows <= 0:
+            min_rows = 1
+        rows: list[tuple[Path, int]] = []
+        for idx, count in sorted(self._sampled_rows.items()):
+            if count >= min_rows:
+                rows.append((self.shard_paths[idx], count))
+        return rows
+
+    def eligible_shard_count(self) -> int:
+        return len(self.eligible)
+
+    def write_sample_trace(self, path: Path, *, min_rows: int = 1) -> int:
+        sampled = self.sampled_shard_rows(min_rows=min_rows)
+        payload = {
+            "context_length": self.context_length,
+            "sampling_strategy": self.sampling_strategy,
+            "sampled_shards": [
+                {
+                    "path": str(shard_path),
+                    "rows": rows,
+                    "tokens_windowed": rows * self.context_length,
+                }
+                for shard_path, rows in sampled
+            ],
+        }
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        return len(sampled)
+
+    def _sample_shard_indices(self, batch_size: int) -> np.ndarray[Any, Any]:
+        if self.sampling_strategy == "weighted":
+            return self.np_rng.choice(self._eligible_np, size=batch_size, p=self._weight_probs)
+
+        chosen = np.empty(batch_size, dtype=np.int32)
+        written = 0
+        while written < batch_size:
+            if self._cycle_pos >= int(self._cycle_order.size):
+                self._cycle_order = self.np_rng.permutation(self._eligible_np)
+                self._cycle_pos = 0
+            remaining_cycle = int(self._cycle_order.size) - self._cycle_pos
+            take = min(batch_size - written, remaining_cycle)
+            chosen[written : written + take] = self._cycle_order[
+                self._cycle_pos : self._cycle_pos + take
+            ]
+            self._cycle_pos += take
+            written += take
+        return chosen
+
+    def close(self) -> None:
+        self._array_cache.clear()
+
+    def __del__(self) -> None:
+        self.close()
 
     def sample_batch(self, batch_size: int) -> tuple[Tensor, Tensor]:
         if batch_size <= 0:
             raise ValueError("batch_size must be > 0")
         x = np.zeros((batch_size, self.context_length), dtype=np.int64)
         y = np.zeros((batch_size, self.context_length), dtype=np.int64)
-        chosen = self.np_rng.choice(self._eligible_np, size=batch_size, p=self._weight_probs)
+        chosen = self._sample_shard_indices(batch_size)
         for arr_idx in np.unique(chosen):
             rows = np.nonzero(chosen == arr_idx)[0]
-            arr = self.arrays[int(arr_idx)]
-            max_start = int(arr.size) - self.context_length - 1
+            idx = int(arr_idx)
+            arr = self._get_array(idx)
+            max_start = int(self.shard_sizes[idx]) - self.context_length - 1
             if max_start <= 0:
                 raise ValueError("encountered shard smaller than context window")
             starts = self.np_rng.integers(0, max_start + 1, size=rows.size, dtype=np.int64)
             gather_idx = starts[:, None] + self._offsets[None, :]
             x[rows, :] = arr[gather_idx]
             y[rows, :] = arr[gather_idx + 1]
+            self._sampled_rows[idx] = self._sampled_rows.get(idx, 0) + int(rows.size)
 
         xb = torch.from_numpy(x)
         yb = torch.from_numpy(y)
@@ -391,6 +490,56 @@ def _resolve_amp_mode(
         return True, torch.bfloat16, False, "bf16"
 
     return True, torch.float16, True, "fp16"
+
+
+def _compile_training_model(
+    model: GPTModel,
+    *,
+    enable_compile: bool,
+    compile_mode: str,
+    compile_strict: bool,
+    context_length: int,
+    device: torch.device,
+) -> tuple[torch.nn.Module, bool, str]:
+    if not enable_compile:
+        return model, False, "disabled"
+    if not hasattr(torch, "compile"):
+        if compile_strict:
+            raise ValueError("compile_model requested but torch.compile is unavailable")
+        print("compile_warning=torch.compile unavailable; falling_back_to_eager=1")
+        return model, False, "unavailable"
+
+    try:
+        compiled = cast(torch.nn.Module, torch.compile(model, mode=compile_mode))
+    except Exception as exc:  # pragma: no cover - backend-dependent failure path
+        if compile_strict:
+            raise RuntimeError(
+                f"torch.compile failed in strict mode (mode={compile_mode}): {exc}"
+            ) from exc
+        print(
+            "compile_warning=torch.compile init failed; "
+            f"detail={type(exc).__name__}:{str(exc).strip()} "
+            "falling_back_to_eager=1"
+        )
+        return model, False, "init_failed"
+
+    try:
+        # Trigger compile graph build early so unstable backends fail before long runs.
+        dummy = torch.zeros((1, context_length), dtype=torch.long, device=device)
+        with torch.no_grad():
+            compiled(dummy, dummy)
+    except Exception as exc:  # pragma: no cover - backend-dependent failure path
+        if compile_strict:
+            raise RuntimeError(
+                f"torch.compile warmup failed in strict mode (mode={compile_mode}): {exc}"
+            ) from exc
+        print(
+            "compile_warning=torch.compile warmup failed; "
+            f"detail={type(exc).__name__}:{str(exc).strip()} "
+            "falling_back_to_eager=1"
+        )
+        return model, False, "warmup_failed"
+    return compiled, True, "ok"
 
 
 def _estimate_loss(
@@ -738,11 +887,15 @@ def run_training(config: TrainConfig) -> dict[str, Any]:
     if config.ema_decay > 0.0 and ema_state is None:
         ema_state = _init_ema_state(model)
 
-    train_model: torch.nn.Module = model
-    if config.compile_model:
-        if not hasattr(torch, "compile"):
-            raise ValueError("compile_model requested but torch.compile is unavailable")
-        train_model = cast(torch.nn.Module, torch.compile(model, mode=config.compile_mode))
+    if config.sampler_max_open_shards <= 0:
+        raise ValueError("sampler_max_open_shards must be > 0")
+    normalized_sampler_strategy = config.sampler_strategy.strip().lower()
+    if normalized_sampler_strategy not in {"weighted", "balanced"}:
+        raise ValueError("sampler_strategy must be one of: weighted, balanced")
+    if config.sampler_min_full_passes < 0:
+        raise ValueError("sampler_min_full_passes must be >= 0")
+    if config.sampled_shards_trace_min_rows <= 0:
+        raise ValueError("sampled_shards_trace_min_rows must be > 0")
 
     train_sampler = ShardBatchSampler(
         shard_paths=info.train_shards,
@@ -750,6 +903,8 @@ def run_training(config: TrainConfig) -> dict[str, Any]:
         context_length=config.context_length,
         seed=config.seed,
         device=device,
+        max_open_shards=config.sampler_max_open_shards,
+        sampling_strategy=normalized_sampler_strategy,
     )
     val_sampler = ShardBatchSampler(
         shard_paths=info.val_shards,
@@ -757,12 +912,41 @@ def run_training(config: TrainConfig) -> dict[str, Any]:
         context_length=config.context_length,
         seed=config.seed + 1,
         device=device,
+        max_open_shards=config.sampler_max_open_shards,
+        sampling_strategy="weighted",
     )
+    planned_steps = max(0, config.max_steps - start_step)
+    planned_sample_rows = planned_steps * config.grad_accum_steps * config.batch_size
+    train_eligible_shards = train_sampler.eligible_shard_count()
+    train_guaranteed_full_passes = (
+        planned_sample_rows // train_eligible_shards if train_eligible_shards > 0 else 0
+    )
+    if (
+        normalized_sampler_strategy == "balanced"
+        and config.sampler_min_full_passes > 0
+        and train_guaranteed_full_passes < config.sampler_min_full_passes
+    ):
+        raise ValueError(
+            "sampler_min_full_passes cannot be met by this run configuration: "
+            f"requested={config.sampler_min_full_passes} "
+            f"guaranteed={train_guaranteed_full_passes} "
+            f"planned_sample_rows={planned_sample_rows} "
+            f"eligible_shards={train_eligible_shards}"
+        )
     frozen_eval_batches: list[tuple[Tensor, Tensor]] | None = None
     if config.eval_freeze_batches:
         frozen_eval_batches = [
             val_sampler.sample_batch(config.batch_size) for _ in range(config.eval_steps)
         ]
+
+    train_model, compile_active, compile_state = _compile_training_model(
+        model,
+        enable_compile=config.compile_model,
+        compile_mode=config.compile_mode,
+        compile_strict=config.compile_strict,
+        context_length=config.context_length,
+        device=device,
+    )
 
     config.output_dir.mkdir(parents=True, exist_ok=True)
     (config.output_dir / "run_config.json").write_text(
@@ -796,7 +980,15 @@ def run_training(config: TrainConfig) -> dict[str, Any]:
     print(f"optimizer_decay_tensors={optimizer_meta['decay_tensors']}")
     print(f"optimizer_no_decay_tensors={optimizer_meta['no_decay_tensors']}")
     print(f"tf32={int(config.tf32)}")
-    print(f"compile_model={int(config.compile_model)}")
+    print(f"compile_model_requested={int(config.compile_model)}")
+    print(f"compile_model_active={int(compile_active)}")
+    print(f"compile_state={compile_state}")
+    print(f"sampler_max_open_shards={config.sampler_max_open_shards}")
+    print(f"sampler_strategy={normalized_sampler_strategy}")
+    print(f"sampler_min_full_passes={config.sampler_min_full_passes}")
+    print(f"train_sampler_eligible_shards={train_eligible_shards}")
+    print(f"train_sampler_planned_sample_rows={planned_sample_rows}")
+    print(f"train_sampler_guaranteed_full_passes={train_guaranteed_full_passes}")
     print(f"eval_freeze_batches={int(config.eval_freeze_batches)}")
     print(f"fail_on_eval_regression={int(config.fail_on_eval_regression)}")
     if config.compile_model:
@@ -821,107 +1013,119 @@ def run_training(config: TrainConfig) -> dict[str, Any]:
     tokens_seen = 0
     log_tokens_mark = 0
     log_time_mark = time.perf_counter()
-    for step in range(start_step + 1, config.max_steps + 1):
-        optimizer.zero_grad(set_to_none=True)
-        lr = _lr_for_step(
-            step=step,
-            max_steps=config.max_steps,
-            base_lr=config.learning_rate,
-            schedule=config.lr_schedule,
-            warmup_steps=config.lr_warmup_steps,
-            min_ratio=config.lr_min_ratio,
-        )
-        _set_optimizer_lr(optimizer, lr)
-        micro_losses: list[float] = []
-        for _ in range(config.grad_accum_steps):
-            xb, yb = train_sampler.sample_batch(config.batch_size)
-            tokens_seen += int(xb.numel())
-            with torch.autocast(**autocast_kwargs):
-                _, loss = train_model(xb, yb)
-            if loss is None:
-                raise RuntimeError("loss should not be None when targets are provided")
-            micro_losses.append(float(loss.item()))
-            loss_to_backward = loss / config.grad_accum_steps
-            if scaler.is_enabled():
-                scaler.scale(loss_to_backward).backward()
-            else:
-                loss_to_backward.backward()
-
-        if scaler.is_enabled():
-            scaler.unscale_(optimizer)
-            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=config.grad_clip)
-            scaler.step(optimizer)
-            scaler.update()
-        else:
-            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=config.grad_clip)
-            optimizer.step()
-
-        if (
-            ema_state is not None
-            and step >= config.ema_start_step
-            and (step % config.ema_update_every) == 0
-        ):
-            _update_ema_state(ema_state, model, config.ema_decay)
-
-        train_loss = sum(micro_losses) / len(micro_losses)
-        if step == 1 or step % config.log_interval == 0:
-            now = time.perf_counter()
-            elapsed = max(now - log_time_mark, 1e-9)
-            tok_window = tokens_seen - log_tokens_mark
-            toks_per_sec = tok_window / elapsed
-            print(
-                f"step={step} train_loss={train_loss:.6f} lr={lr:.8f} "
-                f"tokens_seen={tokens_seen} toks_per_sec={toks_per_sec:.2f}"
-            )
-            log_tokens_mark = tokens_seen
-            log_time_mark = now
-
-        should_eval = step == 1 or step % config.eval_interval == 0 or step == config.max_steps
-        if should_eval:
-            val_loss = _estimate_loss(
-                train_model,
-                val_sampler if frozen_eval_batches is None else None,
-                batch_size=config.batch_size,
-                eval_steps=config.eval_steps,
-                amp_enabled=amp_enabled,
-                amp_dtype=amp_dtype,
-                device_type=device.type,
-                fixed_batches=frozen_eval_batches,
-            )
-            val_ppl = float(math.exp(min(val_loss, 20.0)))
-            prev_best_val_ppl = best_val_ppl
-            if best_val_loss is None or val_loss < best_val_loss:
-                best_val_loss = val_loss
-            if best_val_ppl is None or val_ppl < best_val_ppl:
-                best_val_ppl = val_ppl
-            ckpt = _save_checkpoint(
-                output_dir=config.output_dir,
+    try:
+        for step in range(start_step + 1, config.max_steps + 1):
+            optimizer.zero_grad(set_to_none=True)
+            lr = _lr_for_step(
                 step=step,
-                model=model,
-                optimizer=optimizer,
-                scaler=scaler,
-                config=config,
-                model_config=model_config,
-                info=info,
-                lr=lr,
-                best_val_loss=best_val_loss,
-                best_val_ppl=best_val_ppl,
-                ema_state=ema_state,
+                max_steps=config.max_steps,
+                base_lr=config.learning_rate,
+                schedule=config.lr_schedule,
+                warmup_steps=config.lr_warmup_steps,
+                min_ratio=config.lr_min_ratio,
             )
-            print(
-                f"step={step} val_loss={val_loss:.6f} val_ppl={val_ppl:.4f} "
-                f"best_val_ppl={best_val_ppl:.4f} checkpoint={ckpt}"
-            )
+            _set_optimizer_lr(optimizer, lr)
+            micro_losses: list[float] = []
+            for _ in range(config.grad_accum_steps):
+                xb, yb = train_sampler.sample_batch(config.batch_size)
+                tokens_seen += int(xb.numel())
+                with torch.autocast(**autocast_kwargs):
+                    _, loss = train_model(xb, yb)
+                if loss is None:
+                    raise RuntimeError("loss should not be None when targets are provided")
+                micro_losses.append(float(loss.item()))
+                loss_to_backward = loss / config.grad_accum_steps
+                if scaler.is_enabled():
+                    scaler.scale(loss_to_backward).backward()
+                else:
+                    loss_to_backward.backward()
+
+            if scaler.is_enabled():
+                scaler.unscale_(optimizer)
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=config.grad_clip)
+                scaler.step(optimizer)
+                scaler.update()
+            else:
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=config.grad_clip)
+                optimizer.step()
+
             if (
-                config.fail_on_eval_regression
-                and prev_best_val_ppl is not None
-                and val_ppl > (prev_best_val_ppl * (1.0 + config.eval_regression_tolerance))
+                ema_state is not None
+                and step >= config.ema_start_step
+                and (step % config.ema_update_every) == 0
             ):
-                threshold = prev_best_val_ppl * (1.0 + config.eval_regression_tolerance)
-                raise RuntimeError(
-                    "held-out eval regression gate failed: "
-                    f"val_ppl={val_ppl:.4f} exceeded threshold={threshold:.4f}"
+                _update_ema_state(ema_state, model, config.ema_decay)
+
+            train_loss = sum(micro_losses) / len(micro_losses)
+            if step == 1 or step % config.log_interval == 0:
+                now = time.perf_counter()
+                elapsed = max(now - log_time_mark, 1e-9)
+                tok_window = tokens_seen - log_tokens_mark
+                toks_per_sec = tok_window / elapsed
+                print(
+                    f"step={step} train_loss={train_loss:.6f} lr={lr:.8f} "
+                    f"tokens_seen={tokens_seen} toks_per_sec={toks_per_sec:.2f}"
                 )
+                log_tokens_mark = tokens_seen
+                log_time_mark = now
+
+            should_eval = step == 1 or step % config.eval_interval == 0 or step == config.max_steps
+            if should_eval:
+                val_loss = _estimate_loss(
+                    train_model,
+                    val_sampler if frozen_eval_batches is None else None,
+                    batch_size=config.batch_size,
+                    eval_steps=config.eval_steps,
+                    amp_enabled=amp_enabled,
+                    amp_dtype=amp_dtype,
+                    device_type=device.type,
+                    fixed_batches=frozen_eval_batches,
+                )
+                val_ppl = float(math.exp(min(val_loss, 20.0)))
+                prev_best_val_ppl = best_val_ppl
+                if best_val_loss is None or val_loss < best_val_loss:
+                    best_val_loss = val_loss
+                if best_val_ppl is None or val_ppl < best_val_ppl:
+                    best_val_ppl = val_ppl
+                ckpt = _save_checkpoint(
+                    output_dir=config.output_dir,
+                    step=step,
+                    model=model,
+                    optimizer=optimizer,
+                    scaler=scaler,
+                    config=config,
+                    model_config=model_config,
+                    info=info,
+                    lr=lr,
+                    best_val_loss=best_val_loss,
+                    best_val_ppl=best_val_ppl,
+                    ema_state=ema_state,
+                )
+                print(
+                    f"step={step} val_loss={val_loss:.6f} val_ppl={val_ppl:.4f} "
+                    f"best_val_ppl={best_val_ppl:.4f} checkpoint={ckpt}"
+                )
+                if (
+                    config.fail_on_eval_regression
+                    and prev_best_val_ppl is not None
+                    and val_ppl > (prev_best_val_ppl * (1.0 + config.eval_regression_tolerance))
+                ):
+                    threshold = prev_best_val_ppl * (1.0 + config.eval_regression_tolerance)
+                    raise RuntimeError(
+                        "held-out eval regression gate failed: "
+                        f"val_ppl={val_ppl:.4f} exceeded threshold={threshold:.4f}"
+                    )
+    finally:
+        if config.sampled_shards_trace is not None:
+            try:
+                trace_count = train_sampler.write_sample_trace(
+                    config.sampled_shards_trace,
+                    min_rows=config.sampled_shards_trace_min_rows,
+                )
+                print(f"sampled_shards_trace={config.sampled_shards_trace}")
+                print(f"sampled_shards_count={trace_count}")
+            except OSError as exc:
+                print(f"sampled_shards_trace_write_error={exc}")
 
     return {
         "output_dir": str(config.output_dir),

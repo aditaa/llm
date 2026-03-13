@@ -9,6 +9,7 @@ set -euo pipefail
 # - automatic post-chunk eval + trend files
 
 SHARDS_PATH="data/shards_global/fineweb-global-bpe-v1"
+WARM_SHARDS_ROOT="/mnt/ceph/llm/data/shards_global/fineweb-global-bpe-v1"
 OUTPUT_DIR="artifacts/checkpoints/fineweb-350bt-bpe-v2-run1"
 STATE_DIR="artifacts/reports/train_supervisor_350bt"
 
@@ -31,6 +32,7 @@ N_LAYERS=12
 N_HEADS=12
 D_MODEL=768
 LEARNING_RATE="3e-4"
+LR_SCHEDULE="cosine"
 LR_WARMUP_STEPS=2000
 LR_MIN_RATIO="0.10"
 EVAL_INTERVAL=1000
@@ -43,6 +45,17 @@ CHECKPOINT_KEEP_EVERY=10000
 EMA_DECAY="0.0"
 EMA_UPDATE_EVERY=1
 EMA_START_STEP=0
+SAMPLER_STRATEGY="balanced"
+SAMPLER_MIN_FULL_PASSES=1
+
+HOT_SHARD_WARMUP=1
+HOT_SHARD_WARMUP_WORKERS=4
+HOT_SHARD_WARMUP_MAX_FILES=0
+HOT_SHARD_WARMUP_ALLOW_MISSING_WARM=0
+HOT_SHARD_WARMUP_BACKGROUND=1
+HOT_SHARD_WARMUP_BACKGROUND_INTERVAL_SECONDS=120
+HOT_SHARD_WARMUP_BACKGROUND_MAX_FILES=64
+HOT_SHARD_WARMUP_BACKGROUND_INCLUDE_OFFLOADED=0
 
 AUTO_TUNE=1
 BATCH_STEP=2
@@ -85,6 +98,30 @@ GENERATION_FAIL_BELOW_PASS_RATE=""
 GENERATION_EVERY_CHUNKS=1
 GENERATION_STOP_ON_FAIL=0
 
+HOLDOUT_GATE=0
+HOLDOUT_SUITE=""
+HOLDOUT_MAX_NEW_TOKENS=120
+HOLDOUT_TEMPERATURE="0.2"
+HOLDOUT_TOP_K=1
+HOLDOUT_SEED=2718
+HOLDOUT_SEED_STRIDE=53
+HOLDOUT_DEVICE="auto"
+HOLDOUT_FAIL_ON_REGRESSION=1
+HOLDOUT_MAX_PASS_RATE_DROP="0.01"
+HOLDOUT_MAX_CHECK_PASS_RATE_DROP="0.01"
+HOLDOUT_MAX_AVG_CASE_SCORE_DROP="0.01"
+HOLDOUT_FAIL_BELOW_PASS_RATE=""
+HOLDOUT_EVERY_CHUNKS=1
+HOLDOUT_STOP_ON_FAIL=0
+
+PROMOTION_REQUIRE_POLICY_PASS=1
+PROMOTION_REQUIRE_GENERATION_PASS=1
+PROMOTION_REQUIRE_HOLDOUT_PASS=1
+PROMOTION_MIN_QUALITY_STREAK=2
+
+QUALITY_ROLLBACK_STREAK=3
+QUALITY_ROLLBACK_COOLDOWN_STEPS=4000
+
 DEDUPE_OVERLAP_MANIFESTS=1
 DEDUPE_KEEP="newest"
 DEDUPE_DRY_RUN=0
@@ -99,6 +136,8 @@ Core options:
   --shards-path DIR            Root containing shard manifest.json files
   --output-dir DIR             Training output directory (last.pt lives here)
   --state-dir DIR              Supervisor logs/state directory
+  --warm-shards-root DIR       Warm shard root used for hot warmup hydration
+                               (default: /mnt/ceph/llm/data/shards_global/fineweb-global-bpe-v1)
   --poll-seconds N             Sleep between checks/restarts (default: 120)
   --step-chunk N               Steps per training cycle before restart (default: 2000)
   --min-manifests N            Wait until at least N manifests exist (default: 1)
@@ -126,6 +165,7 @@ Training shape:
   --n-heads N                  Attention head count (default: 12)
   --d-model N                  Hidden size (default: 768)
   --learning-rate X            Learning rate (default: 3e-4)
+  --lr-schedule NAME          LR schedule: constant|cosine (default: cosine)
   --lr-warmup-steps N          Warmup steps (default: 2000)
   --lr-min-ratio X             Cosine min ratio (default: 0.10)
   --eval-interval N            Train-loop eval interval (default: 1000)
@@ -139,6 +179,25 @@ Training shape:
   --ema-decay X                EMA decay for model weights (default: 0.0 disabled)
   --ema-update-every N         EMA update interval in optimizer steps (default: 1)
   --ema-start-step N           First optimizer step to apply EMA updates (default: 0)
+  --sampler-strategy MODE      Train sampler mode: weighted|balanced (default: balanced)
+  --sampler-min-full-passes N  Require at least N guaranteed full shard passes per chunk
+                               when using balanced sampler (default: 1)
+
+Hot-set warmup:
+  --no-hot-shard-warmup        Disable pre-train warm->hot shard hydration
+  --hot-shard-warmup-workers N Parallel warmup copy workers (default: 4)
+  --hot-shard-warmup-max-files N
+                               Cap warmup copy file count per loop (default: 0 = all)
+  --hot-shard-warmup-allow-missing-warm
+                               Continue even when warm shard copies are missing
+  --no-hot-shard-warmup-background
+                               Disable background warmup/prefetch while train chunk runs
+  --hot-shard-warmup-background-interval-seconds N
+                               Background prefetch interval while train runs (default: 120)
+  --hot-shard-warmup-background-max-files N
+                               Max files per background warmup pass (default: 64)
+  --hot-shard-warmup-background-include-offloaded
+                               Also prefetch from manifest.offloaded.json during background passes
 
 Auto-tune options:
   --no-auto-tune               Disable automatic batch tuning
@@ -193,6 +252,47 @@ Generation gate (scheduled post-chunk prompt generation checks):
                                Fail generation gate if pass_rate drops below X
   --generation-every-chunks N  Run generation gate every N successful chunks (default: 1)
   --generation-stop-on-fail    Stop supervisor when generation gate returns non-zero
+
+Fixed holdout gate (frozen quality suite):
+  --no-holdout-gate            Disable fixed holdout gate
+  --holdout-suite FILE         Holdout suite JSON path (enables holdout gate)
+  --holdout-max-new-tokens N   Holdout max new tokens per case (default: 120)
+  --holdout-temperature X      Holdout sampling temperature (default: 0.2)
+  --holdout-top-k N            Holdout top-k (default: 1)
+  --holdout-seed N             Holdout base seed (default: 2718)
+  --holdout-seed-stride N      Holdout seed stride (default: 53)
+  --holdout-device NAME        Holdout device (default: auto)
+  --no-holdout-fail-on-regression
+                               Disable holdout regression fail flag
+  --holdout-max-pass-rate-drop X
+                               Allowed holdout pass_rate drop vs fixed baseline (default: 0.01)
+  --holdout-max-check-pass-rate-drop X
+                               Allowed holdout check_pass_rate drop vs fixed baseline (default: 0.01)
+  --holdout-max-avg-case-score-drop X
+                               Allowed holdout avg_case_score drop vs fixed baseline (default: 0.01)
+  --holdout-fail-below-pass-rate X
+                               Fail holdout gate if pass_rate drops below X
+  --holdout-every-chunks N     Run holdout gate every N successful chunks (default: 1)
+  --holdout-stop-on-fail       Stop supervisor when holdout gate returns non-zero
+
+Promotion discipline:
+  --no-promotion-require-policy-pass
+                               Allow best promotion without eval policy promotion flag
+  --no-promotion-require-generation-pass
+                               Allow best promotion without passing generation gate
+  --no-promotion-require-holdout-pass
+                               Allow best promotion without passing holdout gate
+  --promotion-min-quality-streak N
+                               Require N consecutive quality-passing chunks before promotion
+                               (default: 2)
+
+Quality rollback:
+  --quality-rollback-streak N  Roll back to best checkpoint after N consecutive failed
+                               quality chunks (eval/gen gate regressions). 0 disables.
+                               (default: 3)
+  --quality-rollback-cooldown-steps N
+                               Minimum training-step gap between auto-rollbacks
+                               (default: 4000)
   -h, --help                   Show help
 
 Example:
@@ -205,6 +305,7 @@ USAGE
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --shards-path) SHARDS_PATH="$2"; shift 2 ;;
+    --warm-shards-root) WARM_SHARDS_ROOT="$2"; shift 2 ;;
     --output-dir) OUTPUT_DIR="$2"; shift 2 ;;
     --state-dir) STATE_DIR="$2"; shift 2 ;;
     --poll-seconds) POLL_SECONDS="$2"; shift 2 ;;
@@ -229,6 +330,7 @@ while [[ $# -gt 0 ]]; do
     --n-heads) N_HEADS="$2"; shift 2 ;;
     --d-model) D_MODEL="$2"; shift 2 ;;
     --learning-rate) LEARNING_RATE="$2"; shift 2 ;;
+    --lr-schedule) LR_SCHEDULE="$2"; shift 2 ;;
     --lr-warmup-steps) LR_WARMUP_STEPS="$2"; shift 2 ;;
     --lr-min-ratio) LR_MIN_RATIO="$2"; shift 2 ;;
     --eval-interval) EVAL_INTERVAL="$2"; shift 2 ;;
@@ -241,6 +343,16 @@ while [[ $# -gt 0 ]]; do
     --ema-decay) EMA_DECAY="$2"; shift 2 ;;
     --ema-update-every) EMA_UPDATE_EVERY="$2"; shift 2 ;;
     --ema-start-step) EMA_START_STEP="$2"; shift 2 ;;
+    --sampler-strategy) SAMPLER_STRATEGY="$2"; shift 2 ;;
+    --sampler-min-full-passes) SAMPLER_MIN_FULL_PASSES="$2"; shift 2 ;;
+    --no-hot-shard-warmup) HOT_SHARD_WARMUP=0; shift ;;
+    --hot-shard-warmup-workers) HOT_SHARD_WARMUP_WORKERS="$2"; shift 2 ;;
+    --hot-shard-warmup-max-files) HOT_SHARD_WARMUP_MAX_FILES="$2"; shift 2 ;;
+    --hot-shard-warmup-allow-missing-warm) HOT_SHARD_WARMUP_ALLOW_MISSING_WARM=1; shift ;;
+    --no-hot-shard-warmup-background) HOT_SHARD_WARMUP_BACKGROUND=0; shift ;;
+    --hot-shard-warmup-background-interval-seconds) HOT_SHARD_WARMUP_BACKGROUND_INTERVAL_SECONDS="$2"; shift 2 ;;
+    --hot-shard-warmup-background-max-files) HOT_SHARD_WARMUP_BACKGROUND_MAX_FILES="$2"; shift 2 ;;
+    --hot-shard-warmup-background-include-offloaded) HOT_SHARD_WARMUP_BACKGROUND_INCLUDE_OFFLOADED=1; shift ;;
     --no-auto-tune) AUTO_TUNE=0; shift ;;
     --batch-step) BATCH_STEP="$2"; shift 2 ;;
     --min-batch-size) MIN_BATCH_SIZE="$2"; shift 2 ;;
@@ -279,6 +391,27 @@ while [[ $# -gt 0 ]]; do
     --generation-fail-below-pass-rate) GENERATION_FAIL_BELOW_PASS_RATE="$2"; shift 2 ;;
     --generation-every-chunks) GENERATION_EVERY_CHUNKS="$2"; shift 2 ;;
     --generation-stop-on-fail) GENERATION_STOP_ON_FAIL=1; shift ;;
+    --no-holdout-gate) HOLDOUT_GATE=0; shift ;;
+    --holdout-suite) HOLDOUT_SUITE="$2"; HOLDOUT_GATE=1; shift 2 ;;
+    --holdout-max-new-tokens) HOLDOUT_MAX_NEW_TOKENS="$2"; shift 2 ;;
+    --holdout-temperature) HOLDOUT_TEMPERATURE="$2"; shift 2 ;;
+    --holdout-top-k) HOLDOUT_TOP_K="$2"; shift 2 ;;
+    --holdout-seed) HOLDOUT_SEED="$2"; shift 2 ;;
+    --holdout-seed-stride) HOLDOUT_SEED_STRIDE="$2"; shift 2 ;;
+    --holdout-device) HOLDOUT_DEVICE="$2"; shift 2 ;;
+    --no-holdout-fail-on-regression) HOLDOUT_FAIL_ON_REGRESSION=0; shift ;;
+    --holdout-max-pass-rate-drop) HOLDOUT_MAX_PASS_RATE_DROP="$2"; shift 2 ;;
+    --holdout-max-check-pass-rate-drop) HOLDOUT_MAX_CHECK_PASS_RATE_DROP="$2"; shift 2 ;;
+    --holdout-max-avg-case-score-drop) HOLDOUT_MAX_AVG_CASE_SCORE_DROP="$2"; shift 2 ;;
+    --holdout-fail-below-pass-rate) HOLDOUT_FAIL_BELOW_PASS_RATE="$2"; shift 2 ;;
+    --holdout-every-chunks) HOLDOUT_EVERY_CHUNKS="$2"; shift 2 ;;
+    --holdout-stop-on-fail) HOLDOUT_STOP_ON_FAIL=1; shift ;;
+    --no-promotion-require-policy-pass) PROMOTION_REQUIRE_POLICY_PASS=0; shift ;;
+    --no-promotion-require-generation-pass) PROMOTION_REQUIRE_GENERATION_PASS=0; shift ;;
+    --no-promotion-require-holdout-pass) PROMOTION_REQUIRE_HOLDOUT_PASS=0; shift ;;
+    --promotion-min-quality-streak) PROMOTION_MIN_QUALITY_STREAK="$2"; shift 2 ;;
+    --quality-rollback-streak) QUALITY_ROLLBACK_STREAK="$2"; shift 2 ;;
+    --quality-rollback-cooldown-steps) QUALITY_ROLLBACK_COOLDOWN_STEPS="$2"; shift 2 ;;
     -h|--help) usage; exit 0 ;;
     *)
       echo "unknown argument: $1" >&2
@@ -325,12 +458,64 @@ if [[ "$BATCH_SIZE" -le 0 || "$GRAD_ACCUM_STEPS" -le 0 ]]; then
   echo "error: batch-size and grad-accum-steps must be > 0" >&2
   exit 1
 fi
+if [[ "$LR_SCHEDULE" != "constant" && "$LR_SCHEDULE" != "cosine" ]]; then
+  echo "error: lr-schedule must be one of: constant, cosine" >&2
+  exit 1
+fi
+if [[ "$SAMPLER_STRATEGY" != "weighted" && "$SAMPLER_STRATEGY" != "balanced" ]]; then
+  echo "error: sampler-strategy must be one of: weighted, balanced" >&2
+  exit 1
+fi
+if ! [[ "$SAMPLER_MIN_FULL_PASSES" =~ ^[0-9]+$ ]]; then
+  echo "error: sampler-min-full-passes must be an integer >= 0" >&2
+  exit 1
+fi
+if ! [[ "$HOT_SHARD_WARMUP_WORKERS" =~ ^[0-9]+$ ]] || [[ "$HOT_SHARD_WARMUP_WORKERS" -le 0 ]]; then
+  echo "error: hot-shard-warmup-workers must be an integer > 0" >&2
+  exit 1
+fi
+if ! [[ "$HOT_SHARD_WARMUP_MAX_FILES" =~ ^[0-9]+$ ]]; then
+  echo "error: hot-shard-warmup-max-files must be an integer >= 0" >&2
+  exit 1
+fi
+if ! [[ "$HOT_SHARD_WARMUP_BACKGROUND_INTERVAL_SECONDS" =~ ^[0-9]+$ ]] || [[ "$HOT_SHARD_WARMUP_BACKGROUND_INTERVAL_SECONDS" -le 0 ]]; then
+  echo "error: hot-shard-warmup-background-interval-seconds must be an integer > 0" >&2
+  exit 1
+fi
+if ! [[ "$HOT_SHARD_WARMUP_BACKGROUND_MAX_FILES" =~ ^[0-9]+$ ]]; then
+  echo "error: hot-shard-warmup-background-max-files must be an integer >= 0" >&2
+  exit 1
+fi
+if [[ "$HOT_SHARD_WARMUP" -eq 1 && ! -d "$WARM_SHARDS_ROOT" ]]; then
+  echo "error: warm-shards-root not found: $WARM_SHARDS_ROOT" >&2
+  exit 1
+fi
 if [[ "$CHECKPOINT_KEEP_LAST" -lt 0 || "$CHECKPOINT_KEEP_EVERY" -lt 0 ]]; then
   echo "error: checkpoint retention values must be >= 0" >&2
   exit 1
 fi
 if [[ "$GENERATION_EVERY_CHUNKS" -le 0 ]]; then
   echo "error: generation-every-chunks must be > 0" >&2
+  exit 1
+fi
+if [[ "$HOLDOUT_GATE" -eq 1 && -z "$HOLDOUT_SUITE" ]]; then
+  echo "error: holdout-suite must be set when holdout gate is enabled" >&2
+  exit 1
+fi
+if [[ "$HOLDOUT_GATE" -eq 1 && ! -f "$HOLDOUT_SUITE" ]]; then
+  echo "error: holdout-suite not found: $HOLDOUT_SUITE" >&2
+  exit 1
+fi
+if [[ "$HOLDOUT_EVERY_CHUNKS" -le 0 ]]; then
+  echo "error: holdout-every-chunks must be > 0" >&2
+  exit 1
+fi
+if ! [[ "$QUALITY_ROLLBACK_STREAK" =~ ^[0-9]+$ ]] || ! [[ "$QUALITY_ROLLBACK_COOLDOWN_STEPS" =~ ^[0-9]+$ ]]; then
+  echo "error: quality rollback values must be integers >= 0" >&2
+  exit 1
+fi
+if ! [[ "$PROMOTION_MIN_QUALITY_STREAK" =~ ^[0-9]+$ ]]; then
+  echo "error: promotion-min-quality-streak must be an integer >= 0" >&2
   exit 1
 fi
 if [[ "$DEDUPE_KEEP" != "newest" && "$DEDUPE_KEEP" != "oldest" ]]; then
@@ -359,13 +544,16 @@ SUP_LOG="$STATE_DIR/supervisor_$(date +%Y%m%d_%H%M%S).log"
 TRAIN_TREND_TSV="$STATE_DIR/train_trend.tsv"
 EVAL_TREND_TSV="$STATE_DIR/eval_trend.tsv"
 GENERATION_TREND_TSV="$STATE_DIR/generation_trend.tsv"
+HOLDOUT_TREND_TSV="$STATE_DIR/holdout_trend.tsv"
+HOLDOUT_BASELINE_FILE="$STATE_DIR/holdout_baseline_report.txt"
 BEST_META_JSON="$STATE_DIR/best_checkpoint.json"
 TRAINED_BATCHES_FILE="$STATE_DIR/trained_batch_names.txt"
+LAST_QUALITY_ROLLBACK_STEP_FILE="$STATE_DIR/last_quality_rollback_step.txt"
 touch "$SUP_LOG"
 touch "$TRAINED_BATCHES_FILE"
 
 if [[ ! -f "$TRAIN_TREND_TSV" ]]; then
-  echo -e "run_tag\tstep_start\tstep_target\tstep_end\trc\tmanifests\tbatch_size\tgrad_accum\tbest_val_ppl\tgpu_avg_util\tgpu_max_mem_mib\ttrain_log" > "$TRAIN_TREND_TSV"
+  echo -e "run_tag\tstep_start\tstep_target\tstep_end\trc\tmanifests\tbatch_size\tgrad_accum\tbest_val_ppl\tgpu_avg_util\tgpu_max_mem_mib\tsampled_batches\tsampled_trace\ttrain_log" > "$TRAIN_TREND_TSV"
 fi
 if [[ ! -f "$EVAL_TREND_TSV" ]]; then
   echo -e "run_tag\tstep\teval_rc\tpass_rate\tcheck_pass_rate\tavg_case_score\tcases_passed\tcases_total\tregression_pass\tpromotion_pass\tfailed_checks\tbaseline_report\treport_json" > "$EVAL_TREND_TSV"
@@ -373,6 +561,20 @@ fi
 if [[ ! -f "$GENERATION_TREND_TSV" ]]; then
   echo -e "run_tag\tstep\tgeneration_rc\tpass_rate\tcheck_pass_rate\tavg_case_score\tcases_passed\tcases_total\tregression_pass\tbaseline_report\treport_json" > "$GENERATION_TREND_TSV"
 fi
+if [[ ! -f "$HOLDOUT_TREND_TSV" ]]; then
+  echo -e "run_tag\tstep\tholdout_rc\tpass_rate\tcheck_pass_rate\tavg_case_score\tcases_passed\tcases_total\tregression_pass\tbaseline_report\treport_json" > "$HOLDOUT_TREND_TSV"
+fi
+
+LAST_EVAL_RAN=0
+LAST_EVAL_RC=0
+LAST_EVAL_REPORT=""
+LAST_EVAL_REGRESSION_PASS="NA"
+LAST_EVAL_PROMOTION_PASS="NA"
+LAST_GENERATION_GATE_RAN=0
+LAST_GENERATION_GATE_RC=0
+LAST_HOLDOUT_GATE_RAN=0
+LAST_HOLDOUT_GATE_RC=0
+QUALITY_PASS_STREAK=0
 
 log() {
   echo "[$(date -Iseconds)] $*" | tee -a "$SUP_LOG"
@@ -449,6 +651,35 @@ for parts in reversed(rows):
 
 print("")
 PY
+}
+
+is_truthy() {
+  case "$1" in
+    1|true|True|TRUE|yes|Yes|YES) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+fixed_holdout_baseline_report() {
+  if [[ ! -f "$HOLDOUT_BASELINE_FILE" ]]; then
+    echo ""
+    return 0
+  fi
+  local report
+  report="$(head -n 1 "$HOLDOUT_BASELINE_FILE" 2>/dev/null || true)"
+  if [[ -n "$report" && -f "$report" ]]; then
+    echo "$report"
+    return 0
+  fi
+  echo ""
+}
+
+set_holdout_baseline_report() {
+  local report="$1"
+  if [[ -z "$report" || ! -f "$report" ]]; then
+    return 0
+  fi
+  printf '%s\n' "$report" > "$HOLDOUT_BASELINE_FILE"
 }
 
 find_oldest_supervisor_pid() {
@@ -687,17 +918,61 @@ for name in names:
 PY
 }
 
+collect_sampled_batch_names() {
+  local sampled_trace_json="$1"
+  "$PYTHON_BIN" - <<'PY' "$sampled_trace_json"
+import json
+import sys
+from pathlib import Path
+
+trace_path = Path(sys.argv[1])
+if not trace_path.is_file():
+    raise SystemExit(0)
+
+try:
+    payload = json.loads(trace_path.read_text(encoding="utf-8"))
+except Exception:
+    raise SystemExit(0)
+
+rows = payload.get("sampled_shards", [])
+if not isinstance(rows, list):
+    raise SystemExit(0)
+
+batches: set[str] = set()
+for row in rows:
+    if not isinstance(row, dict):
+        continue
+    raw = row.get("path")
+    if not isinstance(raw, str) or not raw.strip():
+        continue
+    batch = Path(raw).resolve().parent.name
+    if batch:
+        batches.add(batch)
+
+for batch in sorted(batches):
+    print(batch)
+PY
+}
+
 update_trained_batch_registry() {
-  local chunk_batches_file="$1"
+  local sampled_batches_file="$1"
   local step="$2"
-  if [[ ! -f "$chunk_batches_file" ]]; then
+  local chunk_batches_count="$3"
+  if [[ ! -f "$sampled_batches_file" ]]; then
+    log "trained_batches_skip step=$step reason=missing_sampled_batches_file file=$sampled_batches_file"
     return 0
   fi
-  cat "$chunk_batches_file" >> "$TRAINED_BATCHES_FILE"
+  local sampled_count
+  sampled_count="$(wc -l < "$sampled_batches_file" | tr -d ' ')"
+  if [[ "$sampled_count" -le 0 ]]; then
+    log "trained_batches_skip step=$step reason=empty_sampled_batches sampled_file=$sampled_batches_file chunk_batches=$chunk_batches_count"
+    return 0
+  fi
+  cat "$sampled_batches_file" >> "$TRAINED_BATCHES_FILE"
   sort -u -o "$TRAINED_BATCHES_FILE" "$TRAINED_BATCHES_FILE"
   local trained_count
   trained_count="$(wc -l < "$TRAINED_BATCHES_FILE" | tr -d ' ')"
-  log "trained_batches_update step=$step trained_batches=$trained_count registry=$TRAINED_BATCHES_FILE"
+  log "trained_batches_update step=$step sampled_batches=$sampled_count chunk_batches=$chunk_batches_count trained_batches=$trained_count registry=$TRAINED_BATCHES_FILE sampled_file=$sampled_batches_file"
 }
 
 backfill_trained_batch_registry() {
@@ -728,8 +1003,8 @@ if trend_path.exists():
         rc = parts[4].strip()
         if not run_tag or rc != "0":
             continue
-        for chunk_file in sorted(state_dir.glob(f"chunk_batches_*_{run_tag}.txt")):
-            for line in chunk_file.read_text(encoding="utf-8", errors="replace").splitlines():
+        for sampled_file in sorted(state_dir.glob(f"sampled_batches_*_{run_tag}.txt")):
+            for line in sampled_file.read_text(encoding="utf-8", errors="replace").splitlines():
                 batch = line.strip()
                 if not batch or batch in existing:
                     continue
@@ -815,6 +1090,96 @@ run_hot_manifest_guard() {
     return 0
   fi
   log "$guard_out"
+}
+
+run_hot_shard_warmup() {
+  if [[ "$HOT_SHARD_WARMUP" -ne 1 ]]; then
+    return 0
+  fi
+  local warmup_report="$STATE_DIR/hot_shard_warmup_latest.json"
+  local -a warmup_args=(
+    --shards-root "$SHARDS_PATH"
+    --warm-shards-root "$WARM_SHARDS_ROOT"
+    --workers "$HOT_SHARD_WARMUP_WORKERS"
+    --report-output "$warmup_report"
+  )
+  if [[ "$HOT_SHARD_WARMUP_MAX_FILES" -gt 0 ]]; then
+    warmup_args+=(--max-files "$HOT_SHARD_WARMUP_MAX_FILES")
+  fi
+  if [[ "$HOT_SHARD_WARMUP_ALLOW_MISSING_WARM" -eq 1 ]]; then
+    warmup_args+=(--allow-missing-warm)
+  fi
+  local warmup_out
+  set +e
+  warmup_out="$(
+    PYTHONPATH=src \
+    "$PYTHON_BIN" scripts/hot_shard_warmup.py \
+      "${warmup_args[@]}" \
+      2>&1
+  )"
+  local rc=$?
+  set -e
+  if [[ "$rc" -ne 0 ]]; then
+    log "hot_shard_warmup_failed rc=$rc detail=$(echo "$warmup_out" | tr '\n' ' ')"
+    return "$rc"
+  fi
+  log "$warmup_out"
+  return 0
+}
+
+start_hot_shard_warmup_background() {
+  local train_pid="$1"
+  HOT_SHARD_WARMUP_BG_PID=""
+  if [[ "$HOT_SHARD_WARMUP" -ne 1 || "$HOT_SHARD_WARMUP_BACKGROUND" -ne 1 ]]; then
+    return 0
+  fi
+  (
+    while kill -0 "$train_pid" 2>/dev/null; do
+      local -a warmup_args=(
+        --shards-root "$SHARDS_PATH"
+        --warm-shards-root "$WARM_SHARDS_ROOT"
+        --workers "$HOT_SHARD_WARMUP_WORKERS"
+        --report-output "$STATE_DIR/hot_shard_warmup_background_latest.json"
+      )
+      if [[ "$HOT_SHARD_WARMUP_BACKGROUND_MAX_FILES" -gt 0 ]]; then
+        warmup_args+=(--max-files "$HOT_SHARD_WARMUP_BACKGROUND_MAX_FILES")
+      fi
+      if [[ "$HOT_SHARD_WARMUP_ALLOW_MISSING_WARM" -eq 1 ]]; then
+        warmup_args+=(--allow-missing-warm)
+      fi
+      if [[ "$HOT_SHARD_WARMUP_BACKGROUND_INCLUDE_OFFLOADED" -eq 1 ]]; then
+        warmup_args+=(--include-offloaded-manifests)
+      fi
+      local warmup_out
+      set +e
+      warmup_out="$(
+        PYTHONPATH=src \
+        "$PYTHON_BIN" scripts/hot_shard_warmup.py \
+          "${warmup_args[@]}" \
+          2>&1
+      )"
+      local rc=$?
+      set -e
+      if [[ "$rc" -eq 0 ]]; then
+        log "hot_shard_warmup_background_done detail=$(echo "$warmup_out" | tr '\n' ' ')"
+      else
+        log "hot_shard_warmup_background_failed rc=$rc detail=$(echo "$warmup_out" | tr '\n' ' ')"
+      fi
+      sleep "$HOT_SHARD_WARMUP_BACKGROUND_INTERVAL_SECONDS"
+    done
+  ) &
+  HOT_SHARD_WARMUP_BG_PID="$!"
+  log "hot_shard_warmup_background_start pid=$HOT_SHARD_WARMUP_BG_PID interval=${HOT_SHARD_WARMUP_BACKGROUND_INTERVAL_SECONDS}s max_files=$HOT_SHARD_WARMUP_BACKGROUND_MAX_FILES include_offloaded=$HOT_SHARD_WARMUP_BACKGROUND_INCLUDE_OFFLOADED"
+}
+
+stop_hot_shard_warmup_background() {
+  if [[ -z "${HOT_SHARD_WARMUP_BG_PID:-}" ]]; then
+    return 0
+  fi
+  kill "$HOT_SHARD_WARMUP_BG_PID" 2>/dev/null || true
+  wait "$HOT_SHARD_WARMUP_BG_PID" 2>/dev/null || true
+  log "hot_shard_warmup_background_stop pid=$HOT_SHARD_WARMUP_BG_PID"
+  HOT_SHARD_WARMUP_BG_PID=""
 }
 
 run_manifest_dedupe() {
@@ -1087,6 +1452,11 @@ auto_tune_after_chunk() {
 run_post_chunk_eval() {
   local run_tag="$1"
   local step="$2"
+  LAST_EVAL_RAN=0
+  LAST_EVAL_RC=0
+  LAST_EVAL_REPORT=""
+  LAST_EVAL_REGRESSION_PASS="NA"
+  LAST_EVAL_PROMOTION_PASS="NA"
   if [[ "$EVAL_AFTER_CHUNK" -ne 1 ]]; then
     return 0
   fi
@@ -1169,6 +1539,11 @@ print(
 PY
     )
   fi
+  LAST_EVAL_RAN=1
+  LAST_EVAL_RC="$eval_rc"
+  LAST_EVAL_REPORT="$eval_report"
+  LAST_EVAL_REGRESSION_PASS="$regression_pass"
+  LAST_EVAL_PROMOTION_PASS="$promotion_pass"
 
   echo -e "${run_tag}\t${step}\t${eval_rc}\t${pass_rate}\t${check_pass_rate}\t${avg_case_score}\t${cases_passed}\t${cases_total}\t${regression_pass}\t${promotion_pass}\t${failed_checks}\t${baseline_report:-NA}\t${eval_report}" >> "$EVAL_TREND_TSV"
   log "eval_done rc=$eval_rc pass_rate=$pass_rate check_pass_rate=$check_pass_rate avg_case_score=$avg_case_score regression_pass=$regression_pass promotion_pass=$promotion_pass baseline=${baseline_report:-none} report=$eval_report"
@@ -1183,13 +1558,14 @@ PY
       log "eval_dashboard_update_failed"
     fi
   fi
-  promote_best_checkpoint_if_needed "$step" "$eval_rc" "$eval_report"
 }
 
 run_generation_gate() {
   local run_tag="$1"
   local step="$2"
   local successful_chunks="$3"
+  LAST_GENERATION_GATE_RAN=0
+  LAST_GENERATION_GATE_RC=0
   if [[ "$GENERATION_GATE" -ne 1 ]]; then
     return 0
   fi
@@ -1241,6 +1617,8 @@ run_generation_gate() {
     > "$gen_log" 2>&1
   local gen_rc=$?
   set -e
+  LAST_GENERATION_GATE_RAN=1
+  LAST_GENERATION_GATE_RC="$gen_rc"
 
   local pass_rate="NA"
   local check_pass_rate="NA"
@@ -1273,6 +1651,315 @@ PY
   return "$gen_rc"
 }
 
+run_holdout_gate() {
+  local run_tag="$1"
+  local step="$2"
+  local successful_chunks="$3"
+  LAST_HOLDOUT_GATE_RAN=0
+  LAST_HOLDOUT_GATE_RC=0
+  if [[ "$HOLDOUT_GATE" -ne 1 ]]; then
+    return 0
+  fi
+  if (( successful_chunks % HOLDOUT_EVERY_CHUNKS != 0 )); then
+    log "holdout_gate_skip reason=interval step=$step successful_chunks=$successful_chunks interval=$HOLDOUT_EVERY_CHUNKS"
+    return 0
+  fi
+  if [[ ! -f "$OUTPUT_DIR/last.pt" ]]; then
+    log "holdout_gate_skip reason=no_last_checkpoint"
+    return 0
+  fi
+
+  local holdout_report="artifacts/reports/evals/holdout_gate_step$(printf '%07d' "$step")_${run_tag}.json"
+  local holdout_log="$STATE_DIR/holdout_gate_${step}_${run_tag}.log"
+  local baseline_report=""
+  baseline_report="$(fixed_holdout_baseline_report)"
+  if [[ -n "$baseline_report" && ! -f "$baseline_report" ]]; then
+    baseline_report=""
+  fi
+  log "holdout_gate_start step=$step suite=$HOLDOUT_SUITE report=$holdout_report baseline=${baseline_report:-none}"
+
+  local -a holdout_extra_args=()
+  if [[ -n "$baseline_report" ]]; then
+    holdout_extra_args+=(--baseline-report "$baseline_report")
+    holdout_extra_args+=(--max-pass-rate-drop "$HOLDOUT_MAX_PASS_RATE_DROP")
+    holdout_extra_args+=(--max-check-pass-rate-drop "$HOLDOUT_MAX_CHECK_PASS_RATE_DROP")
+    holdout_extra_args+=(--max-avg-case-score-drop "$HOLDOUT_MAX_AVG_CASE_SCORE_DROP")
+    if [[ "$HOLDOUT_FAIL_ON_REGRESSION" -eq 1 ]]; then
+      holdout_extra_args+=(--fail-on-regression)
+    fi
+  fi
+  if [[ -n "$HOLDOUT_FAIL_BELOW_PASS_RATE" ]]; then
+    holdout_extra_args+=(--fail-below-pass-rate "$HOLDOUT_FAIL_BELOW_PASS_RATE")
+  fi
+
+  set +e
+  PYTHONPATH=src \
+  .venv/bin/python scripts/eval_checkpoint_prompts.py \
+    --checkpoint "$OUTPUT_DIR/last.pt" \
+    --suite "$HOLDOUT_SUITE" \
+    --output "$holdout_report" \
+    --device "$HOLDOUT_DEVICE" \
+    --max-new-tokens "$HOLDOUT_MAX_NEW_TOKENS" \
+    --temperature "$HOLDOUT_TEMPERATURE" \
+    --top-k "$HOLDOUT_TOP_K" \
+    --seed "$HOLDOUT_SEED" \
+    --seed-stride "$HOLDOUT_SEED_STRIDE" \
+    "${holdout_extra_args[@]}" \
+    > "$holdout_log" 2>&1
+  local holdout_rc=$?
+  set -e
+  LAST_HOLDOUT_GATE_RAN=1
+  LAST_HOLDOUT_GATE_RC="$holdout_rc"
+
+  local pass_rate="NA"
+  local check_pass_rate="NA"
+  local avg_case_score="NA"
+  local cases_passed="NA"
+  local cases_total="NA"
+  local regression_pass="NA"
+  if [[ -f "$holdout_report" ]]; then
+    read -r pass_rate check_pass_rate avg_case_score cases_passed cases_total regression_pass < <(
+      python3 - <<'PY' "$holdout_report"
+import json
+import sys
+obj = json.load(open(sys.argv[1], "r", encoding="utf-8"))
+s = obj.get("summary", {})
+r = obj.get("regression", {})
+print(
+    s.get("pass_rate", "NA"),
+    s.get("check_pass_rate", "NA"),
+    s.get("avg_case_score", "NA"),
+    s.get("cases_passed", "NA"),
+    s.get("cases_total", "NA"),
+    r.get("pass", "NA") if isinstance(r, dict) else "NA",
+)
+PY
+    )
+  fi
+
+  echo -e "${run_tag}\t${step}\t${holdout_rc}\t${pass_rate}\t${check_pass_rate}\t${avg_case_score}\t${cases_passed}\t${cases_total}\t${regression_pass}\t${baseline_report:-NA}\t${holdout_report}" >> "$HOLDOUT_TREND_TSV"
+  log "holdout_gate_done rc=$holdout_rc pass_rate=$pass_rate check_pass_rate=$check_pass_rate avg_case_score=$avg_case_score regression_pass=$regression_pass baseline=${baseline_report:-none} report=$holdout_report"
+
+  if [[ -z "$baseline_report" && "$holdout_rc" -eq 0 && -f "$holdout_report" ]]; then
+    set_holdout_baseline_report "$holdout_report"
+    log "holdout_baseline_set report=$holdout_report"
+  fi
+  return "$holdout_rc"
+}
+
+evaluate_quality_gates_and_maybe_promote() {
+  local step="$1"
+  local quality_ok=1
+  local -a reasons=()
+
+  if [[ "$LAST_EVAL_RAN" -ne 1 ]]; then
+    quality_ok=0
+    reasons+=("eval_not_run")
+  elif [[ "$LAST_EVAL_RC" -ne 0 ]]; then
+    quality_ok=0
+    reasons+=("eval_failed")
+  fi
+  if [[ "$LAST_EVAL_REGRESSION_PASS" == "False" || "$LAST_EVAL_REGRESSION_PASS" == "0" ]]; then
+    quality_ok=0
+    reasons+=("eval_regressed")
+  fi
+  if [[ "$PROMOTION_REQUIRE_POLICY_PASS" -eq 1 ]]; then
+    if ! is_truthy "$LAST_EVAL_PROMOTION_PASS"; then
+      quality_ok=0
+      reasons+=("policy_not_promoted")
+    fi
+  fi
+  if [[ "$PROMOTION_REQUIRE_GENERATION_PASS" -eq 1 && "$GENERATION_GATE" -eq 1 ]]; then
+    if [[ "$LAST_GENERATION_GATE_RAN" -ne 1 ]]; then
+      quality_ok=0
+      reasons+=("generation_not_run")
+    elif [[ "$LAST_GENERATION_GATE_RC" -ne 0 ]]; then
+      quality_ok=0
+      reasons+=("generation_failed")
+    fi
+  fi
+  if [[ "$PROMOTION_REQUIRE_HOLDOUT_PASS" -eq 1 && "$HOLDOUT_GATE" -eq 1 ]]; then
+    if [[ "$LAST_HOLDOUT_GATE_RAN" -ne 1 ]]; then
+      quality_ok=0
+      reasons+=("holdout_not_run")
+    elif [[ "$LAST_HOLDOUT_GATE_RC" -ne 0 ]]; then
+      quality_ok=0
+      reasons+=("holdout_failed")
+    fi
+  fi
+
+  if [[ "$quality_ok" -eq 1 ]]; then
+    QUALITY_PASS_STREAK=$((QUALITY_PASS_STREAK + 1))
+  else
+    QUALITY_PASS_STREAK=0
+  fi
+
+  local reason_text="none"
+  if [[ "${#reasons[@]}" -gt 0 ]]; then
+    reason_text="$(IFS=,; echo "${reasons[*]}")"
+  fi
+
+  log "quality_gate_result step=$step pass=$quality_ok streak=$QUALITY_PASS_STREAK required_streak=$PROMOTION_MIN_QUALITY_STREAK reasons=$reason_text"
+
+  if [[ "$quality_ok" -ne 1 ]]; then
+    log "best_skip step=$step reason=quality_gate_failed reasons=$reason_text"
+    return 0
+  fi
+  if [[ "$PROMOTION_MIN_QUALITY_STREAK" -gt 0 && "$QUALITY_PASS_STREAK" -lt "$PROMOTION_MIN_QUALITY_STREAK" ]]; then
+    log "best_skip step=$step reason=quality_streak_not_met streak=$QUALITY_PASS_STREAK required=$PROMOTION_MIN_QUALITY_STREAK"
+    return 0
+  fi
+
+  promote_best_checkpoint_if_needed "$step" "$LAST_EVAL_RC" "$LAST_EVAL_REPORT"
+}
+
+quality_failure_tail_summary() {
+  "$PYTHON_BIN" - <<'PY' "$EVAL_TREND_TSV" "$GENERATION_TREND_TSV" "$HOLDOUT_TREND_TSV"
+from pathlib import Path
+import sys
+
+eval_path = Path(sys.argv[1])
+gen_path = Path(sys.argv[2])
+holdout_path = Path(sys.argv[3])
+
+step_fail: dict[int, bool] = {}
+step_sources: dict[int, set[str]] = {}
+
+def parse_rows(path: Path, source: str, rc_idx: int, regression_idx: int) -> None:
+    if not path.exists():
+        return
+    for row in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        if not row or row.startswith("run_tag\t"):
+            continue
+        parts = row.split("\t")
+        if len(parts) <= max(rc_idx, regression_idx):
+            continue
+        step_raw = parts[1].strip()
+        if not step_raw.isdigit():
+            continue
+        step = int(step_raw)
+        rc = parts[rc_idx].strip()
+        regression = parts[regression_idx].strip() if regression_idx >= 0 else ""
+        failed = rc != "0" or regression in {"False", "0"}
+        if not failed:
+            step_fail.setdefault(step, False)
+            continue
+        step_fail[step] = True
+        sources = step_sources.setdefault(step, set())
+        sources.add(source)
+
+parse_rows(eval_path, "eval", rc_idx=2, regression_idx=8)
+parse_rows(gen_path, "generation", rc_idx=2, regression_idx=8)
+parse_rows(holdout_path, "holdout", rc_idx=2, regression_idx=8)
+
+if not step_fail:
+    print("0\t0\tnone")
+    raise SystemExit(0)
+
+ordered_steps = sorted(step_fail.keys())
+streak = 0
+for step in reversed(ordered_steps):
+    if step_fail.get(step):
+        streak += 1
+    else:
+        break
+
+latest = ordered_steps[-1]
+sources = ",".join(sorted(step_sources.get(latest, set()))) or "none"
+print(f"{streak}\t{latest}\t{sources}")
+PY
+}
+
+best_checkpoint_step() {
+  if [[ -f "$BEST_META_JSON" ]]; then
+    local best_step
+    best_step="$("$PYTHON_BIN" - <<'PY' "$BEST_META_JSON"
+import json
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+try:
+    payload = json.loads(path.read_text(encoding="utf-8"))
+except Exception:
+    print("")
+    raise SystemExit(0)
+step = payload.get("best_step")
+print(str(step) if isinstance(step, int) else "")
+PY
+)"
+    if [[ "$best_step" =~ ^[0-9]+$ ]]; then
+      echo "$best_step"
+      return 0
+    fi
+  fi
+  if [[ -f "$OUTPUT_DIR/best.pt" ]]; then
+    checkpoint_step "$OUTPUT_DIR/best.pt" || echo "0"
+    return 0
+  fi
+  echo "0"
+}
+
+maybe_auto_rollback_on_quality_regression() {
+  local current_step="$1"
+  if [[ "$QUALITY_ROLLBACK_STREAK" -le 0 ]]; then
+    return 0
+  fi
+  if [[ ! -f "$OUTPUT_DIR/best.pt" ]]; then
+    return 0
+  fi
+
+  local tail_streak=0
+  local latest_step=0
+  local latest_sources="none"
+  read -r tail_streak latest_step latest_sources < <(quality_failure_tail_summary)
+  if [[ "$tail_streak" -lt "$QUALITY_ROLLBACK_STREAK" ]]; then
+    return 0
+  fi
+
+  local best_step
+  best_step="$(best_checkpoint_step)"
+  if [[ -z "$best_step" || "$best_step" -le 0 ]]; then
+    log "quality_rollback_skip reason=missing_best_step streak=$tail_streak latest_step=$latest_step"
+    return 0
+  fi
+  if [[ "$best_step" -ge "$current_step" ]]; then
+    log "quality_rollback_skip reason=best_not_older current_step=$current_step best_step=$best_step streak=$tail_streak"
+    return 0
+  fi
+
+  local last_rollback_step=-1
+  if [[ -f "$LAST_QUALITY_ROLLBACK_STEP_FILE" ]]; then
+    local raw
+    raw="$(cat "$LAST_QUALITY_ROLLBACK_STEP_FILE" 2>/dev/null || true)"
+    if [[ "$raw" =~ ^[0-9]+$ ]]; then
+      last_rollback_step="$raw"
+    fi
+  fi
+  if [[ "$last_rollback_step" -ge 0 ]]; then
+    local delta=$((current_step - last_rollback_step))
+    if [[ "$delta" -lt "$QUALITY_ROLLBACK_COOLDOWN_STEPS" ]]; then
+      log "quality_rollback_skip reason=cooldown current_step=$current_step last_rollback_step=$last_rollback_step cooldown_steps=$QUALITY_ROLLBACK_COOLDOWN_STEPS streak=$tail_streak"
+      return 0
+    fi
+  fi
+
+  local ts
+  ts="$(date +%Y%m%d_%H%M%S)"
+  if [[ -f "$OUTPUT_DIR/last.pt" ]]; then
+    cp -f "$OUTPUT_DIR/last.pt" "$OUTPUT_DIR/last_pre_quality_rollback_${ts}.pt"
+  fi
+  cp -f "$OUTPUT_DIR/best.pt" "$OUTPUT_DIR/last.pt"
+  if [[ -f "$OUTPUT_DIR/best.safetensors" ]]; then
+    cp -f "$OUTPUT_DIR/best.safetensors" "$OUTPUT_DIR/last.safetensors"
+  fi
+  if [[ -f "$OUTPUT_DIR/best_ema.safetensors" ]]; then
+    cp -f "$OUTPUT_DIR/best_ema.safetensors" "$OUTPUT_DIR/last_ema.safetensors"
+  fi
+  echo "$current_step" > "$LAST_QUALITY_ROLLBACK_STEP_FILE"
+  log "quality_rollback_applied current_step=$current_step best_step=$best_step streak=$tail_streak latest_quality_step=$latest_step latest_sources=$latest_sources cooldown_steps=$QUALITY_ROLLBACK_COOLDOWN_STEPS"
+}
+
 clamp_batch_size
 if [[ "$TARGET_EFFECTIVE_BATCH" -gt 0 ]]; then
   set_grad_accum_from_target
@@ -1281,7 +1968,7 @@ fi
 failure_streak=0
 successful_chunks=0
 log "supervisor_start shards_path=$SHARDS_PATH output_dir=$OUTPUT_DIR step_chunk=$STEP_CHUNK"
-log "tuning_start batch_size=$BATCH_SIZE grad_accum=$GRAD_ACCUM_STEPS auto_tune=$AUTO_TUNE target_effective_batch=$TARGET_EFFECTIVE_BATCH train_fail_on_eval_regression=$TRAIN_FAIL_ON_EVAL_REGRESSION checkpoint_keep_last=$CHECKPOINT_KEEP_LAST checkpoint_keep_every=$CHECKPOINT_KEEP_EVERY allow_context_extension=$ALLOW_CONTEXT_EXTENSION ema_decay=$EMA_DECAY ema_update_every=$EMA_UPDATE_EVERY ema_start_step=$EMA_START_STEP generation_gate=$GENERATION_GATE generation_every_chunks=$GENERATION_EVERY_CHUNKS generation_stop_on_fail=$GENERATION_STOP_ON_FAIL dedupe_overlap_manifests=$DEDUPE_OVERLAP_MANIFESTS dedupe_keep=$DEDUPE_KEEP dedupe_dry_run=$DEDUPE_DRY_RUN min_train_tokens=$MIN_TRAIN_TOKENS train_stall_check_seconds=$TRAIN_STALL_CHECK_SECONDS train_stall_kill_seconds=$TRAIN_STALL_KILL_SECONDS"
+log "tuning_start batch_size=$BATCH_SIZE grad_accum=$GRAD_ACCUM_STEPS auto_tune=$AUTO_TUNE target_effective_batch=$TARGET_EFFECTIVE_BATCH train_fail_on_eval_regression=$TRAIN_FAIL_ON_EVAL_REGRESSION checkpoint_keep_last=$CHECKPOINT_KEEP_LAST checkpoint_keep_every=$CHECKPOINT_KEEP_EVERY allow_context_extension=$ALLOW_CONTEXT_EXTENSION learning_rate=$LEARNING_RATE lr_schedule=$LR_SCHEDULE lr_warmup_steps=$LR_WARMUP_STEPS lr_min_ratio=$LR_MIN_RATIO ema_decay=$EMA_DECAY ema_update_every=$EMA_UPDATE_EVERY ema_start_step=$EMA_START_STEP sampler_strategy=$SAMPLER_STRATEGY sampler_min_full_passes=$SAMPLER_MIN_FULL_PASSES hot_shard_warmup=$HOT_SHARD_WARMUP hot_shard_warmup_workers=$HOT_SHARD_WARMUP_WORKERS hot_shard_warmup_max_files=$HOT_SHARD_WARMUP_MAX_FILES hot_shard_warmup_background=$HOT_SHARD_WARMUP_BACKGROUND hot_shard_warmup_background_interval_seconds=$HOT_SHARD_WARMUP_BACKGROUND_INTERVAL_SECONDS hot_shard_warmup_background_max_files=$HOT_SHARD_WARMUP_BACKGROUND_MAX_FILES hot_shard_warmup_background_include_offloaded=$HOT_SHARD_WARMUP_BACKGROUND_INCLUDE_OFFLOADED generation_gate=$GENERATION_GATE generation_every_chunks=$GENERATION_EVERY_CHUNKS generation_stop_on_fail=$GENERATION_STOP_ON_FAIL holdout_gate=$HOLDOUT_GATE holdout_suite=${HOLDOUT_SUITE:-none} holdout_every_chunks=$HOLDOUT_EVERY_CHUNKS holdout_stop_on_fail=$HOLDOUT_STOP_ON_FAIL promotion_require_policy_pass=$PROMOTION_REQUIRE_POLICY_PASS promotion_require_generation_pass=$PROMOTION_REQUIRE_GENERATION_PASS promotion_require_holdout_pass=$PROMOTION_REQUIRE_HOLDOUT_PASS promotion_min_quality_streak=$PROMOTION_MIN_QUALITY_STREAK quality_rollback_streak=$QUALITY_ROLLBACK_STREAK quality_rollback_cooldown_steps=$QUALITY_ROLLBACK_COOLDOWN_STEPS dedupe_overlap_manifests=$DEDUPE_OVERLAP_MANIFESTS dedupe_keep=$DEDUPE_KEEP dedupe_dry_run=$DEDUPE_DRY_RUN min_train_tokens=$MIN_TRAIN_TOKENS train_stall_check_seconds=$TRAIN_STALL_CHECK_SECONDS train_stall_kill_seconds=$TRAIN_STALL_KILL_SECONDS"
 backfill_trained_batch_registry
 ensure_single_supervisor_process
 
@@ -1307,6 +1994,11 @@ while true; do
     sleep "$POLL_SECONDS"
     continue
   fi
+  if ! run_hot_shard_warmup; then
+    log "waiting_for_hot_shard_warmup sleep=${POLL_SECONDS}s"
+    sleep "$POLL_SECONDS"
+    continue
+  fi
 
   resume_ckpt="$(select_resume_checkpoint)"
   if [[ -n "$resume_ckpt" ]]; then
@@ -1319,6 +2011,8 @@ while true; do
   run_log="$STATE_DIR/train_${step_now}_to_${target_step}_${run_tag}.log"
   gpu_log="$STATE_DIR/gpu_${step_now}_to_${target_step}_${run_tag}.csv"
   chunk_batches_file="$STATE_DIR/chunk_batches_${step_now}_to_${target_step}_${run_tag}.txt"
+  sampled_shards_trace="$STATE_DIR/sampled_shards_${step_now}_to_${target_step}_${run_tag}.json"
+  sampled_batches_file="$STATE_DIR/sampled_batches_${step_now}_to_${target_step}_${run_tag}.txt"
   collect_manifest_batch_names > "$chunk_batches_file"
   chunk_batches_count="$(wc -l < "$chunk_batches_file" | tr -d ' ')"
   resume_args=()
@@ -1326,7 +2020,7 @@ while true; do
     resume_args=(--resume-from "$resume_ckpt")
   fi
 
-  log "train_launch manifests=$mcount unique_inputs=$unique_inputs train_tokens=$train_tokens overlap_inputs=$overlap_inputs overlap_manifests=$overlap_manifests step_now=$step_now target_step=$target_step batch_size=$BATCH_SIZE grad_accum=$GRAD_ACCUM_STEPS resume=${resume_ckpt:-none} chunk_batches=$chunk_batches_count chunk_batches_file=$chunk_batches_file run_log=$run_log"
+  log "train_launch manifests=$mcount unique_inputs=$unique_inputs train_tokens=$train_tokens overlap_inputs=$overlap_inputs overlap_manifests=$overlap_manifests step_now=$step_now target_step=$target_step batch_size=$BATCH_SIZE grad_accum=$GRAD_ACCUM_STEPS sampler_strategy=$SAMPLER_STRATEGY sampler_min_full_passes=$SAMPLER_MIN_FULL_PASSES resume=${resume_ckpt:-none} chunk_batches=$chunk_batches_count chunk_batches_file=$chunk_batches_file sampled_trace=$sampled_shards_trace run_log=$run_log"
 
   train_gate_args=()
   if [[ "$TRAIN_FAIL_ON_EVAL_REGRESSION" -eq 1 ]]; then
@@ -1354,7 +2048,7 @@ while true; do
       --n-heads "$N_HEADS" \
       --d-model "$D_MODEL" \
       --learning-rate "$LEARNING_RATE" \
-      --lr-schedule cosine \
+      --lr-schedule "$LR_SCHEDULE" \
       --lr-warmup-steps "$LR_WARMUP_STEPS" \
       --lr-min-ratio "$LR_MIN_RATIO" \
       --eval-interval "$EVAL_INTERVAL" \
@@ -1364,6 +2058,10 @@ while true; do
       --precision "$PRECISION" \
       --checkpoint-keep-last "$CHECKPOINT_KEEP_LAST" \
       --checkpoint-keep-every "$CHECKPOINT_KEEP_EVERY" \
+      --sampler-strategy "$SAMPLER_STRATEGY" \
+      --sampler-min-full-passes "$SAMPLER_MIN_FULL_PASSES" \
+      --sampled-shards-trace "$sampled_shards_trace" \
+      --sampled-shards-trace-min-rows 1 \
       --ema-decay "$EMA_DECAY" \
       --ema-update-every "$EMA_UPDATE_EVERY" \
       --ema-start-step "$EMA_START_STEP" \
@@ -1373,6 +2071,7 @@ while true; do
   train_pid=$!
   start_gpu_monitor "$train_pid" "$gpu_log"
   monitor_pid="${GPU_MONITOR_PID:-}"
+  start_hot_shard_warmup_background "$train_pid"
   wait_for_train_with_stall_guard "$train_pid" "$run_log" "$step_now" "$stall_flag_file"
   rc=$?
   stalled_chunk=0
@@ -1384,6 +2083,7 @@ while true; do
     kill "$monitor_pid" 2>/dev/null || true
     wait "$monitor_pid" 2>/dev/null || true
   fi
+  stop_hot_shard_warmup_background
   set -e
 
   new_resume_ckpt="$(select_resume_checkpoint)"
@@ -1394,13 +2094,15 @@ while true; do
   fi
   best_val_ppl="$(best_val_ppl_from_log "$run_log")"
   read -r gpu_avg_util gpu_max_mem < <(gpu_summary "$gpu_log")
-  echo -e "${run_tag}\t${step_now}\t${target_step}\t${new_step}\t${rc}\t${mcount}\t${BATCH_SIZE}\t${GRAD_ACCUM_STEPS}\t${best_val_ppl}\t${gpu_avg_util}\t${gpu_max_mem}\t${run_log}" >> "$TRAIN_TREND_TSV"
+  sampled_batches_count="NA"
 
   if [[ "$rc" -eq 0 ]]; then
     failure_streak=0
     successful_chunks=$((successful_chunks + 1))
-    log "train_done rc=0 step_now=$new_step best_val_ppl=$best_val_ppl gpu_avg_util=$gpu_avg_util gpu_max_mem=$gpu_max_mem"
-    update_trained_batch_registry "$chunk_batches_file" "$new_step"
+    collect_sampled_batch_names "$sampled_shards_trace" > "$sampled_batches_file"
+    sampled_batches_count="$(wc -l < "$sampled_batches_file" | tr -d ' ')"
+    log "train_done rc=0 step_now=$new_step best_val_ppl=$best_val_ppl gpu_avg_util=$gpu_avg_util gpu_max_mem=$gpu_max_mem sampled_batches=$sampled_batches_count sampled_batches_file=$sampled_batches_file"
+    update_trained_batch_registry "$sampled_batches_file" "$new_step" "$chunk_batches_count"
     run_post_chunk_eval "$run_tag" "$new_step"
     if ! run_generation_gate "$run_tag" "$new_step" "$successful_chunks"; then
       log "generation_gate_failed step=$new_step successful_chunks=$successful_chunks"
@@ -1409,10 +2111,20 @@ while true; do
         exit 11
       fi
     fi
+    if ! run_holdout_gate "$run_tag" "$new_step" "$successful_chunks"; then
+      log "holdout_gate_failed step=$new_step successful_chunks=$successful_chunks"
+      if [[ "$HOLDOUT_STOP_ON_FAIL" -eq 1 ]]; then
+        log "supervisor_stop reason=holdout_gate_failed"
+        exit 12
+      fi
+    fi
+    evaluate_quality_gates_and_maybe_promote "$new_step"
+    maybe_auto_rollback_on_quality_regression "$new_step"
   else
     if [[ -n "$resume_ckpt" ]] && log_has_resume_checkpoint_error "$run_log"; then
       quarantine_bad_checkpoint "$resume_ckpt" "resume_failure"
     fi
+    QUALITY_PASS_STREAK=0
     failure_streak=$((failure_streak + 1))
     if [[ "$stalled_chunk" -eq 1 ]]; then
       log "train_failed rc=$rc failure_streak=$failure_streak reason=stall_killed best_val_ppl=$best_val_ppl gpu_avg_util=$gpu_avg_util gpu_max_mem=$gpu_max_mem"
@@ -1423,8 +2135,10 @@ while true; do
       log "supervisor_stop reason=max_failure_streak_reached"
       exit 10
     fi
+    maybe_auto_rollback_on_quality_regression "$new_step"
   fi
 
   auto_tune_after_chunk "$rc" "$run_log" "$gpu_avg_util" "$gpu_max_mem"
+  echo -e "${run_tag}\t${step_now}\t${target_step}\t${new_step}\t${rc}\t${mcount}\t${BATCH_SIZE}\t${GRAD_ACCUM_STEPS}\t${best_val_ppl}\t${gpu_avg_util}\t${gpu_max_mem}\t${sampled_batches_count}\t${sampled_shards_trace}\t${run_log}" >> "$TRAIN_TREND_TSV"
   sleep "$POLL_SECONDS"
 done

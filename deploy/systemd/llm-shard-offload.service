@@ -8,7 +8,7 @@ Type=oneshot
 User=__USER__
 WorkingDirectory=__REPO_DIR__
 EnvironmentFile=-/etc/llm/llm.env
-ExecStart=/bin/bash -lc 'cd __REPO_DIR__ && mkdir -p artifacts/reports && exec flock -n artifacts/reports/shard_offload.lock env PYTHONPATH=src .venv/bin/python scripts/offload_shard_bins_to_warm.py ${LLM_SHARD_OFFLOAD_ARGS:-"--shards-root data/shards_global/fineweb-global-bpe-v1 --warm-shards-root /mnt/ceph/llm/data/shards_global/fineweb-global-bpe-v1 --keep-local-batches 24 --target-free-gib 180 --max-batches 16 --disable-offloaded-manifests --require-trained-batches-file artifacts/reports/train_supervisor_350bt/trained_batch_names.txt --min-active-manifests 48"}'
+ExecStart=/bin/bash -lc 'cd __REPO_DIR__ && mkdir -p artifacts/reports && exec flock -n artifacts/reports/shard_offload.lock bash scripts/shard_offload_cycle.sh'
 Nice=10
 IOSchedulingClass=idle
 NoNewPrivileges=true

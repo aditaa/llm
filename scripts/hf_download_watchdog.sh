@@ -5,10 +5,10 @@ usage() {
   cat <<'USAGE'
 Usage:
   bash scripts/hf_download_watchdog.sh \
-    --dataset HuggingFaceFW/fineweb \
-    --repo-type dataset \
-    --include "sample/350BT/*.parquet" \
-    --local-dir /mnt/ceph/llm/data/fineweb/sample-350BT \
+    [--dataset HuggingFaceFW/fineweb] \
+    [--repo-type dataset] \
+    [--include "sample/350BT/*.parquet"] \
+    [--local-dir /mnt/ceph/llm/data/fineweb/sample-350BT] \
     [--max-workers 4] \
     [--enable-hf-transfer | --disable-hf-transfer] \
     [--skip-dry-run] \
@@ -27,6 +27,7 @@ Notes:
   - Restarts the worker if it exits unexpectedly.
   - Detects stalls from unchanged parquet/incomplete bytes+counts and restarts.
   - Optional completion exit can stop watchdog once expected file/byte targets are reached.
+  - Dataset/include/local-dir default to FineWeb 350BT paths if not provided.
 USAGE
 }
 
@@ -38,10 +39,10 @@ require_cmd() {
   fi
 }
 
-DATASET=""
+DATASET="HuggingFaceFW/fineweb"
 REPO_TYPE="dataset"
-INCLUDE_PATTERN=""
-LOCAL_DIR=""
+INCLUDE_PATTERN="sample/350BT/*.parquet"
+LOCAL_DIR="/mnt/ceph/llm/data/fineweb/sample-350BT"
 MAX_WORKERS=4
 ENABLE_HF_TRANSFER="auto"
 SKIP_DRY_RUN=0
@@ -149,7 +150,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 if [[ -z "$DATASET" || -z "$INCLUDE_PATTERN" || -z "$LOCAL_DIR" ]]; then
-  echo "error: --dataset, --include, and --local-dir are required" >&2
+  echo "error: dataset/include/local-dir cannot be empty" >&2
   usage >&2
   exit 2
 fi

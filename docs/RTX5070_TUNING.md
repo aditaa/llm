@@ -51,7 +51,7 @@ Measured with this profile: `avg_util=99.1%`, `max_util=100%`, `min_util=96%`, `
 
 ## Launch
 ```bash
-bash scripts/train_rtx5070_fineweb_bpe_v1_big.sh
+bash scripts/train_rtx5070_fineweb_350bt_bpe_v2.sh
 ```
 
 350BT-first sweep and long-run launchers:
@@ -61,5 +61,20 @@ bash scripts/train_rtx5070_fineweb_350bt_bpe_v2.sh
 ```
 
 Saved profile JSON:
-- `configs/train/rtx5070/fineweb_global_bpe_v1_big.json`
 - `configs/train/rtx5070/fineweb_350bt_bpe_v2_longrun.json`
+- `configs/train/rtx5070/fineweb_350bt_bpe_v2_ctx1024_stage.json`
+
+## Reproducible Context/Batch Benchmark
+Run a short standardized sweep that records per-profile token throughput and GPU memory/utilization:
+
+```bash
+bash scripts/benchmark_rtx5070_context_profiles.sh --max-steps 1200 --compile-model
+```
+
+Default profile set:
+- `512:34:1`
+- `768:16:2`
+- `1024:6:4`
+
+Output:
+- `artifacts/reports/rtx5070_ctx_bench_<timestamp>/summary.tsv`

@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import json
 import shutil
 import subprocess
@@ -30,6 +31,24 @@ def parse_args() -> argparse.Namespace:
         "--warm-dir",
         default="/mnt/ceph/llm/data/fineweb/sample-350BT/sample/350BT",
         help="Warm parquet directory",
+    )
+    parser.add_argument(
+        "--max-entries",
+        type=int,
+        default=0,
+        help="Max bad-list entries to process per run (0 = all)",
+    )
+    parser.add_argument(
+        "--workers",
+        type=int,
+        default=4,
+        help="Parallel validation workers (default: 4)",
+    )
+    parser.add_argument(
+        "--validate-retries",
+        type=int,
+        default=1,
+        help="Retries for parquet read_error validation failures (default: 1)",
     )
     parser.add_argument("--field", default="text", help="Expected parquet text field")
     parser.add_argument(
@@ -231,6 +250,32 @@ def _prune_quarantine(
     return summary
 
 
+def _validate_name(
+    name: str,
+    *,
+    warm_dir: Path,
+    field: str,
+    validate_retries: int,
+) -> ValidationResult:
+    warm_path = warm_dir / name
+    if not warm_path.exists():
+        return ValidationResult(name=name, status="missing_warm")
+
+    retries = max(0, int(validate_retries))
+    last_detail = "validation_failed"
+    for attempt in range(retries + 1):
+        ok, detail = _validate_parquet(warm_path, field)
+        if ok:
+            return ValidationResult(name=name, status="valid", detail=detail)
+        last_detail = detail
+        if not detail.startswith("read_error:"):
+            break
+        if attempt < retries:
+            time.sleep(0.2 * float(attempt + 1))
+
+    return ValidationResult(name=name, status="invalid", detail=last_detail)
+
+
 def main() -> int:
     args = parse_args()
     bad_list = Path(args.bad_list)
@@ -254,27 +299,65 @@ def main() -> int:
     report_output.parent.mkdir(parents=True, exist_ok=True)
 
     bad_names = _read_bad_list(bad_list)
+    limit = int(args.max_entries)
+    processed_names = bad_names[: limit if limit > 0 else len(bad_names)]
+    untouched_names = bad_names[len(processed_names) :]
     results: list[ValidationResult] = []
 
     valid_names: list[str] = []
     retained_bad_names: list[str] = []
-    for name in bad_names:
-        warm_path = warm_dir / name
-        if not warm_path.exists():
-            results.append(ValidationResult(name=name, status="missing_warm"))
-            retained_bad_names.append(name)
-            continue
-        ok, detail = _validate_parquet(warm_path, args.field)
-        if ok:
-            results.append(ValidationResult(name=name, status="valid", detail=detail))
-            valid_names.append(name)
-        else:
-            results.append(ValidationResult(name=name, status="invalid", detail=detail))
-            retained_bad_names.append(name)
+    workers = max(1, int(args.workers))
+    retries = max(0, int(args.validate_retries))
+    if workers == 1:
+        for name in processed_names:
+            result = _validate_name(
+                name,
+                warm_dir=warm_dir,
+                field=args.field,
+                validate_retries=retries,
+            )
+            results.append(result)
+            if result.status == "valid":
+                valid_names.append(name)
+            else:
+                retained_bad_names.append(name)
+    else:
+        by_name: dict[str, ValidationResult] = {}
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            futures = {
+                executor.submit(
+                    _validate_name,
+                    name,
+                    warm_dir=warm_dir,
+                    field=args.field,
+                    validate_retries=retries,
+                ): name
+                for name in processed_names
+            }
+            for future in as_completed(futures):
+                name = futures[future]
+                try:
+                    by_name[name] = future.result()
+                except Exception as exc:  # noqa: BLE001
+                    by_name[name] = ValidationResult(
+                        name=name,
+                        status="invalid",
+                        detail=f"worker_error:{exc}",
+                    )
+
+        for name in processed_names:
+            result = by_name[name]
+            results.append(result)
+            if result.status == "valid":
+                valid_names.append(name)
+            else:
+                retained_bad_names.append(name)
+
+    retained_with_untouched = retained_bad_names + untouched_names
 
     rewritten = False
     if not args.no_rewrite_bad_list:
-        _write_bad_list(bad_list, retained_bad_names, args.dry_run)
+        _write_bad_list(bad_list, retained_with_untouched, args.dry_run)
         rewritten = not args.dry_run
 
     restage_attempted = 0
@@ -316,7 +399,7 @@ def main() -> int:
     if not args.no_prune_quarantine:
         quarantine_summary = _prune_quarantine(
             quarantine_dir,
-            retained_bad=set(retained_bad_names),
+            retained_bad=set(retained_with_untouched),
             valid_names=set(valid_names),
             keep_per_name=int(args.quarantine_keep_per_name),
             dry_run=bool(args.dry_run),
@@ -329,8 +412,12 @@ def main() -> int:
         "quarantine_dir": str(quarantine_dir),
         "field": args.field,
         "input_bad_entries": len(bad_names),
+        "processed_entries": len(processed_names),
+        "untouched_entries": len(untouched_names),
+        "workers": workers,
+        "validate_retries": retries,
         "valid_reinstated": len(valid_names),
-        "retained_bad_entries": len(retained_bad_names),
+        "retained_bad_entries": len(retained_with_untouched),
         "rewrote_bad_list": rewritten,
         "dry_run": bool(args.dry_run),
         "restage_valid": bool(args.restage_valid),
@@ -348,7 +435,8 @@ def main() -> int:
         "summary": summary,
         "results": [result.__dict__ for result in results],
         "valid_names": valid_names,
-        "retained_bad_names": retained_bad_names,
+        "retained_bad_names": retained_with_untouched,
+        "untouched_names": untouched_names,
     }
     report_output.write_text(json.dumps(payload, indent=2), encoding="utf-8")
 
@@ -356,7 +444,7 @@ def main() -> int:
         "revalidate_done",
         f"input={len(bad_names)}",
         f"reinstated={len(valid_names)}",
-        f"retained={len(retained_bad_names)}",
+        f"retained={len(retained_with_untouched)}",
         f"restage_ok={restage_ok}",
         f"report={report_output}",
     )

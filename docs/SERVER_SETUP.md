@@ -91,6 +91,21 @@ Rehydrate from warm storage:
 bash scripts/hydrate_from_warm_storage.sh /mnt/ceph/llm/data
 ```
 
+Pre-wipe safety checklist (before deleting/rebuilding hot disk contents):
+
+```bash
+git fetch --all --prune
+git status --short --branch
+git push
+bash scripts/sync_warm_storage.sh /mnt/ceph/llm/data
+stamp=$(date -u +%Y%m%dT%H%M%SZ)
+git ls-files --others --ignored --exclude-standard | sort \
+  > /mnt/ceph/llm/data/logs/git_untracked_all_${stamp}.txt
+```
+
+Do not wipe until the sync command exits successfully and
+`/mnt/ceph/llm/data/logs/last_sync_utc.txt` reflects this run.
+
 ## 8) Pre-Training Shard Integrity Check
 Run integrity checks before training starts:
 

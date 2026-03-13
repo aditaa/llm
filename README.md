@@ -863,6 +863,18 @@ This now syncs training-critical inputs/outputs including:
 `data/raw_zim`, `data/fineweb`, `data/cleaned`, `data/extracted`,
 `data/shards`, `data/shards_global`, `artifacts/tokenizer`,
 `artifacts/checkpoints`, and `artifacts/reports`.
+- Pre-wipe safety checklist (before deleting/rebuilding hot disk contents):
+```bash
+git fetch --all --prune
+git status --short --branch
+git push
+bash scripts/sync_warm_storage.sh /mnt/ceph/llm/data
+stamp=$(date -u +%Y%m%dT%H%M%SZ)
+git ls-files --others --ignored --exclude-standard | sort \
+  > /mnt/ceph/llm/data/logs/git_untracked_all_${stamp}.txt
+```
+Wait for sync completion, then confirm `/mnt/ceph/llm/data/logs/last_sync_utc.txt`
+was updated in the current run window.
 - Periodic checkpoint offload + local prune:
 ```bash
 bash scripts/checkpoint_offload_prune.sh \

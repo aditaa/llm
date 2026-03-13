@@ -38,4 +38,17 @@ make typecheck
 make train
 ```
 
+## Pre-Wipe Checklist
+Before wiping or rebuilding the hot workspace, run:
+
+```bash
+git fetch --all --prune
+git status --short --branch
+git push
+bash scripts/sync_warm_storage.sh /mnt/ceph/llm/data
+```
+
+Then wait for sync completion and verify
+`/mnt/ceph/llm/data/logs/last_sync_utc.txt` was updated.
+
 For server-specific setup and storage guidance, see [Setup and Tooling](Setup-and-Tooling) and [Data Pipeline and Versioning](Data-Pipeline-and-Versioning).

@@ -255,6 +255,18 @@ Rehydrate local hot workspace from warm storage:
 bash scripts/hydrate_from_warm_storage.sh /mnt/ceph/llm/data
 ```
 
+Pre-wipe safety checklist:
+```bash
+git fetch --all --prune
+git status --short --branch
+git push
+bash scripts/sync_warm_storage.sh /mnt/ceph/llm/data
+stamp=$(date -u +%Y%m%dT%H%M%SZ)
+git ls-files --others --ignored --exclude-standard | sort \
+  > /mnt/ceph/llm/data/logs/git_untracked_all_${stamp}.txt
+```
+Only wipe after sync completion and a fresh `last_sync_utc.txt` timestamp.
+
 ## First-Pass Talking Profile
 For an English prose-first pass, generate include/exclude manifests and optionally move excluded ZIMs to warm storage:
 

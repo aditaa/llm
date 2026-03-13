@@ -126,6 +126,8 @@ Keep PR scope narrow; split refactors and features into separate PRs.
 - Cleanup defaults also apply normalized dedupe keys and contamination filtering; tune with `--no-dedupe-normalized`, `--no-drop-contamination`, `--contamination-pattern`, and `--contamination-patterns-file`
 - Use `bash scripts/sync_warm_storage.sh /mnt/ceph/llm/data` to copy local artifacts to warm storage
 - `sync_warm_storage.sh` covers raw + training data: `data/raw_zim`, `data/fineweb`, `data/cleaned`, `data/extracted`, `data/shards`, `data/shards_global`, `artifacts/tokenizer`, `artifacts/checkpoints`, `artifacts/reports`
+- Before wiping/rebuilding a hot workspace: `git fetch --all --prune && git status --short --branch`, push all commits, run `bash scripts/sync_warm_storage.sh /mnt/ceph/llm/data`, and write a snapshot manifest with `git ls-files --others --ignored --exclude-standard | sort > /mnt/ceph/llm/data/logs/git_untracked_all_<UTCSTAMP>.txt`
+- Do not wipe until `sync_warm_storage.sh` exits cleanly and `/mnt/ceph/llm/data/logs/last_sync_utc.txt` has a fresh timestamp
 - Use `bash scripts/zim_offload_worker.sh data/raw_zim /mnt/ceph/llm/data/raw_zim 120` for continuous hot->warm raw ZIM offload
 - Use `bash scripts/hydrate_from_warm_storage.sh /mnt/ceph/llm/data` to restore local artifacts from warm storage
 - Use `python3 scripts/offload_shard_bins_to_warm.py --disable-offloaded-manifests --require-trained-batches-file <phase1_state>/trained_batch_names.txt,<standard_state>/trained_batch_names.txt --skip-if-trained-file-missing --min-manifest-unique-input-files <N> --min-active-manifests <N> --min-active-train-tokens <TOKENS>` to move only already-trained older shard bins to warm storage while keeping active manifests hot-local only

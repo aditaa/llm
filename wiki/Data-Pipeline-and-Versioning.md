@@ -130,6 +130,12 @@ bash scripts/hf_download_watchdog.sh \
 The watchdog monitors parquet/incomplete byte growth and restarts the resumable worker if it exits or stalls.
 Use `--exit-on-complete` with expected targets so the watchdog exits when the download is actually complete.
 
+Simple full FineWeb-Edu sync (direct to Ceph path):
+```bash
+export HF_TOKEN=hf_xxx   # optional but recommended
+bash scripts/sync_fineweb_edu_full.sh /mnt/pve/cephfs/llm/data/fineweb/fineweb-edu-full
+```
+
 Hot-queue prefetch worker (stage on demand while training):
 ```bash
 bash scripts/fineweb_prefetch_hot_queue.sh \

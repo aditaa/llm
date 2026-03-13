@@ -61,6 +61,7 @@ Use the `Makefile` as the source of truth:
 - `make checkpoint-step-offload`: usage helper for offloading older `ckpt_step_*.pt` files to warm storage while preserving newest local resume steps
 - `make set-swappiness`: usage helper for host swappiness tuning (root)
 - `make hf-download-resumable`: usage helper for self-healing Hugging Face resume-download worker
+- `make hf-download-fineweb-edu-full`: usage helper for simple full FineWeb-Edu parquet sync to Ceph/local dir
 - `make hf-download-watchdog`: usage helper for watchdog auto-restart around stalled/exited HF download workers
 - `make hf-prepare-publish`: usage helper for Hugging Face release bundle/publish
 - `make hf-download-model`: usage helper for full Hugging Face model snapshot download
@@ -135,6 +136,7 @@ Keep PR scope narrow; split refactors and features into separate PRs.
 - Prefer `bash scripts/shard_offload_cycle.sh` in automation (pre-reconcile -> gated offload -> post-reconcile -> enforce-hot-manifests) instead of direct one-shot offload calls
 - For bounded external pulls (for example FineWeb samples), use `python3 scripts/pull_hf_rows.py` and write to warm storage first
 - For long-running Hugging Face parquet pulls, use `scripts/hf_download_resumable.sh` instead of one-shot `hf download` (prefer `--enable-hf-transfer`, `--max-workers 6`, `--skip-dry-run`, and `--attempt-timeout-seconds` for 350BT-scale pulls)
+- For simple full FineWeb-Edu pulls to Ceph, use `scripts/sync_fineweb_edu_full.sh /mnt/pve/cephfs/llm/data/fineweb/fineweb-edu-full`
 - For unattended long pulls, prefer `scripts/hf_download_watchdog.sh` to restart stalled/exited resumable workers based on progress checks (`--stall-seconds`, `--check-interval-seconds`)
 - For watchdog runs, set `--exit-on-complete` with `--expected-parquet-files` and/or `--expected-bytes` so completed pulls do not restart indefinitely
 - `hf_download_watchdog.sh` enforces a singleton lock (`.hf_download_watchdog.lock`) in the target local-dir

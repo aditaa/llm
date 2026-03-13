@@ -4,7 +4,7 @@ ifneq ("$(wildcard .venv/bin/python)","")
 PYTHON=.venv/bin/python
 endif
 
-.PHONY: setup-dev setup-train setup-infer doctor install-server-system install-systemd-services install-user-systemd-services test lint format typecheck smoke extract-zim train-tokenizer train-tokenizer-global corpus-quality-report clean-corpus-batch dataset-risk-report pull-hf-rows fineweb-parquet-to-shards fineweb-manifest-dedupe stage-fineweb-from-warm fineweb-revalidate-bad-parquet enforce-hot-manifests reconcile-offloaded-manifests shard-offload-cycle offload-shard-bins-warm hot-shard-warmup fineweb-stage-shard-loop fineweb-stage-shard-watchdog lr-sweep-350bt benchmark-rtx5070 train-350bt-v2 train-350bt-ctx1024 train-supervisor-350bt train-supervisor-phase1-talk pipeline-eta pipeline-live shard-corpus-batch verify-shards train generate average-checkpoints eval-checkpoint render-eval-dashboard package-inference-bundle sync-warm hydrate-warm offload-zim checkpoint-offload-prune checkpoint-step-offload set-swappiness hf-download-resumable hf-download-watchdog hf-prepare-publish hf-download-model serve-openai publish-wiki
+.PHONY: setup-dev setup-train setup-infer doctor install-server-system install-systemd-services install-user-systemd-services test lint format typecheck smoke extract-zim train-tokenizer train-tokenizer-global corpus-quality-report clean-corpus-batch dataset-risk-report pull-hf-rows fineweb-parquet-to-shards fineweb-manifest-dedupe stage-fineweb-from-warm fineweb-revalidate-bad-parquet enforce-hot-manifests reconcile-offloaded-manifests shard-offload-cycle offload-shard-bins-warm hot-shard-warmup fineweb-stage-shard-loop fineweb-stage-shard-watchdog lr-sweep-350bt benchmark-rtx5070 train-350bt-v2 train-350bt-ctx1024 train-supervisor-350bt train-supervisor-phase1-talk pipeline-eta pipeline-live shard-corpus-batch verify-shards train generate average-checkpoints eval-checkpoint render-eval-dashboard package-inference-bundle sync-warm hydrate-warm offload-zim checkpoint-offload-prune checkpoint-step-offload set-swappiness hf-download-resumable hf-download-fineweb-edu-full hf-download-watchdog hf-prepare-publish hf-download-model serve-openai publish-wiki
 
 setup-dev:
 	bash scripts/bootstrap_dev.sh
@@ -207,6 +207,10 @@ set-swappiness:
 hf-download-resumable:
 	@echo "Run a self-healing Hugging Face download worker with resume + retries."
 	@echo "Usage: HF_TOKEN=hf_xxx bash scripts/hf_download_resumable.sh --dataset HuggingFaceFW/fineweb --repo-type dataset --include 'sample/350BT/*.parquet' --local-dir /mnt/ceph/llm/data/fineweb/sample-350BT --max-workers 6 --enable-hf-transfer --skip-dry-run --attempt-timeout-seconds 5400 --retry-delay-seconds 30 --max-retries 0 --log-file artifacts/reports/fineweb_350bt_download_resumable.log"
+
+hf-download-fineweb-edu-full:
+	@echo "Run simple resumable sync for full FineWeb-Edu parquet set."
+	@echo "Usage: HF_TOKEN=hf_xxx bash scripts/sync_fineweb_edu_full.sh /mnt/pve/cephfs/llm/data/fineweb/fineweb-edu-full"
 
 hf-download-watchdog:
 	@echo "Run watchdog wrapper that restarts stalled or exited HF download worker."

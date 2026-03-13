@@ -91,6 +91,13 @@ Rehydrate from warm storage:
 bash scripts/hydrate_from_warm_storage.sh /mnt/ceph/llm/data
 ```
 
+Simple full FineWeb-Edu sync to Ceph (resumable):
+
+```bash
+export HF_TOKEN=hf_xxx   # optional but recommended
+bash scripts/sync_fineweb_edu_full.sh /mnt/pve/cephfs/llm/data/fineweb/fineweb-edu-full
+```
+
 Pre-wipe safety checklist (before deleting/rebuilding hot disk contents):
 
 ```bash

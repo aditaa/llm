@@ -81,6 +81,7 @@ make pipeline-eta # print combined download/shard/train ETA reporter usage
 make pipeline-live # print live terminal pipeline dashboard usage
 make shard-corpus-batch # print shared-tokenizer batch sharding usage
 make hf-download-resumable # print self-healing HF resume-download worker usage
+make hf-download-fineweb-edu-full # print simple full FineWeb-Edu sync usage
 make hf-download-watchdog # print auto-restart wrapper for stalled/exited HF downloads
 make sync-warm   # sync raw/training data + artifacts to warm storage
 make hydrate-warm # hydrate hot workspace from warm storage
@@ -224,6 +225,19 @@ Notes:
 - `--attempt-timeout-seconds` prevents one hung transfer from stalling progress forever.
 - Keep 350BT parquet on warm storage and stage bounded chunks to hot storage before sharding.
 - For unattended runs, wrap with `scripts/hf_download_watchdog.sh` to auto-restart on stalls.
+
+3ab. Simple full FineWeb-Edu sync script (direct to Ceph path):
+```bash
+# on the destination server
+cd /path/to/llm-repo
+export HF_TOKEN=hf_xxx   # optional but recommended
+bash scripts/sync_fineweb_edu_full.sh /mnt/pve/cephfs/llm/data/fineweb/fineweb-edu-full
+```
+Notes:
+- Downloads `HuggingFaceFW/fineweb-edu` parquet files (`data/*/*.parquet`).
+- Safe to rerun; resumes partial files automatically.
+- Override worker/retry behavior with env vars:
+  `MAX_WORKERS`, `ATTEMPT_TIMEOUT_SECONDS`, `RETRY_DELAY_SECONDS`, `MAX_RETRIES`.
 
 3aaa. Optional watchdog wrapper for stalled/exited downloads:
 ```bash

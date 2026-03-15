@@ -4,7 +4,7 @@ ifneq ("$(wildcard .venv/bin/python)","")
 PYTHON=.venv/bin/python
 endif
 
-.PHONY: setup-dev setup-train setup-infer doctor install-server-system install-systemd-services install-user-systemd-services test lint format typecheck smoke extract-zim train-tokenizer train-tokenizer-global corpus-quality-report clean-corpus-batch dataset-risk-report pull-hf-rows parquet-to-corpus fineweb-parquet-to-shards fineweb-manifest-dedupe stage-fineweb-from-warm fineweb-prefetch-hot-queue fineweb-revalidate-bad-parquet enforce-hot-manifests offload-shard-bins-warm fineweb-stage-shard-loop fineweb-stage-shard-watchdog lr-sweep-350bt train-350bt-v2 train-350bt-ctx1024 train-supervisor-350bt train-supervisor-phase1-talk pipeline-eta pipeline-live shard-corpus-batch verify-shards train generate average-checkpoints eval-checkpoint render-eval-dashboard package-inference-bundle sync-warm hydrate-warm offload-zim checkpoint-offload-prune set-swappiness hf-download-resumable hf-download-watchdog hf-prepare-publish hf-download-model serve-openai publish-wiki
+.PHONY: setup-dev setup-train setup-infer doctor install-server-system install-systemd-services install-user-systemd-services test lint format typecheck smoke extract-zim train-tokenizer train-tokenizer-global corpus-quality-report clean-corpus-batch dataset-risk-report pull-hf-rows parquet-to-corpus fineweb-parquet-to-shards fineweb-manifest-dedupe stage-fineweb-from-warm fineweb-prefetch-hot-queue fineweb-revalidate-bad-parquet enforce-hot-manifests offload-shard-bins-warm fineweb-stage-shard-loop fineweb-stage-shard-watchdog fineweb-edu-shard-loop fineweb-edu-sync lr-sweep-350bt train-350bt-v2 train-350bt-ctx1024 train-supervisor-350bt train-supervisor-phase1-talk pipeline-eta pipeline-live shard-corpus-batch verify-shards train generate average-checkpoints eval-checkpoint render-eval-dashboard package-inference-bundle sync-warm hydrate-warm offload-zim checkpoint-offload-prune set-swappiness hf-download-resumable hf-download-watchdog hf-prepare-publish hf-download-model serve-openai publish-wiki
 
 setup-dev:
 	bash scripts/bootstrap_dev.sh
@@ -110,6 +110,14 @@ fineweb-stage-shard-loop:
 fineweb-stage-shard-watchdog:
 	@echo "Usage:"
 	@echo "  bash scripts/fineweb_stage_shard_watchdog.sh --worker-args \"--hot-queue-min-files 18 --stage-max-files 12 --stage-copy-jobs 2 --process-max-files 12 --shard-jobs 2 --tokenizer-threads 10 --encode-batch-size 1024 --sleep-seconds 60 --shard-min-batch-size 512\" --check-interval-seconds 120 --stall-seconds 5400"
+
+fineweb-edu-shard-loop:
+	@echo "Usage:"
+	@echo "  bash scripts/fineweb_edu_shard_loop.sh --source-root /media/llm/data/fineweb/fineweb-edu-full/data --shards-root /media/llm/data/shards_global/fineweb-global-bpe-v1 --tokenizer-path /media/llm/data/tokenizer/fineweb-global-bpe-v1.json --job-prefix fwedu --process-max-files 12 --sleep-seconds 60"
+
+fineweb-edu-sync:
+	@echo "Usage:"
+	@echo "  MAX_WORKERS=10 HF_HUB_DOWNLOAD_TIMEOUT=120 ATTEMPT_TIMEOUT_SECONDS=21600 HF_HUB_ENABLE_HF_TRANSFER=1 ENABLE_TARGETED_TIMEOUT_RETRY=1 TARGETED_MAX_FILES=12 TARGETED_RETRIES_PER_FILE=3 TARGETED_ATTEMPT_TIMEOUT_SECONDS=1800 TARGETED_HF_HUB_DOWNLOAD_TIMEOUT=300 bash scripts/sync_fineweb_edu_full.sh /media/llm/data/fineweb/fineweb-edu-full"
 
 lr-sweep-350bt:
 	@echo "Usage:"

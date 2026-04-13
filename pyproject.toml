@@ -18,7 +18,7 @@ dev = [
   "tokenizers>=0.20.0",
 ]
 train = [
-  "torch>=2.2.2",
+  "torch>=2.11.0",
   "tiktoken>=0.5.1",
   "matplotlib>=3.7.1",
   "numpy>=1.26",

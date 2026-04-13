@@ -19,7 +19,7 @@ dev = [
 ]
 train = [
   "torch>=2.2.2",
-  "tiktoken>=0.5.1",
+  "tiktoken>=0.12.0",
   "matplotlib>=3.7.1",
   "numpy>=1.26",
   "pandas>=2.2.1",

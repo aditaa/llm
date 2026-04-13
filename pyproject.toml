@@ -34,7 +34,7 @@ serve = [
   "uvicorn[standard]>=0.30.0",
 ]
 notebook = [
-  "jupyterlab>=4.0",
+  "jupyterlab>=4.5.6",
 ]
 data = [
   "libzim>=3.8.0",
